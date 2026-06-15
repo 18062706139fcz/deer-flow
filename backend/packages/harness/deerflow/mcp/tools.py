@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import shutil
+import tempfile
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -31,6 +33,52 @@ _MAX_MIGRATED_FILE_BYTES = 100 * 1024 * 1024  # 100 MB
 
 # Characters allowed in a migrated output filename; everything else is replaced.
 _UNSAFE_FILENAME_CHARS = re.compile(r"[^A-Za-z0-9._-]")
+
+# Environment variable allowing operators to add extra trusted source roots
+# (os.pathsep-separated) from which MCP-produced files may be migrated.
+_EXTRA_SOURCE_ROOTS_ENV = "DEERFLOW_MCP_MIGRATION_SOURCE_ROOTS"
+
+
+def _allowed_source_roots() -> list[Path]:
+    """Return the directories MCP-produced files may legitimately be read from.
+
+    Migration only copies files located under one of these roots. This is the
+    security boundary that stops a malicious or buggy MCP server from having us
+    copy arbitrary host files (e.g. ``/etc/passwd``, SSH keys) into a thread's
+    outputs directory, from where the artifact API would happily serve them.
+
+    Roots:
+      * the OS temp directory — where stdio MCP servers such as Playwright write
+        by default (e.g. ``--output-dir`` defaults under ``$TMPDIR``);
+      * any per-thread sandbox roots (handled by the caller via ``get_paths``);
+      * operator-configured roots via ``DEERFLOW_MCP_MIGRATION_SOURCE_ROOTS``.
+    """
+    roots: list[Path] = []
+    try:
+        roots.append(Path(tempfile.gettempdir()).resolve())
+    except OSError:
+        pass
+    extra = os.environ.get(_EXTRA_SOURCE_ROOTS_ENV, "")
+    for entry in extra.split(os.pathsep):
+        entry = entry.strip()
+        if not entry:
+            continue
+        try:
+            roots.append(Path(entry).resolve())
+        except OSError:
+            logger.warning("Ignoring invalid MCP migration source root: %s", entry)
+    return roots
+
+
+def _is_within_any(path: Path, roots: list[Path]) -> bool:
+    """Return True if *path* is equal to or nested under one of *roots*."""
+    for root in roots:
+        try:
+            path.relative_to(root)
+            return True
+        except ValueError:
+            continue
+    return False
 
 
 def _local_path_from_uri(uri: str) -> Path | None:
@@ -115,6 +163,20 @@ def _migrate_local_file_to_outputs(uri: str, *, thread_id: str, user_id: str) ->
         return f"{VIRTUAL_PATH_PREFIX}/outputs/{relative.as_posix()}"
     except ValueError:
         pass
+
+    # Security boundary: only migrate files that live under a trusted source
+    # root. Without this a malicious/buggy MCP server could return a path like
+    # ``/etc/passwd`` and have us copy it into a location the artifact API
+    # serves. The thread's own user-data tree is trusted (the agent's own
+    # files); everything else must come from a configured source root.
+    allowed_roots = _allowed_source_roots()
+    try:
+        allowed_roots.append(paths.sandbox_user_data_dir(thread_id, user_id=user_id).resolve())
+    except OSError:
+        pass
+    if not _is_within_any(real, allowed_roots):
+        logger.warning("Refusing to migrate MCP file outside allowed source roots: %s", real)
+        return None
 
     try:
         size = real.stat().st_size

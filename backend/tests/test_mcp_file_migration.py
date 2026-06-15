@@ -32,12 +32,21 @@ class TestLocalPathFromUri:
     def test_bare_absolute_path(self):
         assert mcp_tools._local_path_from_uri("/var/data/out.pdf") == Path("/var/data/out.pdf")
 
+    def test_file_uri_with_url_encoded_spaces(self):
+        assert mcp_tools._local_path_from_uri("file:///tmp/my%20shot.png") == Path("/tmp/my shot.png")
+
     def test_remote_uri_is_ignored(self):
         assert mcp_tools._local_path_from_uri("https://example.com/a.png") is None
         assert mcp_tools._local_path_from_uri("data:image/png;base64,AAAA") is None
 
     def test_relative_path_is_ignored(self):
         assert mcp_tools._local_path_from_uri("relative/path.txt") is None
+
+    def test_file_uri_with_relative_path_is_ignored(self):
+        assert mcp_tools._local_path_from_uri("file:relative.txt") is None
+
+    def test_file_uri_with_empty_path_is_ignored(self):
+        assert mcp_tools._local_path_from_uri("file://") is None
 
     def test_empty_is_ignored(self):
         assert mcp_tools._local_path_from_uri("") is None
@@ -55,6 +64,50 @@ class TestSafeOutputName:
 
     def test_empty_falls_back(self):
         assert mcp_tools._safe_output_name("///") == "file"
+
+
+class TestAllowedSourceRoots:
+    def test_includes_temp_dir(self):
+        import tempfile
+
+        roots = mcp_tools._allowed_source_roots()
+        assert Path(tempfile.gettempdir()).resolve() in roots
+
+    def test_extra_roots_from_env(self, tmp_path: Path):
+        extra = tmp_path / "trusted"
+        extra.mkdir()
+        with patch.dict("os.environ", {mcp_tools._EXTRA_SOURCE_ROOTS_ENV: str(extra)}):
+            roots = mcp_tools._allowed_source_roots()
+        assert extra.resolve() in roots
+
+    def test_blank_env_entries_ignored(self):
+        import os
+
+        value = f"  {os.pathsep} {os.pathsep}  "
+        with patch.dict("os.environ", {mcp_tools._EXTRA_SOURCE_ROOTS_ENV: value}):
+            roots = mcp_tools._allowed_source_roots()
+        # Only the temp dir should be present; no empty entries added.
+        assert all(str(r) for r in roots)
+
+    def test_invalid_extra_root_is_skipped(self, tmp_path: Path):
+        extra = tmp_path / "trusted"
+        extra.mkdir()
+        with patch.dict("os.environ", {mcp_tools._EXTRA_SOURCE_ROOTS_ENV: str(extra)}):
+            with patch("pathlib.Path.resolve", side_effect=OSError("boom")):
+                roots = mcp_tools._allowed_source_roots()
+        # resolve() raised for every entry; the function degrades gracefully.
+        assert roots == []
+
+
+class TestIsWithinAny:
+    def test_nested_path_matches(self, tmp_path: Path):
+        assert mcp_tools._is_within_any(tmp_path / "a" / "b", [tmp_path])
+
+    def test_unrelated_path_does_not_match(self, tmp_path: Path):
+        assert not mcp_tools._is_within_any(Path("/etc/passwd"), [tmp_path])
+
+    def test_no_roots_never_matches(self, tmp_path: Path):
+        assert not mcp_tools._is_within_any(tmp_path, [])
 
 
 class TestMigrateLocalFileToOutputs:
@@ -133,6 +186,73 @@ class TestMigrateLocalFileToOutputs:
         assert result == f"{VIRTUAL_PATH_PREFIX}/outputs/shot_1.png"
         assert (outputs / "shot_1.png").read_bytes() == b"new"
 
+    def test_double_name_collision_increments_counter(self, tmp_path: Path, paths: Paths):
+        outputs = paths.sandbox_outputs_dir("t1", user_id="u1")
+        outputs.mkdir(parents=True)
+        (outputs / "shot.png").write_bytes(b"a")
+        (outputs / "shot_1.png").write_bytes(b"b")
+
+        src = tmp_path / "shot.png"
+        src.write_bytes(b"new")
+
+        with _patch_paths(paths):
+            result = mcp_tools._migrate_local_file_to_outputs(
+                str(src), thread_id="t1", user_id="u1"
+            )
+
+        assert result == f"{VIRTUAL_PATH_PREFIX}/outputs/shot_2.png"
+        assert (outputs / "shot_2.png").read_bytes() == b"new"
+
+    def test_file_outside_allowed_roots_is_refused(self, tmp_path: Path, paths: Paths):
+        # A real file that exists but lives outside every trusted source root
+        # (simulating a malicious MCP server returning e.g. /etc/passwd).
+        src = tmp_path / "secret.txt"
+        src.write_bytes(b"top-secret")
+
+        with _patch_paths(paths), patch.object(mcp_tools, "_allowed_source_roots", return_value=[]):
+            result = mcp_tools._migrate_local_file_to_outputs(
+                str(src), thread_id="t1", user_id="u1"
+            )
+
+        assert result is None
+        # Nothing leaked into the outputs directory.
+        outputs = paths.sandbox_outputs_dir("t1", user_id="u1")
+        assert not outputs.exists() or list(outputs.iterdir()) == []
+
+    def test_file_under_thread_user_data_is_allowed(self, paths: Paths):
+        # Files the agent itself produced (under the thread's user-data tree)
+        # are trusted even when no external source root matches.
+        workspace = paths.sandbox_work_dir("t1", user_id="u1")
+        workspace.mkdir(parents=True)
+        src = workspace / "made-by-agent.txt"
+        src.write_bytes(b"agent-output")
+
+        with _patch_paths(paths), patch.object(mcp_tools, "_allowed_source_roots", return_value=[]):
+            result = mcp_tools._migrate_local_file_to_outputs(
+                str(src), thread_id="t1", user_id="u1"
+            )
+
+        assert result == f"{VIRTUAL_PATH_PREFIX}/outputs/made-by-agent.txt"
+
+    def test_copy_failure_returns_none(self, tmp_path: Path, paths: Paths):
+        src = tmp_path / "shot.png"
+        src.write_bytes(b"img")
+
+        with _patch_paths(paths), patch.object(mcp_tools.shutil, "copy2", side_effect=OSError("disk full")):
+            result = mcp_tools._migrate_local_file_to_outputs(
+                str(src), thread_id="t1", user_id="u1"
+            )
+
+        assert result is None
+
+    def test_unresolvable_source_returns_none(self, paths: Paths):
+        with _patch_paths(paths), patch("pathlib.Path.resolve", side_effect=OSError("boom")):
+            result = mcp_tools._migrate_local_file_to_outputs(
+                "/some/abs/path.png", thread_id="t1", user_id="u1"
+            )
+
+        assert result is None
+
 
 class TestConvertCallToolResultRewrites:
     def test_resource_link_image_rewritten(self, tmp_path: Path, paths: Paths):
@@ -201,3 +321,98 @@ class TestConvertCallToolResultRewrites:
 
         assert content[0]["type"] == "text"
         assert content[0]["text"] == "hello"
+
+    def test_image_content_passthrough(self, paths: Paths):
+        from mcp.types import ImageContent
+
+        result = CallToolResult(
+            content=[ImageContent(type="image", data="QUJD", mimeType="image/png")],
+            isError=False,
+        )
+
+        with _patch_paths(paths):
+            content, _ = mcp_tools._convert_call_tool_result(result, thread_id="t1", user_id="u1")
+
+        assert content[0]["type"] == "image"
+
+    def test_embedded_text_resource(self, paths: Paths):
+        from mcp.types import EmbeddedResource, TextResourceContents
+
+        res = TextResourceContents(uri="mem://note.txt", text="note", mimeType="text/plain")
+        result = CallToolResult(
+            content=[EmbeddedResource(type="resource", resource=res)],
+            isError=False,
+        )
+
+        with _patch_paths(paths):
+            content, _ = mcp_tools._convert_call_tool_result(result, thread_id="t1", user_id="u1")
+
+        assert content[0]["type"] == "text"
+        assert content[0]["text"] == "note"
+
+    def test_embedded_blob_image_resource(self, paths: Paths):
+        from mcp.types import BlobResourceContents, EmbeddedResource
+
+        res = BlobResourceContents(uri="mem://img.png", blob="QUJD", mimeType="image/png")
+        result = CallToolResult(
+            content=[EmbeddedResource(type="resource", resource=res)],
+            isError=False,
+        )
+
+        with _patch_paths(paths):
+            content, _ = mcp_tools._convert_call_tool_result(result, thread_id="t1", user_id="u1")
+
+        assert content[0]["type"] == "image"
+
+    def test_embedded_blob_file_resource(self, paths: Paths):
+        from mcp.types import BlobResourceContents, EmbeddedResource
+
+        res = BlobResourceContents(uri="mem://doc.pdf", blob="QUJD", mimeType="application/pdf")
+        result = CallToolResult(
+            content=[EmbeddedResource(type="resource", resource=res)],
+            isError=False,
+        )
+
+        with _patch_paths(paths):
+            content, _ = mcp_tools._convert_call_tool_result(result, thread_id="t1", user_id="u1")
+
+        assert content[0]["type"] == "file"
+
+    def test_unknown_content_item_stringified(self, paths: Paths):
+        # An item that is none of the known MCP content types falls through to
+        # the str() text block branch.
+        class _Weird:
+            def __str__(self) -> str:
+                return "weird-item"
+
+        result = CallToolResult(content=[TextContent(type="text", text="x")], isError=False)
+        result.content = [_Weird()]  # bypass pydantic validation on the union
+
+        with _patch_paths(paths):
+            content, _ = mcp_tools._convert_call_tool_result(result, thread_id="t1", user_id="u1")
+
+        assert content[0]["type"] == "text"
+        assert content[0]["text"] == "weird-item"
+
+    def test_error_result_raises_tool_exception(self, paths: Paths):
+        from langchain_core.tools import ToolException
+
+        result = CallToolResult(
+            content=[TextContent(type="text", text="boom")],
+            isError=True,
+        )
+
+        with _patch_paths(paths), pytest.raises(ToolException, match="boom"):
+            mcp_tools._convert_call_tool_result(result, thread_id="t1", user_id="u1")
+
+    def test_structured_content_becomes_artifact(self, paths: Paths):
+        result = CallToolResult(
+            content=[TextContent(type="text", text="ok")],
+            structuredContent={"k": "v"},
+            isError=False,
+        )
+
+        with _patch_paths(paths):
+            _, artifact = mcp_tools._convert_call_tool_result(result, thread_id="t1", user_id="u1")
+
+        assert artifact == {"structured_content": {"k": "v"}}
