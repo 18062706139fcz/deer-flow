@@ -8,7 +8,7 @@ API. An API key is required. Sign up at https://serper.dev to get one.
 import json
 import logging
 import os
-from ipaddress import ip_address
+from ipaddress import IPv4Address, ip_address
 from urllib.parse import urlparse
 
 import httpx
@@ -80,7 +80,7 @@ def _clean_query(query: str) -> str:
     return query
 
 
-def _decode_ipv4(host: str) -> object | None:
+def _decode_ipv4(host: str) -> IPv4Address | None:
     """Decode obfuscated IPv4 literals that ``ip_address`` rejects.
 
     Mirrors the permissive ``inet_aton`` parsing many HTTP clients use, so that
