@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import os
 import re
-import shutil
 import tempfile
 from collections.abc import Mapping
 from pathlib import Path
@@ -34,6 +33,16 @@ _MAX_MIGRATED_FILE_BYTES = 100 * 1024 * 1024  # 100 MB
 # Characters allowed in a migrated output filename; everything else is replaced.
 _UNSAFE_FILENAME_CHARS = re.compile(r"[^A-Za-z0-9._-]")
 
+# Chunk size used when copying migrated files so the size limit can be enforced
+# *during* the copy rather than from a stat() taken beforehand.
+_COPY_CHUNK_SIZE = 1024 * 1024  # 1 MiB
+
+# Permission bits applied to migrated files. Sandbox containers may run as a
+# different UID than the backend process (mirroring ``ensure_thread_dirs``'s
+# 0o777 on directories), so files must be world-readable regardless of the
+# source file's mode or the process umask.
+_MIGRATED_FILE_MODE = 0o644
+
 # Environment variable allowing operators to add extra trusted source roots
 # (os.pathsep-separated) from which MCP-produced files may be migrated.
 _EXTRA_SOURCE_ROOTS_ENV = "DEERFLOW_MCP_MIGRATION_SOURCE_ROOTS"
@@ -52,6 +61,13 @@ def _allowed_source_roots() -> list[Path]:
         by default (e.g. ``--output-dir`` defaults under ``$TMPDIR``);
       * any per-thread sandbox roots (handled by the caller via ``get_paths``);
       * operator-configured roots via ``DEERFLOW_MCP_MIGRATION_SOURCE_ROOTS``.
+
+    Multi-tenant note: trusting the whole OS temp directory means any file under
+    ``$TMPDIR`` becomes migratable. On a host where ``$TMPDIR`` is shared across
+    tenants this widens the read surface (one tenant's MCP server could migrate
+    another tenant's temp file). Deployments that share a host across users
+    should give each request a private temp dir (e.g. systemd ``PrivateTmp`` or
+    a per-user ``TMPDIR``) so this root stays tenant-scoped.
     """
     roots: list[Path] = []
     try:
@@ -114,19 +130,46 @@ def _safe_output_name(name: str) -> str:
     return name
 
 
-def _unique_destination(outputs_dir: Path, name: str) -> Path:
-    """Return a non-colliding destination path inside *outputs_dir*."""
-    dest = outputs_dir / name
-    if not dest.exists():
-        return dest
+def _create_unique_destination(outputs_dir: Path, name: str) -> tuple[int, Path]:
+    """Atomically create a non-colliding destination inside *outputs_dir*.
+
+    Uses ``O_CREAT | O_EXCL`` so the existence check and the creation are a
+    single atomic step; this removes the TOCTOU race a check-then-create
+    approach would have when two migrations run concurrently for the same
+    ``(user_id, thread_id)``. Returns the open file descriptor (caller owns
+    closing it) and the chosen path.
+    """
     stem = Path(name).stem
     suffix = Path(name).suffix
-    counter = 1
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+    counter = 0
     while True:
-        candidate = outputs_dir / f"{stem}_{counter}{suffix}"
-        if not candidate.exists():
-            return candidate
-        counter += 1
+        candidate = outputs_dir / (name if counter == 0 else f"{stem}_{counter}{suffix}")
+        try:
+            fd = os.open(candidate, flags, _MIGRATED_FILE_MODE)
+            return fd, candidate
+        except FileExistsError:
+            counter += 1
+
+
+def _copy_capped(src: Path, fd: int) -> bool:
+    """Copy *src* into the already-open *fd*, enforcing the size cap mid-copy.
+
+    Returns ``True`` on success. Returns ``False`` (and stops writing) if the
+    source exceeds ``_MAX_MIGRATED_FILE_BYTES`` — enforcing the limit during the
+    copy rather than from a prior ``stat()`` closes the TOCTOU window where a
+    file could grow after being measured.
+    """
+    copied = 0
+    with open(src, "rb") as fsrc:
+        while True:
+            chunk = fsrc.read(_COPY_CHUNK_SIZE)
+            if not chunk:
+                return True
+            copied += len(chunk)
+            if copied > _MAX_MIGRATED_FILE_BYTES:
+                return False
+            os.write(fd, chunk)
 
 
 def _migrate_local_file_to_outputs(uri: str, *, thread_id: str, user_id: str) -> str | None:
@@ -179,19 +222,22 @@ def _migrate_local_file_to_outputs(uri: str, *, thread_id: str, user_id: str) ->
         return None
 
     try:
-        size = real.stat().st_size
-    except OSError:
-        return None
-    if size > _MAX_MIGRATED_FILE_BYTES:
-        logger.warning("Skipping MCP file migration; file exceeds size limit: %s (%d bytes)", real, size)
-        return None
-
-    try:
         paths.ensure_thread_dirs(thread_id, user_id=user_id)
-        dest = _unique_destination(outputs_dir, _safe_output_name(real.name))
-        shutil.copy2(real, dest)
+        fd, dest = _create_unique_destination(outputs_dir, _safe_output_name(real.name))
+        try:
+            within_limit = _copy_capped(real, fd)
+        finally:
+            os.close(fd)
     except OSError:
         logger.warning("Failed to migrate MCP file into sandbox outputs: %s", real, exc_info=True)
+        return None
+
+    if not within_limit:
+        logger.warning("Skipping MCP file migration; file exceeds size limit: %s", real)
+        try:
+            dest.unlink()
+        except OSError:
+            logger.warning("Failed to remove partially migrated MCP file: %s", dest, exc_info=True)
         return None
 
     return f"{VIRTUAL_PATH_PREFIX}/outputs/{dest.name}"

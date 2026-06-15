@@ -162,13 +162,16 @@ class TestMigrateLocalFileToOutputs:
 
     def test_oversize_file_is_skipped(self, tmp_path: Path, paths: Paths):
         src = tmp_path / "big.bin"
-        src.write_bytes(b"x")
+        src.write_bytes(b"x" * 4)
 
-        with _patch_paths(paths), patch.object(mcp_tools, "_MAX_MIGRATED_FILE_BYTES", 0):
+        with _patch_paths(paths), patch.object(mcp_tools, "_MAX_MIGRATED_FILE_BYTES", 1):
             result = mcp_tools._migrate_local_file_to_outputs(
                 str(src), thread_id="t1", user_id="u1"
             )
         assert result is None
+        # No partial file is left behind in the outputs directory.
+        outputs = paths.sandbox_outputs_dir("t1", user_id="u1")
+        assert not outputs.exists() or list(outputs.iterdir()) == []
 
     def test_name_collision_gets_unique_destination(self, tmp_path: Path, paths: Paths):
         outputs = paths.sandbox_outputs_dir("t1", user_id="u1")
@@ -238,7 +241,7 @@ class TestMigrateLocalFileToOutputs:
         src = tmp_path / "shot.png"
         src.write_bytes(b"img")
 
-        with _patch_paths(paths), patch.object(mcp_tools.shutil, "copy2", side_effect=OSError("disk full")):
+        with _patch_paths(paths), patch.object(mcp_tools.os, "write", side_effect=OSError("disk full")):
             result = mcp_tools._migrate_local_file_to_outputs(
                 str(src), thread_id="t1", user_id="u1"
             )
@@ -252,6 +255,108 @@ class TestMigrateLocalFileToOutputs:
             )
 
         assert result is None
+
+    def test_symlink_escape_is_refused(self, tmp_path: Path, paths: Paths):
+        # A symlink living under a trusted root that points at a file outside
+        # every allowed root must be refused: .resolve() follows the link, so
+        # the boundary check sees the real (out-of-bounds) target.
+        secret_root = tmp_path / "outside"
+        secret_root.mkdir()
+        secret = secret_root / "passwd"
+        secret.write_bytes(b"root:x:0:0")
+
+        trusted_root = tmp_path / "trusted"
+        trusted_root.mkdir()
+        link = trusted_root / "innocent.txt"
+        try:
+            link.symlink_to(secret)
+        except (OSError, NotImplementedError):
+            pytest.skip("symlinks not supported on this platform")
+
+        with _patch_paths(paths), patch.object(mcp_tools, "_allowed_source_roots", return_value=[trusted_root.resolve()]):
+            result = mcp_tools._migrate_local_file_to_outputs(
+                str(link), thread_id="t1", user_id="u1"
+            )
+
+        assert result is None
+        outputs = paths.sandbox_outputs_dir("t1", user_id="u1")
+        assert not outputs.exists() or list(outputs.iterdir()) == []
+
+    def test_temp_dir_file_is_migrated(self, paths: Paths):
+        # Explicitly assert that a file under the OS temp dir (a default allowed
+        # root) is migrated, rather than relying on tmp_path implicitly.
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as fh:
+            fh.write(b"png")
+            src = Path(fh.name)
+        try:
+            with _patch_paths(paths):
+                result = mcp_tools._migrate_local_file_to_outputs(
+                    str(src), thread_id="t1", user_id="u1"
+                )
+            assert result == f"{VIRTUAL_PATH_PREFIX}/outputs/{src.name}"
+        finally:
+            src.unlink(missing_ok=True)
+
+    def test_migrated_file_is_world_readable(self, tmp_path: Path, paths: Paths):
+        # Source has restrictive perms; the migrated copy must still be readable
+        # by a differently-UID sandbox container (0o644), not inherit 0o600.
+        src = tmp_path / "private.png"
+        src.write_bytes(b"img")
+        src.chmod(0o600)
+
+        with _patch_paths(paths):
+            mcp_tools._migrate_local_file_to_outputs(str(src), thread_id="t1", user_id="u1")
+
+        dest = paths.sandbox_outputs_dir("t1", user_id="u1") / "private.png"
+        assert dest.stat().st_mode & 0o777 == mcp_tools._MIGRATED_FILE_MODE
+
+    def test_outputs_dir_resolve_failure_is_tolerated(self, tmp_path: Path, paths: Paths):
+        # When the outputs dir cannot be resolved, migration still proceeds via
+        # the unresolved fallback (covers the except OSError branch).
+        src = tmp_path / "shot.png"
+        src.write_bytes(b"img")
+
+        real_resolve = Path.resolve
+
+        def flaky_resolve(self, *args, **kwargs):
+            if self == paths.sandbox_outputs_dir("t1", user_id="u1"):
+                raise OSError("boom")
+            return real_resolve(self, *args, **kwargs)
+
+        with _patch_paths(paths), patch("pathlib.Path.resolve", flaky_resolve):
+            result = mcp_tools._migrate_local_file_to_outputs(
+                str(src), thread_id="t1", user_id="u1"
+            )
+
+        assert result == f"{VIRTUAL_PATH_PREFIX}/outputs/shot.png"
+
+    def test_user_data_resolve_failure_is_tolerated(self, paths: Paths):
+        # When the user-data root cannot be resolved it is simply skipped as a
+        # trusted root (covers the except OSError branch); a temp-dir source is
+        # still migrated because the temp dir remains an allowed root.
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as fh:
+            fh.write(b"png")
+            src = Path(fh.name)
+
+        real_resolve = Path.resolve
+
+        def flaky_resolve(self, *args, **kwargs):
+            if self == paths.sandbox_user_data_dir("t1", user_id="u1"):
+                raise OSError("boom")
+            return real_resolve(self, *args, **kwargs)
+
+        try:
+            with _patch_paths(paths), patch("pathlib.Path.resolve", flaky_resolve):
+                result = mcp_tools._migrate_local_file_to_outputs(
+                    str(src), thread_id="t1", user_id="u1"
+                )
+            assert result == f"{VIRTUAL_PATH_PREFIX}/outputs/{src.name}"
+        finally:
+            src.unlink(missing_ok=True)
 
 
 class TestConvertCallToolResultRewrites:
