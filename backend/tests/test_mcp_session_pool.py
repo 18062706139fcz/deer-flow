@@ -423,8 +423,10 @@ async def test_session_pool_tool_extracts_thread_id():
         await wrapped.coroutine(runtime=mock_runtime, x=1)
 
     # Verify the session was created with the correct scope key.
+    # The scope key is "{user_id}:{thread_id}"; the autouse fixture sets
+    # the effective user to "test-user-autouse".
     pool = get_session_pool()
-    assert ("server", "from-config") in pool._entries
+    assert ("server", "test-user-autouse:from-config") in pool._entries
 
 
 @pytest.mark.asyncio
@@ -459,7 +461,7 @@ async def test_session_pool_tool_default_scope():
         await wrapped.coroutine(runtime=None, x=1)
 
     pool = get_session_pool()
-    assert ("server", "default") in pool._entries
+    assert ("server", "test-user-autouse:default") in pool._entries
 
 
 @pytest.mark.asyncio
@@ -499,7 +501,7 @@ async def test_session_pool_tool_get_config_fallback():
         await wrapped.coroutine(runtime=None, x=1)
 
     pool = get_session_pool()
-    assert ("server", "from-langgraph-config") in pool._entries
+    assert ("server", "test-user-autouse:from-langgraph-config") in pool._entries
 
 
 def test_session_pool_tool_sync_wrapper_path_is_safe():

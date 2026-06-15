@@ -3,21 +3,136 @@
 from __future__ import annotations
 
 import logging
+import re
+import shutil
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
+from urllib.parse import unquote, urlparse
 
 from langchain_core.tools import BaseTool, StructuredTool
 from langgraph.config import get_config
 
 from deerflow.config.extensions_config import ExtensionsConfig
+from deerflow.config.paths import VIRTUAL_PATH_PREFIX, get_paths
 from deerflow.mcp.client import build_servers_config
 from deerflow.mcp.oauth import build_oauth_tool_interceptor, get_initial_oauth_headers
 from deerflow.mcp.session_pool import get_session_pool
 from deerflow.reflection import resolve_variable
+from deerflow.runtime.user_context import resolve_runtime_user_id
 from deerflow.tools.sync import make_sync_tool_wrapper
 from deerflow.tools.types import Runtime
 
 logger = logging.getLogger(__name__)
+
+# Maximum size of an MCP-produced file we are willing to copy into a thread's
+# sandbox outputs directory. Larger files are left untouched (path not rewritten).
+_MAX_MIGRATED_FILE_BYTES = 100 * 1024 * 1024  # 100 MB
+
+# Characters allowed in a migrated output filename; everything else is replaced.
+_UNSAFE_FILENAME_CHARS = re.compile(r"[^A-Za-z0-9._-]")
+
+
+def _local_path_from_uri(uri: str) -> Path | None:
+    """Return an absolute local filesystem ``Path`` if *uri* points to a local
+    file, otherwise ``None``.
+
+    Accepts both bare absolute paths and ``file://`` URIs. Remote URIs
+    (``http``/``https``/``data``/...) and relative paths return ``None`` so the
+    caller leaves them untouched.
+    """
+    if not uri:
+        return None
+    parsed = urlparse(uri)
+    if parsed.scheme == "file":
+        raw = unquote(parsed.path)
+    elif parsed.scheme == "":
+        raw = uri
+    else:
+        return None
+    if not raw:
+        return None
+    path = Path(raw)
+    if not path.is_absolute():
+        return None
+    return path
+
+
+def _safe_output_name(name: str) -> str:
+    """Sanitize a filename for safe placement inside the outputs directory."""
+    name = Path(name).name  # strip any directory component
+    name = _UNSAFE_FILENAME_CHARS.sub("_", name)
+    name = name.lstrip(".") or "file"
+    return name
+
+
+def _unique_destination(outputs_dir: Path, name: str) -> Path:
+    """Return a non-colliding destination path inside *outputs_dir*."""
+    dest = outputs_dir / name
+    if not dest.exists():
+        return dest
+    stem = Path(name).stem
+    suffix = Path(name).suffix
+    counter = 1
+    while True:
+        candidate = outputs_dir / f"{stem}_{counter}{suffix}"
+        if not candidate.exists():
+            return candidate
+        counter += 1
+
+
+def _migrate_local_file_to_outputs(uri: str, *, thread_id: str, user_id: str) -> str | None:
+    """Copy a local file produced by an MCP server into the thread's sandbox
+    outputs directory and return its ``/mnt/user-data/outputs/...`` virtual path.
+
+    Returns ``None`` (leaving the original URI untouched) when the URI is not a
+    safe, local, regular file within the size limit. This is what makes
+    Playwright-style MCP outputs readable through the sandbox/artifact API,
+    which only resolves paths under ``/mnt/user-data``.
+    """
+    src = _local_path_from_uri(uri)
+    if src is None:
+        return None
+
+    try:
+        real = src.resolve()
+    except OSError:
+        return None
+    if not real.is_file():
+        return None
+
+    paths = get_paths()
+    outputs_dir = paths.sandbox_outputs_dir(thread_id, user_id=user_id)
+    try:
+        outputs_real = outputs_dir.resolve()
+    except OSError:
+        outputs_real = outputs_dir
+
+    # Already inside the thread's outputs directory: just rewrite to the
+    # virtual path, no copy needed.
+    try:
+        relative = real.relative_to(outputs_real)
+        return f"{VIRTUAL_PATH_PREFIX}/outputs/{relative.as_posix()}"
+    except ValueError:
+        pass
+
+    try:
+        size = real.stat().st_size
+    except OSError:
+        return None
+    if size > _MAX_MIGRATED_FILE_BYTES:
+        logger.warning("Skipping MCP file migration; file exceeds size limit: %s (%d bytes)", real, size)
+        return None
+
+    try:
+        paths.ensure_thread_dirs(thread_id, user_id=user_id)
+        dest = _unique_destination(outputs_dir, _safe_output_name(real.name))
+        shutil.copy2(real, dest)
+    except OSError:
+        logger.warning("Failed to migrate MCP file into sandbox outputs: %s", real, exc_info=True)
+        return None
+
+    return f"{VIRTUAL_PATH_PREFIX}/outputs/{dest.name}"
 
 
 def _extract_thread_id(runtime: Runtime | None) -> str:
@@ -38,11 +153,22 @@ def _extract_thread_id(runtime: Runtime | None) -> str:
         return "default"
 
 
-def _convert_call_tool_result(call_tool_result: Any) -> Any:
+def _convert_call_tool_result(
+    call_tool_result: Any,
+    *,
+    thread_id: str | None = None,
+    user_id: str | None = None,
+) -> Any:
     """Convert an MCP CallToolResult to the LangChain ``content_and_artifact`` format.
 
     Implements the same conversion logic as the adapter without relying on
     the private ``langchain_mcp_adapters.tools._convert_call_tool_result`` symbol.
+
+    When ``thread_id`` and ``user_id`` are provided, local files referenced by
+    ``ResourceLink`` blocks (e.g. screenshots saved by Playwright MCP) are copied
+    into the thread's sandbox outputs directory and their URIs are rewritten to
+    ``/mnt/user-data/outputs/...`` so they can be resolved by the sandbox and
+    artifact API. Remote URIs and inaccessible files are left untouched.
     """
     from langchain_core.messages import ToolMessage
     from langchain_core.messages.content import create_file_block, create_image_block, create_text_block
@@ -63,6 +189,12 @@ def _convert_call_tool_result(call_tool_result: Any) -> Any:
         # langgraph is optional; if unavailable, continue with standard MCP content conversion.
         pass
 
+    def _resolve_link_url(uri: str) -> str:
+        if thread_id is None or user_id is None:
+            return uri
+        rewritten = _migrate_local_file_to_outputs(uri, thread_id=thread_id, user_id=user_id)
+        return rewritten if rewritten is not None else uri
+
     # Convert MCP content blocks to LangChain content blocks.
     lc_content = []
     for item in call_tool_result.content:
@@ -72,10 +204,11 @@ def _convert_call_tool_result(call_tool_result: Any) -> Any:
             lc_content.append(create_image_block(base64=item.data, mime_type=item.mimeType))
         elif isinstance(item, ResourceLink):
             mime = item.mimeType or None
+            url = _resolve_link_url(str(item.uri))
             if mime and mime.startswith("image/"):
-                lc_content.append(create_image_block(url=str(item.uri), mime_type=mime))
+                lc_content.append(create_image_block(url=url, mime_type=mime))
             else:
-                lc_content.append(create_file_block(url=str(item.uri), mime_type=mime))
+                lc_content.append(create_file_block(url=url, mime_type=mime))
         elif isinstance(item, EmbeddedResource):
             from mcp.types import BlobResourceContents
 
@@ -113,8 +246,9 @@ def _make_session_pool_tool(
     """Wrap an MCP tool so it reuses a persistent session from the pool.
 
     Replaces the per-call session creation with pool-managed sessions scoped
-    by ``(server_name, thread_id)``.  This ensures stateful MCP servers (e.g.
-    Playwright) keep their state across tool calls within the same thread.
+    by ``(server_name, user_id:thread_id)``.  This ensures stateful MCP servers
+    (e.g. Playwright) keep their state across tool calls within the same thread
+    while staying isolated per user.
 
     The configured ``tool_interceptors`` (OAuth, custom) are preserved and
     applied on every call before invoking the pooled session.
@@ -132,7 +266,12 @@ def _make_session_pool_tool(
         **arguments: Any,
     ) -> Any:
         thread_id = _extract_thread_id(runtime)
-        session = await pool.get_session(server_name, thread_id, connection)
+        user_id = resolve_runtime_user_id(runtime)
+        # Scope the pooled session by user *and* thread. Filesystem isolation is
+        # per-(user_id, thread_id), so a thread_id alone could otherwise let two
+        # users with a colliding thread_id share one stateful MCP session.
+        scope_key = f"{user_id}:{thread_id}"
+        session = await pool.get_session(server_name, scope_key, connection)
 
         if tool_interceptors:
             from langchain_mcp_adapters.interceptors import MCPToolCallRequest
@@ -167,7 +306,7 @@ def _make_session_pool_tool(
         else:
             call_tool_result = await session.call_tool(original_name, arguments)
 
-        return _convert_call_tool_result(call_tool_result)
+        return _convert_call_tool_result(call_tool_result, thread_id=thread_id, user_id=user_id)
 
     return StructuredTool(
         name=tool.name,
