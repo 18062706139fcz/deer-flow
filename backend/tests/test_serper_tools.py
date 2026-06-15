@@ -252,6 +252,65 @@ class TestSafePublicUrl:
 
         assert _safe_public_url(None) == ""
 
+    def test_decimal_encoded_loopback_is_filtered(self):
+        from deerflow.community.serper.tools import _safe_public_url
+
+        # 2130706433 == 127.0.0.1
+        assert _safe_public_url("http://2130706433/x.jpg") == ""
+
+    def test_hex_encoded_loopback_is_filtered(self):
+        from deerflow.community.serper.tools import _safe_public_url
+
+        # 0x7f000001 == 127.0.0.1
+        assert _safe_public_url("http://0x7f000001/x.jpg") == ""
+
+    def test_octal_encoded_loopback_is_filtered(self):
+        from deerflow.community.serper.tools import _safe_public_url
+
+        # 0177.0.0.1 == 127.0.0.1
+        assert _safe_public_url("http://0177.0.0.1/x.jpg") == ""
+
+    def test_decimal_encoded_private_ip_is_filtered(self):
+        from deerflow.community.serper.tools import _safe_public_url
+
+        # 167772161 == 10.0.0.1
+        assert _safe_public_url("http://167772161/x.jpg") == ""
+
+    def test_decimal_encoded_public_ip_passes(self):
+        from deerflow.community.serper.tools import _safe_public_url
+
+        # 134744072 == 8.8.8.8
+        assert _safe_public_url("http://134744072/i.jpg") == "http://134744072/i.jpg"
+
+    def test_domain_with_hex_chars_is_not_treated_as_ip(self):
+        from deerflow.community.serper.tools import _safe_public_url
+
+        assert _safe_public_url("https://cafe.com/i.jpg") == "https://cafe.com/i.jpg"
+
+    def test_out_of_range_octet_is_not_treated_as_ip(self):
+        from deerflow.community.serper.tools import _safe_public_url
+
+        # 999.1.1.1 is not a valid IPv4 literal; treat as a hostname, not blocked.
+        assert _safe_public_url("https://999.1.1.1/i.jpg") == "https://999.1.1.1/i.jpg"
+
+    def test_too_many_octets_is_not_treated_as_ip(self):
+        from deerflow.community.serper.tools import _safe_public_url
+
+        # More than 4 dotted parts cannot be an IPv4 literal; treat as hostname.
+        assert _safe_public_url("https://1.2.3.4.5/i.jpg") == "https://1.2.3.4.5/i.jpg"
+
+    def test_empty_octet_is_not_treated_as_ip(self):
+        from deerflow.community.serper.tools import _safe_public_url
+
+        # Empty dotted part (e.g. trailing/leading dot) cannot decode to an IP.
+        assert _safe_public_url("https://1.2..3/i.jpg") == "https://1.2..3/i.jpg"
+
+    def test_trailing_octet_out_of_range_is_not_treated_as_ip(self):
+        from deerflow.community.serper.tools import _safe_public_url
+
+        # Leading octets are valid but the trailing block exceeds its range.
+        assert _safe_public_url("https://1.2.3.999/i.jpg") == "https://1.2.3.999/i.jpg"
+
 
 class TestWebSearchTool:
     def test_basic_search_returns_normalized_results(self, mock_config_with_key):

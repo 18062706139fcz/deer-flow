@@ -80,14 +80,57 @@ def _clean_query(query: str) -> str:
     return query
 
 
+def _decode_ipv4(host: str) -> object | None:
+    """Decode obfuscated IPv4 literals that ``ip_address`` rejects.
+
+    Mirrors the permissive ``inet_aton`` parsing many HTTP clients use, so that
+    integer (``2130706433``), hex (``0x7f000001``) and octal (``0177.0.0.1``)
+    encodings of an address are recognized. Returns an ``IPv4Address`` when the
+    host decodes to one, otherwise ``None`` (e.g. real domains like
+    ``cafe.com`` fail to decode and are left for the caller to treat as a host).
+    """
+    parts = host.split(".")
+    if not 1 <= len(parts) <= 4:
+        return None
+
+    values: list[int] = []
+    for part in parts:
+        if not part:
+            return None
+        try:
+            if part.startswith(("0x", "0X")):
+                values.append(int(part, 16))
+            elif part.startswith("0") and len(part) > 1:
+                values.append(int(part, 8))
+            else:
+                values.append(int(part, 10))
+        except ValueError:
+            return None
+
+    *leading, last = values
+    for value in leading:
+        if not 0 <= value <= 0xFF:
+            return None
+    max_last = (1 << (8 * (4 - len(leading)))) - 1
+    if not 0 <= last <= max_last:
+        return None
+
+    result = 0
+    for value in leading:
+        result = (result << 8) | value
+    result = (result << (8 * (4 - len(leading)))) | last
+    return ip_address(result)
+
+
 def _safe_public_url(value: object) -> str:
     """Return ``value`` only if it is a safe, public http(s) URL, else "".
 
     This is a best-effort SSRF guard that rejects non-http(s) schemes,
-    ``localhost``, and private/non-global IP literals. It only inspects the URL
-    string and cannot catch public hostnames that resolve to internal IPs
-    (e.g. DNS rebinding); any consumer that actually downloads these URLs must
-    re-validate the resolved IP at fetch time.
+    ``localhost``, and private/non-global IP literals (including obfuscated
+    decimal/hex/octal encodings). It only inspects the URL string and cannot
+    catch public hostnames that resolve to internal IPs (e.g. DNS rebinding);
+    any consumer that actually downloads these URLs must re-validate the
+    resolved IP at fetch time.
     """
     if not isinstance(value, str):
         return ""
@@ -103,7 +146,9 @@ def _safe_public_url(value: object) -> str:
     try:
         ip = ip_address(host)
     except ValueError:
-        return url
+        ip = _decode_ipv4(host)
+        if ip is None:
+            return url
     return url if ip.is_global else ""
 
 
