@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import logging
-import os
 import re
-import tempfile
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
@@ -26,84 +24,26 @@ from deerflow.tools.types import Runtime
 
 logger = logging.getLogger(__name__)
 
-# Maximum size of an MCP-produced file we are willing to copy into a thread's
-# sandbox outputs directory. Larger files are left untouched (path not rewritten).
-_MAX_MIGRATED_FILE_BYTES = 100 * 1024 * 1024  # 100 MB
-
-# Characters allowed in a migrated output filename; everything else is replaced.
-_UNSAFE_FILENAME_CHARS = re.compile(r"[^A-Za-z0-9._-]")
-
-# Chunk size used when copying migrated files so the size limit can be enforced
-# *during* the copy rather than from a stat() taken beforehand.
-_COPY_CHUNK_SIZE = 1024 * 1024  # 1 MiB
-
-# Permission bits applied to migrated files. Sandbox containers may run as a
-# different UID than the backend process (mirroring ``ensure_thread_dirs``'s
-# 0o777 on directories), so files must be world-readable regardless of the
-# source file's mode or the process umask.
-_MIGRATED_FILE_MODE = 0o644
-
-# Environment variable allowing operators to add extra trusted source roots
-# (os.pathsep-separated) from which MCP-produced files may be migrated.
-_EXTRA_SOURCE_ROOTS_ENV = "DEERFLOW_MCP_MIGRATION_SOURCE_ROOTS"
+# Subdirectory under the thread's workspace used as the temp dir for stdio MCP
+# subprocesses. Pinning the process temp dir here (alongside its cwd) makes
+# tools that write to ``os.tmpdir()`` / ``tempfile.gettempdir()`` land inside
+# the mounted user-data tree, where their output is resolvable by the
+# sandbox/artifact API — instead of on an unreachable host temp path.
+_MCP_TMP_SUBDIR = ".mcp/tmp"
 
 # Matches local-file references embedded in free text returned by an MCP server.
-# Playwright MCP reports screenshots as text/markdown links, not ResourceLinks.
-# Depending on the version/tool args, those links can be absolute paths,
-# file:// URIs, or paths relative to the server process cwd.
-_LOCAL_PATH_IN_TEXT_RE = re.compile(r"(?:file://)?/[^\s'\"<>|*?]+|(?:\.{1,2}/|\.playwright-mcp/)[^\s'\"<>|*?]+")
+# Some servers (notably Playwright's ``browser_take_screenshot``) report saved
+# files only as text/markdown links rather than ``ResourceLink`` blocks. Those
+# references may be absolute paths, ``file://`` URIs, or paths relative to the
+# server process cwd (e.g. ``temp/page.yml``, ``./shot.png``). Each match is
+# only rewritten when it resolves to an existing file inside the thread's
+# user-data tree, so an over-eager match is harmless (left untouched).
+_LOCAL_PATH_IN_TEXT_RE = re.compile(r"(?:file://)?/[^\s'\"<>|*?]+|(?:\.{0,2}/|[\w.-]+/)[^\s'\"<>|*?]+")
 
 # Trailing characters that are punctuation/markup rather than part of a path.
 _TEXT_PATH_TRAILING_CHARS = ".,;:!?)]}>\"'`"
 
-
-def _allowed_source_roots() -> list[Path]:
-    """Return the directories MCP-produced files may legitimately be read from.
-
-    Migration only copies files located under one of these roots. This is the
-    security boundary that stops a malicious or buggy MCP server from having us
-    copy arbitrary host files (e.g. ``/etc/passwd``, SSH keys) into a thread's
-    outputs directory, from where the artifact API would happily serve them.
-
-    Roots:
-      * the OS temp directory — where stdio MCP servers such as Playwright write
-        by default (e.g. ``--output-dir`` defaults under ``$TMPDIR``);
-      * any per-thread sandbox roots (handled by the caller via ``get_paths``);
-      * operator-configured roots via ``DEERFLOW_MCP_MIGRATION_SOURCE_ROOTS``.
-
-    Multi-tenant note: trusting the whole OS temp directory means any file under
-    ``$TMPDIR`` becomes migratable. On a host where ``$TMPDIR`` is shared across
-    tenants this widens the read surface (one tenant's MCP server could migrate
-    another tenant's temp file). Deployments that share a host across users
-    should give each request a private temp dir (e.g. systemd ``PrivateTmp`` or
-    a per-user ``TMPDIR``) so this root stays tenant-scoped.
-    """
-    roots: list[Path] = []
-    try:
-        roots.append(Path(tempfile.gettempdir()).resolve())
-    except OSError:
-        pass
-    extra = os.environ.get(_EXTRA_SOURCE_ROOTS_ENV, "")
-    for entry in extra.split(os.pathsep):
-        entry = entry.strip()
-        if not entry:
-            continue
-        try:
-            roots.append(Path(entry).resolve())
-        except OSError:
-            logger.warning("Ignoring invalid MCP migration source root: %s", entry)
-    return roots
-
-
-def _is_within_any(path: Path, roots: list[Path]) -> bool:
-    """Return True if *path* is equal to or nested under one of *roots*."""
-    for root in roots:
-        try:
-            path.relative_to(root)
-            return True
-        except ValueError:
-            continue
-    return False
+_FILE_SNAPSHOT = dict[Path, tuple[int, int]]
 
 
 def _local_path_from_uri(uri: str, *, base_dir: Path | None = None) -> Path | None:
@@ -133,70 +73,26 @@ def _local_path_from_uri(uri: str, *, base_dir: Path | None = None) -> Path | No
     return path
 
 
-def _safe_output_name(name: str) -> str:
-    """Sanitize a filename for safe placement inside the outputs directory."""
-    name = Path(name).name  # strip any directory component
-    name = _UNSAFE_FILENAME_CHARS.sub("_", name)
-    name = name.lstrip(".") or "file"
-    return name
-
-
-def _create_unique_destination(outputs_dir: Path, name: str) -> tuple[int, Path]:
-    """Atomically create a non-colliding destination inside *outputs_dir*.
-
-    Uses ``O_CREAT | O_EXCL`` so the existence check and the creation are a
-    single atomic step; this removes the TOCTOU race a check-then-create
-    approach would have when two migrations run concurrently for the same
-    ``(user_id, thread_id)``. Returns the open file descriptor (caller owns
-    closing it) and the chosen path.
-    """
-    stem = Path(name).stem
-    suffix = Path(name).suffix
-    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
-    counter = 0
-    while True:
-        candidate = outputs_dir / (name if counter == 0 else f"{stem}_{counter}{suffix}")
-        try:
-            fd = os.open(candidate, flags, _MIGRATED_FILE_MODE)
-            return fd, candidate
-        except FileExistsError:
-            counter += 1
-
-
-def _copy_capped(src: Path, fd: int) -> bool:
-    """Copy *src* into the already-open *fd*, enforcing the size cap mid-copy.
-
-    Returns ``True`` on success. Returns ``False`` (and stops writing) if the
-    source exceeds ``_MAX_MIGRATED_FILE_BYTES`` — enforcing the limit during the
-    copy rather than from a prior ``stat()`` closes the TOCTOU window where a
-    file could grow after being measured.
-    """
-    copied = 0
-    with open(src, "rb") as fsrc:
-        while True:
-            chunk = fsrc.read(_COPY_CHUNK_SIZE)
-            if not chunk:
-                return True
-            copied += len(chunk)
-            if copied > _MAX_MIGRATED_FILE_BYTES:
-                return False
-            os.write(fd, chunk)
-
-
-def _migrate_local_file_to_outputs(
+def _local_uri_to_virtual_path(
     uri: str,
     *,
     thread_id: str,
     user_id: str,
     source_base_dir: Path | None = None,
 ) -> str | None:
-    """Copy a local file produced by an MCP server into the thread's sandbox
-    outputs directory and return its ``/mnt/user-data/outputs/...`` virtual path.
+    """Translate a local file reference into its ``/mnt/user-data/...`` virtual path.
 
-    Returns ``None`` (leaving the original URI untouched) when the URI is not a
-    safe, local, regular file within the size limit. This is what makes
-    Playwright-style MCP outputs readable through the sandbox/artifact API,
-    which only resolves paths under ``/mnt/user-data``.
+    Stdio MCP servers run with their cwd and temp dir pinned inside the thread's
+    mounted user-data tree (see :func:`_make_session_pool_tool`), so the files
+    they produce already live somewhere the sandbox/artifact API can serve — the
+    only thing missing is the virtual prefix the rest of DeerFlow addresses them
+    by. This performs that purely deterministic host→virtual mapping: no copy, no
+    trusted-root list, and no exposure of files outside the thread's own tree.
+
+    Returns ``None`` (so the caller leaves the reference untouched) when the URI
+    is remote, cannot be resolved, points outside this thread's user-data tree,
+    or does not name an existing file. Relative references are resolved against
+    *source_base_dir* (the server's cwd).
     """
     src = _local_path_from_uri(uri, base_dir=source_base_dir)
     if src is None:
@@ -209,55 +105,85 @@ def _migrate_local_file_to_outputs(
     if not real.is_file():
         return None
 
-    paths = get_paths()
-    outputs_dir = paths.sandbox_outputs_dir(thread_id, user_id=user_id)
     try:
-        outputs_real = outputs_dir.resolve()
+        user_data_root = get_paths().sandbox_user_data_dir(thread_id, user_id=user_id).resolve()
     except OSError:
-        outputs_real = outputs_dir
+        return None
 
-    # Already inside the thread's outputs directory: just rewrite to the
-    # virtual path, no copy needed.
     try:
-        relative = real.relative_to(outputs_real)
-        return f"{VIRTUAL_PATH_PREFIX}/outputs/{relative.as_posix()}"
+        relative = real.relative_to(user_data_root)
     except ValueError:
-        pass
-
-    # Security boundary: only migrate files that live under a trusted source
-    # root. Without this a malicious/buggy MCP server could return a path like
-    # ``/etc/passwd`` and have us copy it into a location the artifact API
-    # serves. The thread's own user-data tree is trusted (the agent's own
-    # files); everything else must come from a configured source root.
-    allowed_roots = _allowed_source_roots()
-    try:
-        allowed_roots.append(paths.sandbox_user_data_dir(thread_id, user_id=user_id).resolve())
-    except OSError:
-        pass
-    if not _is_within_any(real, allowed_roots):
-        logger.warning("Refusing to migrate MCP file outside allowed source roots: %s", real)
+        # The file lives outside this thread's user-data mount; we cannot
+        # express it as a virtual path, so leave the original reference as-is.
         return None
+
+    return f"{VIRTUAL_PATH_PREFIX}/{relative.as_posix()}"
+
+
+def _snapshot_workspace_files(root: Path) -> _FILE_SNAPSHOT:
+    """Return a lightweight snapshot of regular files under *root*."""
+    snapshot: _FILE_SNAPSHOT = {}
+    if not root.exists():
+        return snapshot
 
     try:
-        paths.ensure_thread_dirs(thread_id, user_id=user_id)
-        fd, dest = _create_unique_destination(outputs_dir, _safe_output_name(real.name))
-        try:
-            within_limit = _copy_capped(real, fd)
-        finally:
-            os.close(fd)
+        candidates = root.rglob("*")
+        for path in candidates:
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            if path.is_file():
+                snapshot[path] = (stat.st_mtime_ns, stat.st_size)
     except OSError:
-        logger.warning("Failed to migrate MCP file into sandbox outputs: %s", real, exc_info=True)
-        return None
+        return snapshot
+    return snapshot
 
-    if not within_limit:
-        logger.warning("Skipping MCP file migration; file exceeds size limit: %s", real)
-        try:
-            dest.unlink()
-        except OSError:
-            logger.warning("Failed to remove partially migrated MCP file: %s", dest, exc_info=True)
-        return None
 
-    return f"{VIRTUAL_PATH_PREFIX}/outputs/{dest.name}"
+def _changed_workspace_files(root: Path, before: _FILE_SNAPSHOT) -> list[Path]:
+    """Return files under *root* that were created or modified since *before*."""
+    after = _snapshot_workspace_files(root)
+    return [path for path, signature in after.items() if before.get(path) != signature]
+
+
+def _rewrite_unique_bare_filenames(
+    text: str,
+    *,
+    changed_files: Iterable[Path],
+    thread_id: str,
+    user_id: str,
+    source_base_dir: Path | None = None,
+) -> str:
+    """Rewrite bare filenames only when this call produced a unique match.
+
+    A response like ``Saved as page-2026.yml`` is not structurally a path. The
+    only safe way to interpret it is to correlate the filename with files
+    created/modified by this exact tool call, and rewrite only when the basename
+    maps to exactly one file inside this thread's mounted user-data tree.
+    """
+    candidates: dict[str, list[str]] = {}
+    for path in changed_files:
+        virtual_path = _local_uri_to_virtual_path(
+            str(path),
+            thread_id=thread_id,
+            user_id=user_id,
+            source_base_dir=source_base_dir,
+        )
+        if virtual_path is None:
+            continue
+        candidates.setdefault(path.name, []).append(virtual_path)
+
+    unique = {name: paths[0] for name, paths in candidates.items() if len(set(paths)) == 1}
+    if not unique:
+        return text
+
+    rewritten = text
+    for name in sorted(unique, key=len, reverse=True):
+        # Do not rewrite inside longer paths/words. A final sentence period is
+        # allowed, but ".bak" or another path segment is not.
+        pattern = re.compile(rf"(?<![\w./-]){re.escape(name)}(?!(?:[\w/-]|\.[\w]))")
+        rewritten = pattern.sub(unique[name], rewritten)
+    return rewritten
 
 
 def _rewrite_local_paths_in_text(
@@ -266,41 +192,49 @@ def _rewrite_local_paths_in_text(
     thread_id: str,
     user_id: str,
     source_base_dir: Path | None = None,
+    changed_files: Iterable[Path] | None = None,
 ) -> str:
-    """Migrate local files referenced as plain text and rewrite them in place.
+    """Best-effort rewrite of local file references found in free text.
 
-    Some MCP servers (notably Playwright's ``browser_take_screenshot``) return
-    the saved file only as free text — e.g. ``Took the viewport screenshot and
-    saved it as /tmp/playwright-mcp-output/page-2026.png`` — instead of a
-    ``ResourceLink``. Without this, such files are never migrated and stay on a
-    host path the sandbox/artifact API cannot resolve.
-
-    Each absolute path, relative path, or ``file://`` URI found in *text* is
-    migrated via :func:`_migrate_local_file_to_outputs`; on success its
-    occurrence is replaced with the ``/mnt/user-data/outputs/...`` virtual path.
-    Non-local, inaccessible, or untrusted paths are left exactly as they were.
+    Some MCP servers (notably Playwright's ``browser_take_screenshot``) report
+    the saved file only as free text — e.g. ``Took the screenshot and saved it
+    as temp/page-2026.png`` — instead of a ``ResourceLink``. Free text is not a
+    reliable protocol, so this is deliberately conservative: every candidate
+    token is handed to :func:`_local_uri_to_virtual_path`, which only rewrites
+    it when it resolves to an existing file inside this thread's user-data tree.
+    Tokens that are not real paths (or point elsewhere) are left exactly as they
+    were, so an over-eager regex match has no harmful effect.
     """
-    migrated_by_source: dict[str, str | None] = {}
+    translated_by_source: dict[str, str | None] = {}
 
     def _replace(match: re.Match[str]) -> str:
         token = match.group(0)
-        # A path can end a sentence ("saved as /tmp/a.png."); strip trailing
+        # A path can end a sentence ("saved as temp/a.png."); strip trailing
         # punctuation and restore it after the (possibly rewritten) path.
         stripped = token.rstrip(_TEXT_PATH_TRAILING_CHARS)
         trailing = token[len(stripped) :]
-        if stripped not in migrated_by_source:
-            migrated_by_source[stripped] = _migrate_local_file_to_outputs(
+        if stripped not in translated_by_source:
+            translated_by_source[stripped] = _local_uri_to_virtual_path(
                 stripped,
                 thread_id=thread_id,
                 user_id=user_id,
                 source_base_dir=source_base_dir,
             )
-        rewritten = migrated_by_source[stripped]
+        rewritten = translated_by_source[stripped]
         if rewritten is None:
             return token
         return f"{rewritten}{trailing}"
 
-    return _LOCAL_PATH_IN_TEXT_RE.sub(_replace, text)
+    rewritten = _LOCAL_PATH_IN_TEXT_RE.sub(_replace, text)
+    if changed_files is None:
+        return rewritten
+    return _rewrite_unique_bare_filenames(
+        rewritten,
+        changed_files=changed_files,
+        thread_id=thread_id,
+        user_id=user_id,
+        source_base_dir=source_base_dir,
+    )
 
 
 def _extract_thread_id(runtime: Runtime | None) -> str:
@@ -327,6 +261,7 @@ def _convert_call_tool_result(
     thread_id: str | None = None,
     user_id: str | None = None,
     source_base_dir: Path | None = None,
+    changed_files: Iterable[Path] | None = None,
 ) -> Any:
     """Convert an MCP CallToolResult to the LangChain ``content_and_artifact`` format.
 
@@ -335,10 +270,12 @@ def _convert_call_tool_result(
 
     When ``thread_id`` and ``user_id`` are provided, local files referenced by
     ``ResourceLink`` blocks or plain text (e.g. screenshots saved by Playwright
-    MCP) are copied into the thread's sandbox outputs directory and their URIs
-    are rewritten to ``/mnt/user-data/outputs/...`` so they can be resolved by
-    the sandbox and artifact API. Remote URIs and inaccessible files are left
-    untouched.
+    MCP) have their references translated from the host path to the
+    ``/mnt/user-data/...`` virtual path so they can be resolved by the sandbox
+    and artifact API. The files themselves are not copied — stdio servers run
+    with their cwd/temp pinned inside the mounted tree, so they already live in
+    a servable location. Remote URIs and files outside the thread's user-data
+    tree are left untouched.
     """
     from langchain_core.messages import ToolMessage
     from langchain_core.messages.content import create_file_block, create_image_block, create_text_block
@@ -362,16 +299,22 @@ def _convert_call_tool_result(
     def _resolve_link_url(uri: str) -> str:
         if thread_id is None or user_id is None:
             return uri
-        rewritten = _migrate_local_file_to_outputs(uri, thread_id=thread_id, user_id=user_id, source_base_dir=source_base_dir)
+        rewritten = _local_uri_to_virtual_path(uri, thread_id=thread_id, user_id=user_id, source_base_dir=source_base_dir)
         return rewritten if rewritten is not None else uri
 
     def _resolve_text(text: str) -> str:
         # Servers like Playwright report saved files only as plain text, with no
-        # ResourceLink to hook into. Scan the text for local paths and migrate
+        # ResourceLink to hook into. Scan the text for local paths and translate
         # them so the produced files are readable through the sandbox/artifact API.
         if thread_id is None or user_id is None:
             return text
-        return _rewrite_local_paths_in_text(text, thread_id=thread_id, user_id=user_id, source_base_dir=source_base_dir)
+        return _rewrite_local_paths_in_text(
+            text,
+            thread_id=thread_id,
+            user_id=user_id,
+            source_base_dir=source_base_dir,
+            changed_files=changed_files,
+        )
 
     # Convert MCP content blocks to LangChain content blocks.
     lc_content = []
@@ -455,10 +398,28 @@ def _make_session_pool_tool(
         session_connection = dict(connection)
         # Stdio MCP servers resolve relative output links against their process
         # cwd. Keep that cwd inside the thread's mounted user-data tree so files
-        # produced by tools like Playwright can be migrated and served safely.
+        # produced by tools like Playwright land where the sandbox/artifact API
+        # can serve them and their references can be translated to virtual paths.
         session_connection["cwd"] = source_base_dir
+        # Pin the subprocess temp dir under the same mounted tree. Tools that
+        # default to the OS temp dir (Node's os.tmpdir(), Python's tempfile,
+        # many CLIs) then write inside user-data instead of an unreachable host
+        # path — this is the tool-agnostic counterpart to fixing the cwd. Merge
+        # rather than replace any operator-provided env.
+        tmp_dir = source_base_dir / _MCP_TMP_SUBDIR
+        try:
+            tmp_dir.mkdir(parents=True, exist_ok=True)
+            tmp_dir.chmod(0o777)
+        except OSError:
+            logger.warning("Failed to prepare MCP temp dir: %s", tmp_dir, exc_info=True)
+        session_env = dict(session_connection.get("env") or {})
+        session_env.setdefault("TMPDIR", str(tmp_dir))
+        session_env.setdefault("TMP", str(tmp_dir))
+        session_env.setdefault("TEMP", str(tmp_dir))
+        session_connection["env"] = session_env
         session = await pool.get_session(server_name, scope_key, session_connection)
 
+        before_files = _snapshot_workspace_files(source_base_dir)
         if tool_interceptors:
             from langchain_mcp_adapters.interceptors import MCPToolCallRequest
 
@@ -492,7 +453,14 @@ def _make_session_pool_tool(
         else:
             call_tool_result = await session.call_tool(original_name, arguments)
 
-        return _convert_call_tool_result(call_tool_result, thread_id=thread_id, user_id=user_id, source_base_dir=source_base_dir)
+        changed_files = _changed_workspace_files(source_base_dir, before_files)
+        return _convert_call_tool_result(
+            call_tool_result,
+            thread_id=thread_id,
+            user_id=user_id,
+            source_base_dir=source_base_dir,
+            changed_files=changed_files,
+        )
 
     return StructuredTool(
         name=tool.name,
