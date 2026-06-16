@@ -42,6 +42,9 @@ class TestLocalPathFromUri:
     def test_relative_path_is_ignored(self):
         assert mcp_tools._local_path_from_uri("relative/path.txt") is None
 
+    def test_relative_path_uses_base_dir_when_provided(self, tmp_path: Path):
+        assert mcp_tools._local_path_from_uri("./shot.png", base_dir=tmp_path) == tmp_path / "shot.png"
+
     def test_file_uri_with_relative_path_is_ignored(self):
         assert mcp_tools._local_path_from_uri("file:relative.txt") is None
 
@@ -237,6 +240,22 @@ class TestMigrateLocalFileToOutputs:
 
         assert result == f"{VIRTUAL_PATH_PREFIX}/outputs/made-by-agent.txt"
 
+    def test_relative_source_under_base_dir_is_migrated(self, paths: Paths):
+        workspace = paths.sandbox_work_dir("t1", user_id="u1")
+        src = workspace / ".playwright-mcp" / "page.png"
+        src.parent.mkdir(parents=True)
+        src.write_bytes(b"png")
+
+        with _patch_paths(paths), patch.object(mcp_tools, "_allowed_source_roots", return_value=[]):
+            result = mcp_tools._migrate_local_file_to_outputs(
+                ".playwright-mcp/page.png",
+                thread_id="t1",
+                user_id="u1",
+                source_base_dir=workspace,
+            )
+
+        assert result == f"{VIRTUAL_PATH_PREFIX}/outputs/page.png"
+
     def test_copy_failure_returns_none(self, tmp_path: Path, paths: Paths):
         src = tmp_path / "shot.png"
         src.write_bytes(b"img")
@@ -426,6 +445,55 @@ class TestConvertCallToolResultRewrites:
 
         assert content[0]["type"] == "text"
         assert content[0]["text"] == "hello"
+
+    def test_text_content_relative_playwright_path_rewritten(self, paths: Paths):
+        workspace = paths.sandbox_work_dir("t1", user_id="u1")
+        src = workspace / ".playwright-mcp" / "page.png"
+        src.parent.mkdir(parents=True)
+        src.write_bytes(b"png")
+        result = CallToolResult(
+            content=[
+                TextContent(
+                    type="text",
+                    text="### Result\n- [Screenshot](.playwright-mcp/page.png)\npath: '.playwright-mcp/page.png'",
+                )
+            ],
+            isError=False,
+        )
+
+        with _patch_paths(paths), patch.object(mcp_tools, "_allowed_source_roots", return_value=[]):
+            content, _ = mcp_tools._convert_call_tool_result(
+                result,
+                thread_id="t1",
+                user_id="u1",
+                source_base_dir=workspace,
+            )
+
+        assert content[0]["text"].count(f"{VIRTUAL_PATH_PREFIX}/outputs/page.png") == 2
+        assert list(paths.sandbox_outputs_dir("t1", user_id="u1").glob("*.png")) == [
+            paths.sandbox_outputs_dir("t1", user_id="u1") / "page.png"
+        ]
+
+    def test_text_content_explicit_playwright_filename_rewritten(self, paths: Paths):
+        workspace = paths.sandbox_work_dir("t1", user_id="u1")
+        src = workspace / "homepage.png"
+        src.parent.mkdir(parents=True)
+        src.write_bytes(b"png")
+        result = CallToolResult(
+            content=[TextContent(type="text", text="- [Screenshot](./homepage.png)\npath: './homepage.png'")],
+            isError=False,
+        )
+
+        with _patch_paths(paths), patch.object(mcp_tools, "_allowed_source_roots", return_value=[]):
+            content, _ = mcp_tools._convert_call_tool_result(
+                result,
+                thread_id="t1",
+                user_id="u1",
+                source_base_dir=workspace,
+            )
+
+        assert content[0]["text"].count(f"{VIRTUAL_PATH_PREFIX}/outputs/homepage.png") == 2
+        assert (paths.sandbox_outputs_dir("t1", user_id="u1") / "homepage.png").read_bytes() == b"png"
 
     def test_image_content_passthrough(self, paths: Paths):
         from mcp.types import ImageContent

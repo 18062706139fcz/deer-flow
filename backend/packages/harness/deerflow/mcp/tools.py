@@ -47,6 +47,15 @@ _MIGRATED_FILE_MODE = 0o644
 # (os.pathsep-separated) from which MCP-produced files may be migrated.
 _EXTRA_SOURCE_ROOTS_ENV = "DEERFLOW_MCP_MIGRATION_SOURCE_ROOTS"
 
+# Matches local-file references embedded in free text returned by an MCP server.
+# Playwright MCP reports screenshots as text/markdown links, not ResourceLinks.
+# Depending on the version/tool args, those links can be absolute paths,
+# file:// URIs, or paths relative to the server process cwd.
+_LOCAL_PATH_IN_TEXT_RE = re.compile(r"(?:file://)?/[^\s'\"<>|*?]+|(?:\.{1,2}/|\.playwright-mcp/)[^\s'\"<>|*?]+")
+
+# Trailing characters that are punctuation/markup rather than part of a path.
+_TEXT_PATH_TRAILING_CHARS = ".,;:!?)]}>\"'`"
+
 
 def _allowed_source_roots() -> list[Path]:
     """Return the directories MCP-produced files may legitimately be read from.
@@ -97,13 +106,13 @@ def _is_within_any(path: Path, roots: list[Path]) -> bool:
     return False
 
 
-def _local_path_from_uri(uri: str) -> Path | None:
+def _local_path_from_uri(uri: str, *, base_dir: Path | None = None) -> Path | None:
     """Return an absolute local filesystem ``Path`` if *uri* points to a local
     file, otherwise ``None``.
 
-    Accepts both bare absolute paths and ``file://`` URIs. Remote URIs
-    (``http``/``https``/``data``/...) and relative paths return ``None`` so the
-    caller leaves them untouched.
+    Accepts bare paths and ``file://`` URIs. Remote URIs
+    (``http``/``https``/``data``/...) return ``None`` so the caller leaves them
+    untouched. Relative paths are resolved only when *base_dir* is supplied.
     """
     if not uri:
         return None
@@ -118,7 +127,9 @@ def _local_path_from_uri(uri: str) -> Path | None:
         return None
     path = Path(raw)
     if not path.is_absolute():
-        return None
+        if base_dir is None:
+            return None
+        path = base_dir / path
     return path
 
 
@@ -172,7 +183,13 @@ def _copy_capped(src: Path, fd: int) -> bool:
             os.write(fd, chunk)
 
 
-def _migrate_local_file_to_outputs(uri: str, *, thread_id: str, user_id: str) -> str | None:
+def _migrate_local_file_to_outputs(
+    uri: str,
+    *,
+    thread_id: str,
+    user_id: str,
+    source_base_dir: Path | None = None,
+) -> str | None:
     """Copy a local file produced by an MCP server into the thread's sandbox
     outputs directory and return its ``/mnt/user-data/outputs/...`` virtual path.
 
@@ -181,7 +198,7 @@ def _migrate_local_file_to_outputs(uri: str, *, thread_id: str, user_id: str) ->
     Playwright-style MCP outputs readable through the sandbox/artifact API,
     which only resolves paths under ``/mnt/user-data``.
     """
-    src = _local_path_from_uri(uri)
+    src = _local_path_from_uri(uri, base_dir=source_base_dir)
     if src is None:
         return None
 
@@ -243,6 +260,49 @@ def _migrate_local_file_to_outputs(uri: str, *, thread_id: str, user_id: str) ->
     return f"{VIRTUAL_PATH_PREFIX}/outputs/{dest.name}"
 
 
+def _rewrite_local_paths_in_text(
+    text: str,
+    *,
+    thread_id: str,
+    user_id: str,
+    source_base_dir: Path | None = None,
+) -> str:
+    """Migrate local files referenced as plain text and rewrite them in place.
+
+    Some MCP servers (notably Playwright's ``browser_take_screenshot``) return
+    the saved file only as free text — e.g. ``Took the viewport screenshot and
+    saved it as /tmp/playwright-mcp-output/page-2026.png`` — instead of a
+    ``ResourceLink``. Without this, such files are never migrated and stay on a
+    host path the sandbox/artifact API cannot resolve.
+
+    Each absolute path, relative path, or ``file://`` URI found in *text* is
+    migrated via :func:`_migrate_local_file_to_outputs`; on success its
+    occurrence is replaced with the ``/mnt/user-data/outputs/...`` virtual path.
+    Non-local, inaccessible, or untrusted paths are left exactly as they were.
+    """
+    migrated_by_source: dict[str, str | None] = {}
+
+    def _replace(match: re.Match[str]) -> str:
+        token = match.group(0)
+        # A path can end a sentence ("saved as /tmp/a.png."); strip trailing
+        # punctuation and restore it after the (possibly rewritten) path.
+        stripped = token.rstrip(_TEXT_PATH_TRAILING_CHARS)
+        trailing = token[len(stripped) :]
+        if stripped not in migrated_by_source:
+            migrated_by_source[stripped] = _migrate_local_file_to_outputs(
+                stripped,
+                thread_id=thread_id,
+                user_id=user_id,
+                source_base_dir=source_base_dir,
+            )
+        rewritten = migrated_by_source[stripped]
+        if rewritten is None:
+            return token
+        return f"{rewritten}{trailing}"
+
+    return _LOCAL_PATH_IN_TEXT_RE.sub(_replace, text)
+
+
 def _extract_thread_id(runtime: Runtime | None) -> str:
     """Extract thread_id from the injected tool runtime or LangGraph config."""
     if runtime is not None:
@@ -266,6 +326,7 @@ def _convert_call_tool_result(
     *,
     thread_id: str | None = None,
     user_id: str | None = None,
+    source_base_dir: Path | None = None,
 ) -> Any:
     """Convert an MCP CallToolResult to the LangChain ``content_and_artifact`` format.
 
@@ -273,10 +334,11 @@ def _convert_call_tool_result(
     the private ``langchain_mcp_adapters.tools._convert_call_tool_result`` symbol.
 
     When ``thread_id`` and ``user_id`` are provided, local files referenced by
-    ``ResourceLink`` blocks (e.g. screenshots saved by Playwright MCP) are copied
-    into the thread's sandbox outputs directory and their URIs are rewritten to
-    ``/mnt/user-data/outputs/...`` so they can be resolved by the sandbox and
-    artifact API. Remote URIs and inaccessible files are left untouched.
+    ``ResourceLink`` blocks or plain text (e.g. screenshots saved by Playwright
+    MCP) are copied into the thread's sandbox outputs directory and their URIs
+    are rewritten to ``/mnt/user-data/outputs/...`` so they can be resolved by
+    the sandbox and artifact API. Remote URIs and inaccessible files are left
+    untouched.
     """
     from langchain_core.messages import ToolMessage
     from langchain_core.messages.content import create_file_block, create_image_block, create_text_block
@@ -300,14 +362,22 @@ def _convert_call_tool_result(
     def _resolve_link_url(uri: str) -> str:
         if thread_id is None or user_id is None:
             return uri
-        rewritten = _migrate_local_file_to_outputs(uri, thread_id=thread_id, user_id=user_id)
+        rewritten = _migrate_local_file_to_outputs(uri, thread_id=thread_id, user_id=user_id, source_base_dir=source_base_dir)
         return rewritten if rewritten is not None else uri
+
+    def _resolve_text(text: str) -> str:
+        # Servers like Playwright report saved files only as plain text, with no
+        # ResourceLink to hook into. Scan the text for local paths and migrate
+        # them so the produced files are readable through the sandbox/artifact API.
+        if thread_id is None or user_id is None:
+            return text
+        return _rewrite_local_paths_in_text(text, thread_id=thread_id, user_id=user_id, source_base_dir=source_base_dir)
 
     # Convert MCP content blocks to LangChain content blocks.
     lc_content = []
     for item in call_tool_result.content:
         if isinstance(item, TextContent):
-            lc_content.append(create_text_block(text=item.text))
+            lc_content.append(create_text_block(text=_resolve_text(item.text)))
         elif isinstance(item, ImageContent):
             lc_content.append(create_image_block(base64=item.data, mime_type=item.mimeType))
         elif isinstance(item, ResourceLink):
@@ -322,7 +392,7 @@ def _convert_call_tool_result(
 
             res = item.resource
             if isinstance(res, TextResourceContents):
-                lc_content.append(create_text_block(text=res.text))
+                lc_content.append(create_text_block(text=_resolve_text(res.text)))
             elif isinstance(res, BlobResourceContents):
                 mime = res.mimeType or None
                 if mime and mime.startswith("image/"):
@@ -379,7 +449,15 @@ def _make_session_pool_tool(
         # per-(user_id, thread_id), so a thread_id alone could otherwise let two
         # users with a colliding thread_id share one stateful MCP session.
         scope_key = f"{user_id}:{thread_id}"
-        session = await pool.get_session(server_name, scope_key, connection)
+        paths = get_paths()
+        paths.ensure_thread_dirs(thread_id, user_id=user_id)
+        source_base_dir = paths.sandbox_work_dir(thread_id, user_id=user_id)
+        session_connection = dict(connection)
+        # Stdio MCP servers resolve relative output links against their process
+        # cwd. Keep that cwd inside the thread's mounted user-data tree so files
+        # produced by tools like Playwright can be migrated and served safely.
+        session_connection["cwd"] = source_base_dir
+        session = await pool.get_session(server_name, scope_key, session_connection)
 
         if tool_interceptors:
             from langchain_mcp_adapters.interceptors import MCPToolCallRequest
@@ -414,7 +492,7 @@ def _make_session_pool_tool(
         else:
             call_tool_result = await session.call_tool(original_name, arguments)
 
-        return _convert_call_tool_result(call_tool_result, thread_id=thread_id, user_id=user_id)
+        return _convert_call_tool_result(call_tool_result, thread_id=thread_id, user_id=user_id, source_base_dir=source_base_dir)
 
     return StructuredTool(
         name=tool.name,
