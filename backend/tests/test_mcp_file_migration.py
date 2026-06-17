@@ -271,10 +271,7 @@ class TestRewriteLocalPathsInText:
         with _patch_paths(paths):
             result = mcp_tools._rewrite_local_paths_in_text(text, thread_id="t1", user_id="u1", source_base_dir=workspace)
 
-        assert result == (
-            f"Saved {VIRTUAL_PATH_PREFIX}/workspace/temp/a.png "
-            f"and {VIRTUAL_PATH_PREFIX}/workspace/temp/b.png together."
-        )
+        assert result == (f"Saved {VIRTUAL_PATH_PREFIX}/workspace/temp/a.png and {VIRTUAL_PATH_PREFIX}/workspace/temp/b.png together.")
 
     def test_markdown_link_in_parentheses_is_rewritten_without_eating_paren(self, paths: Paths):
         workspace = paths.sandbox_work_dir("t1", user_id="u1")
