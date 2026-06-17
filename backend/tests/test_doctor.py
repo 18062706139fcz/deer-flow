@@ -264,6 +264,27 @@ class TestCheckWebSearch:
         assert result.status == "ok"
         assert "SERPER_API_KEY set from config" in result.detail
 
+    def test_serper_unresolved_env_ref_falls_back_to_default_var(self, tmp_path, monkeypatch):
+        # The referenced $VAR is unset, but the default SERPER_API_KEY is set,
+        # which the tool uses as a runtime fallback; report ok rather than warn.
+        monkeypatch.delenv("MY_CUSTOM_SERPER_KEY", raising=False)
+        monkeypatch.setenv("SERPER_API_KEY", "test-key")
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text("config_version: 5\ntools:\n  - name: web_search\n    use: deerflow.community.serper.tools:web_search_tool\n    api_key: $MY_CUSTOM_SERPER_KEY\n")
+        result = doctor.check_web_search(cfg)
+        assert result.status == "ok"
+        assert "SERPER_API_KEY set" in result.detail
+
+    def test_serper_unresolved_env_ref_without_default_warns(self, tmp_path, monkeypatch):
+        # Neither the referenced $VAR nor the default SERPER_API_KEY is set.
+        monkeypatch.delenv("MY_CUSTOM_SERPER_KEY", raising=False)
+        monkeypatch.delenv("SERPER_API_KEY", raising=False)
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text("config_version: 5\ntools:\n  - name: web_search\n    use: deerflow.community.serper.tools:web_search_tool\n    api_key: $MY_CUSTOM_SERPER_KEY\n")
+        result = doctor.check_web_search(cfg)
+        assert result.status == "warn"
+        assert "SERPER_API_KEY" in (result.fix or "")
+
     def test_no_search_tool_warns(self, tmp_path):
         cfg = tmp_path / "config.yaml"
         cfg.write_text("config_version: 5\ntools: []\n")

@@ -65,7 +65,11 @@ def _unexpected_format_error(query: str) -> str:
 
 
 def _response_items(data: dict, field: str, query: str) -> tuple[list[dict] | None, str | None]:
-    items = data.get(field, [])
+    items = data.get(field)
+    # Treat a missing or null field as "no results" (some APIs return
+    # ``{"organic": null}`` to signal that) rather than a malformed payload.
+    if items is None:
+        return [], None
     if not isinstance(items, list):
         logger.error("Serper returned unexpected '%s' payload type: %s", field, type(items).__name__)
         return None, _unexpected_format_error(query)
@@ -122,6 +126,16 @@ def _decode_ipv4(host: str) -> IPv4Address | None:
     return ip_address(result)
 
 
+def _is_url_present(value: object) -> bool:
+    """Return ``True`` when *value* is a non-empty URL string.
+
+    Used to distinguish a field that was *absent* (eligible for cross-field
+    fallback) from one that was *present but filtered* by the SSRF guard (which
+    must stay empty rather than collapse onto its counterpart).
+    """
+    return isinstance(value, str) and bool(value.strip())
+
+
 def _safe_public_url(value: object) -> str:
     """Return ``value`` only if it is a safe, public http(s) URL, else "".
 
@@ -139,7 +153,12 @@ def _safe_public_url(value: object) -> str:
     if parsed.scheme not in {"http", "https"} or not parsed.netloc or not parsed.hostname:
         return ""
 
-    host = parsed.hostname.lower()
+    # Strip a single trailing dot (FQDN root label). ``localhost.`` and
+    # ``127.0.0.1.`` resolve to loopback on common resolvers but would
+    # otherwise slip past the localhost/IP checks below.
+    host = parsed.hostname.lower().rstrip(".")
+    if not host:
+        return ""
     if host == "localhost" or host.endswith(".localhost"):
         return ""
 
@@ -268,8 +287,18 @@ def image_search_tool(query: str, max_results: int = 5) -> str:
 
     normalized_results = []
     for r in images:
-        image_url = _safe_public_url(r.get("imageUrl")) or _safe_public_url(r.get("thumbnailUrl"))
-        thumbnail_url = _safe_public_url(r.get("thumbnailUrl")) or _safe_public_url(r.get("imageUrl"))
+        raw_image = r.get("imageUrl")
+        raw_thumb = r.get("thumbnailUrl")
+        # Evaluate the (non-trivial) SSRF guard once per field instead of twice.
+        safe_image = _safe_public_url(raw_image)
+        safe_thumb = _safe_public_url(raw_thumb)
+        # Cross-fall back only when the other field was *absent*. A field that
+        # was present but failed the SSRF filter is left empty rather than
+        # collapsed onto its counterpart, so a dropped high-res URL never
+        # silently masquerades as the preview (and vice versa), preserving the
+        # high-res/preview contract callers rely on.
+        image_url = safe_image or (safe_thumb if not _is_url_present(raw_image) else "")
+        thumbnail_url = safe_thumb or (safe_image if not _is_url_present(raw_thumb) else "")
         if not image_url and not thumbnail_url:
             continue
         normalized_results.append(

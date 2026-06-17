@@ -489,8 +489,12 @@ def check_web_tool(config_path: Path, *, tool_name: str, label: str) -> CheckRes
                 if key.startswith("$"):
                     env_name = key[1:]
                     val = os.environ.get(env_name)
-                    return ("ok", f"{env_name} set from config") if val and val.strip() else None
-                return ("warn", "literal api_key set in config")
+                    if val and val.strip():
+                        return ("ok", f"{env_name} set from config")
+                    # The referenced var is unset; fall through to the default
+                    # env var below, which tools use as a runtime fallback.
+                else:
+                    return ("warn", "literal api_key set in config")
 
             val = os.environ.get(default_var)
             return ("ok", f"{default_var} set") if val and val.strip() else None

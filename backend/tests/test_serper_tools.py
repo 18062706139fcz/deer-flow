@@ -237,6 +237,28 @@ class TestSafePublicUrl:
 
         assert _safe_public_url("http://foo.localhost/x.jpg") == ""
 
+    def test_trailing_dot_localhost_is_filtered(self):
+        from deerflow.community.serper.tools import _safe_public_url
+
+        # FQDN root label: localhost. still resolves to loopback.
+        assert _safe_public_url("http://localhost./x.jpg") == ""
+
+    def test_trailing_dot_loopback_ip_is_filtered(self):
+        from deerflow.community.serper.tools import _safe_public_url
+
+        assert _safe_public_url("http://127.0.0.1./x.jpg") == ""
+
+    def test_trailing_dot_private_ip_is_filtered(self):
+        from deerflow.community.serper.tools import _safe_public_url
+
+        assert _safe_public_url("http://10.0.0.1./x.jpg") == ""
+
+    def test_trailing_dot_public_host_passes(self):
+        from deerflow.community.serper.tools import _safe_public_url
+
+        # A trailing dot on a public host is harmless and must not be rejected.
+        assert _safe_public_url("https://example.com./i.jpg") == "https://example.com./i.jpg"
+
     def test_private_ip_is_filtered(self):
         from deerflow.community.serper.tools import _safe_public_url
 
@@ -625,6 +647,22 @@ class TestWebSearchTool:
 
         assert parsed["error"] == "Serper returned an unexpected response format"
 
+    def test_null_organic_field_is_treated_as_no_results(self, mock_config_with_key):
+        """A null-typed field (some APIs use it for "no results") is not a format error."""
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"organic": None}
+        mock_resp.raise_for_status = MagicMock()
+
+        with patch("deerflow.community.serper.tools.httpx.Client") as mock_client_cls:
+            mock_client_cls.return_value.__enter__.return_value.post.return_value = mock_resp
+
+            from deerflow.community.serper.tools import web_search_tool
+
+            result = web_search_tool.invoke({"query": "test"})
+            parsed = json.loads(result)
+
+        assert parsed["error"] == "No results found"
+
     def test_non_dict_organic_items_are_ignored(self, mock_config_with_key):
         mock_resp = _make_serper_response(["bad", {"title": "T", "link": "https://x.com", "snippet": "S"}])
 
@@ -765,6 +803,39 @@ class TestImageSearchTool:
 
         assert parsed["results"][0]["image_url"] == "https://x.com/full.jpg"
         assert parsed["results"][0]["thumbnail_url"] == "https://x.com/full.jpg"
+
+    def test_filtered_image_url_does_not_collapse_onto_thumbnail(self, mock_config_with_key):
+        """A present-but-unsafe imageUrl must not be replaced by the safe thumbnail."""
+        images = [{"title": "T", "imageUrl": "http://10.0.0.1/full.jpg", "thumbnailUrl": "https://example.com/t.jpg"}]
+        mock_resp = _make_serper_images_response(images)
+
+        with patch("deerflow.community.serper.tools.httpx.Client") as mock_client_cls:
+            mock_client_cls.return_value.__enter__.return_value.post.return_value = mock_resp
+
+            from deerflow.community.serper.tools import image_search_tool
+
+            result = image_search_tool.invoke({"query": "test"})
+            parsed = json.loads(result)
+
+        # The high-res field stays empty rather than masquerading as the preview.
+        assert parsed["results"][0]["image_url"] == ""
+        assert parsed["results"][0]["thumbnail_url"] == "https://example.com/t.jpg"
+
+    def test_filtered_thumbnail_does_not_collapse_onto_image(self, mock_config_with_key):
+        """A present-but-unsafe thumbnailUrl must not be replaced by the safe image."""
+        images = [{"title": "T", "imageUrl": "https://example.com/full.jpg", "thumbnailUrl": "http://127.0.0.1/t.jpg"}]
+        mock_resp = _make_serper_images_response(images)
+
+        with patch("deerflow.community.serper.tools.httpx.Client") as mock_client_cls:
+            mock_client_cls.return_value.__enter__.return_value.post.return_value = mock_resp
+
+            from deerflow.community.serper.tools import image_search_tool
+
+            result = image_search_tool.invoke({"query": "test"})
+            parsed = json.loads(result)
+
+        assert parsed["results"][0]["image_url"] == "https://example.com/full.jpg"
+        assert parsed["results"][0]["thumbnail_url"] == ""
 
     def test_respects_max_results_from_config(self, mock_config_with_key):
         mock_config_with_key.return_value.get_tool_config.return_value.model_extra = {
@@ -978,6 +1049,22 @@ class TestImageSearchTool:
             parsed = json.loads(result)
 
         assert parsed["error"] == "Serper returned an unexpected response format"
+
+    def test_null_images_field_is_treated_as_no_results(self, mock_config_with_key):
+        """A null-typed images field is "no images", not a malformed payload."""
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"images": None}
+        mock_resp.raise_for_status = MagicMock()
+
+        with patch("deerflow.community.serper.tools.httpx.Client") as mock_client_cls:
+            mock_client_cls.return_value.__enter__.return_value.post.return_value = mock_resp
+
+            from deerflow.community.serper.tools import image_search_tool
+
+            result = image_search_tool.invoke({"query": "test"})
+            parsed = json.loads(result)
+
+        assert parsed["error"] == "No images found"
 
     def test_non_dict_image_items_are_ignored(self, mock_config_with_key):
         images = ["bad", {"title": "T", "imageUrl": "https://x.com/i.jpg"}]
