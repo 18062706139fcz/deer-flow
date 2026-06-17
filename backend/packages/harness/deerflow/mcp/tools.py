@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from collections.abc import Iterable, Mapping
@@ -13,7 +14,7 @@ from langchain_core.tools import BaseTool, StructuredTool
 from langgraph.config import get_config
 
 from deerflow.config.extensions_config import ExtensionsConfig
-from deerflow.config.paths import VIRTUAL_PATH_PREFIX, get_paths
+from deerflow.config.paths import VIRTUAL_PATH_PREFIX, Paths, get_paths
 from deerflow.mcp.client import build_servers_config
 from deerflow.mcp.oauth import build_oauth_tool_interceptor, get_initial_oauth_headers
 from deerflow.mcp.session_pool import get_session_pool
@@ -144,6 +145,46 @@ def _changed_workspace_files(root: Path, before: _FILE_SNAPSHOT) -> list[Path]:
     """Return files under *root* that were created or modified since *before*."""
     after = _snapshot_workspace_files(root)
     return [path for path, signature in after.items() if before.get(path) != signature]
+
+
+def _prepare_stdio_workspace(paths: Paths, *, thread_id: str, user_id: str) -> tuple[Path, Path, _FILE_SNAPSHOT]:
+    """Prepare the thread workspace for a pinned stdio MCP subprocess.
+
+    Bundles all the synchronous filesystem work (dir creation, temp-dir prep,
+    and the pre-call snapshot) into one helper so the caller can run it off the
+    event loop via :func:`asyncio.to_thread`. Returns the workspace cwd, the
+    pinned temp dir, and the pre-call file snapshot.
+    """
+    paths.ensure_thread_dirs(thread_id, user_id=user_id)
+    source_base_dir = paths.sandbox_work_dir(thread_id, user_id=user_id)
+    tmp_dir = source_base_dir / _MCP_TMP_SUBDIR
+    try:
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        tmp_dir.chmod(0o777)
+    except OSError:
+        logger.warning("Failed to prepare MCP temp dir: %s", tmp_dir, exc_info=True)
+    before_files = _snapshot_workspace_files(source_base_dir)
+    return source_base_dir, tmp_dir, before_files
+
+
+def _result_has_text_content(call_tool_result: Any) -> bool:
+    """Return ``True`` when the MCP result carries any text content.
+
+    The after-call snapshot diff only feeds bare-filename correlation in free
+    text. When the result has no text blocks there is nothing to rewrite, so the
+    caller can skip the second recursive walk entirely.
+    """
+    from mcp.types import EmbeddedResource, TextContent, TextResourceContents
+
+    content = getattr(call_tool_result, "content", None)
+    if not content:
+        return False
+    for item in content:
+        if isinstance(item, TextContent):
+            return True
+        if isinstance(item, EmbeddedResource) and isinstance(item.resource, TextResourceContents):
+            return True
+    return False
 
 
 def _rewrite_unique_bare_filenames(
@@ -392,34 +433,38 @@ def _make_session_pool_tool(
         # per-(user_id, thread_id), so a thread_id alone could otherwise let two
         # users with a colliding thread_id share one stateful MCP session.
         scope_key = f"{user_id}:{thread_id}"
-        paths = get_paths()
-        paths.ensure_thread_dirs(thread_id, user_id=user_id)
-        source_base_dir = paths.sandbox_work_dir(thread_id, user_id=user_id)
         session_connection = dict(connection)
-        # Stdio MCP servers resolve relative output links against their process
-        # cwd. Keep that cwd inside the thread's mounted user-data tree so files
-        # produced by tools like Playwright land where the sandbox/artifact API
-        # can serve them and their references can be translated to virtual paths.
-        session_connection["cwd"] = source_base_dir
-        # Pin the subprocess temp dir under the same mounted tree. Tools that
-        # default to the OS temp dir (Node's os.tmpdir(), Python's tempfile,
-        # many CLIs) then write inside user-data instead of an unreachable host
-        # path — this is the tool-agnostic counterpart to fixing the cwd. Merge
-        # rather than replace any operator-provided env.
-        tmp_dir = source_base_dir / _MCP_TMP_SUBDIR
-        try:
-            tmp_dir.mkdir(parents=True, exist_ok=True)
-            tmp_dir.chmod(0o777)
-        except OSError:
-            logger.warning("Failed to prepare MCP temp dir: %s", tmp_dir, exc_info=True)
-        session_env = dict(session_connection.get("env") or {})
-        session_env.setdefault("TMPDIR", str(tmp_dir))
-        session_env.setdefault("TMP", str(tmp_dir))
-        session_env.setdefault("TEMP", str(tmp_dir))
-        session_connection["env"] = session_env
+        # cwd/temp pinning and the workspace snapshot only matter for stdio
+        # servers, which run as local subprocesses writing to a real filesystem.
+        # SSE/HTTP servers have no local cwd to pin, so skip the filesystem work
+        # entirely for them (avoids needless dir creation and recursive walks).
+        is_stdio = session_connection.get("transport", "stdio") == "stdio"
+        source_base_dir: Path | None = None
+        before_files: _FILE_SNAPSHOT | None = None
+        if is_stdio:
+            paths = get_paths()
+            # Bundle the synchronous filesystem prep (dir creation, temp-dir
+            # setup, pre-call snapshot) and run it off the event loop — the
+            # snapshot walks the whole workspace and would otherwise block.
+            source_base_dir, tmp_dir, before_files = await asyncio.to_thread(_prepare_stdio_workspace, paths, thread_id=thread_id, user_id=user_id)
+            # Stdio MCP servers resolve relative output links against their
+            # process cwd. Keep that cwd inside the thread's mounted user-data
+            # tree so files produced by tools like Playwright land where the
+            # sandbox/artifact API can serve them and their references can be
+            # translated to virtual paths.
+            session_connection["cwd"] = source_base_dir
+            # Pin the subprocess temp dir under the same mounted tree. Tools that
+            # default to the OS temp dir (Node's os.tmpdir(), Python's tempfile,
+            # many CLIs) then write inside user-data instead of an unreachable
+            # host path — the tool-agnostic counterpart to fixing the cwd. Merge
+            # rather than replace any operator-provided env.
+            session_env = dict(session_connection.get("env") or {})
+            session_env.setdefault("TMPDIR", str(tmp_dir))
+            session_env.setdefault("TMP", str(tmp_dir))
+            session_env.setdefault("TEMP", str(tmp_dir))
+            session_connection["env"] = session_env
         session = await pool.get_session(server_name, scope_key, session_connection)
 
-        before_files = _snapshot_workspace_files(source_base_dir)
         if tool_interceptors:
             from langchain_mcp_adapters.interceptors import MCPToolCallRequest
 
@@ -453,8 +498,16 @@ def _make_session_pool_tool(
         else:
             call_tool_result = await session.call_tool(original_name, arguments)
 
-        changed_files = _changed_workspace_files(source_base_dir, before_files)
-        return _convert_call_tool_result(
+        # The after-call snapshot diff only feeds bare-filename correlation in
+        # free text, so skip the second recursive walk when there is no text
+        # content to rewrite. Both the diff and the per-token path resolution
+        # inside _convert_call_tool_result touch the filesystem, so run them off
+        # the event loop.
+        changed_files: list[Path] | None = None
+        if is_stdio and before_files is not None and _result_has_text_content(call_tool_result):
+            changed_files = await asyncio.to_thread(_changed_workspace_files, source_base_dir, before_files)
+        return await asyncio.to_thread(
+            _convert_call_tool_result,
             call_tool_result,
             thread_id=thread_id,
             user_id=user_id,
