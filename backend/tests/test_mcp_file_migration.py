@@ -358,6 +358,41 @@ class TestWorkspaceSnapshots:
         assert mcp_tools._changed_workspace_files(workspace, before) == []
 
 
+class TestPrepareStdioWorkspace:
+    def test_creates_dirs_and_returns_snapshot(self, paths: Paths):
+        existing = _workspace_file(paths, "existing.txt", content=b"old")
+
+        source_base_dir, tmp_dir, before = mcp_tools._prepare_stdio_workspace(paths, thread_id="t1", user_id="u1")
+
+        assert source_base_dir == paths.sandbox_work_dir("t1", user_id="u1")
+        assert tmp_dir == source_base_dir / mcp_tools._MCP_TMP_SUBDIR
+        assert tmp_dir.is_dir()
+        assert before == {existing: (existing.stat().st_mtime_ns, existing.stat().st_size)}
+
+
+class TestResultHasTextContent:
+    def test_text_content_is_detected(self):
+        result = CallToolResult(content=[TextContent(type="text", text="hi")], isError=False)
+        assert mcp_tools._result_has_text_content(result) is True
+
+    def test_embedded_text_resource_is_detected(self):
+        from mcp.types import EmbeddedResource, TextResourceContents
+
+        res = TextResourceContents(uri="mem://n.txt", text="n", mimeType="text/plain")
+        result = CallToolResult(content=[EmbeddedResource(type="resource", resource=res)], isError=False)
+        assert mcp_tools._result_has_text_content(result) is True
+
+    def test_image_only_result_has_no_text(self):
+        from mcp.types import ImageContent
+
+        result = CallToolResult(content=[ImageContent(type="image", data="QUJD", mimeType="image/png")], isError=False)
+        assert mcp_tools._result_has_text_content(result) is False
+
+    def test_empty_content_has_no_text(self):
+        result = CallToolResult(content=[], isError=False)
+        assert mcp_tools._result_has_text_content(result) is False
+
+
 class TestConvertCallToolResultRewrites:
     def test_resource_link_image_inside_workspace_rewritten(self, paths: Paths):
         src = _workspace_file(paths, "page.png", content=b"png")

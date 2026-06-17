@@ -355,6 +355,148 @@ async def test_session_pool_tool_does_not_override_explicit_tmpdir(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_session_pool_tool_skips_fs_work_for_non_stdio_transport(tmp_path):
+    """SSE/HTTP transports must not get a pinned cwd/temp env or workspace dirs."""
+    from langchain_core.tools import StructuredTool
+    from pydantic import BaseModel, Field
+
+    from deerflow.config.paths import Paths
+    from deerflow.mcp.tools import _make_session_pool_tool
+
+    class Args(BaseModel):
+        url: str = Field(..., description="url")
+
+    original_tool = StructuredTool(
+        name="srv_act",
+        description="test",
+        args_schema=Args,
+        coroutine=AsyncMock(),
+        response_format="content_and_artifact",
+    )
+
+    mock_session = AsyncMock()
+    mock_session.call_tool = AsyncMock(return_value=MagicMock(content=[], isError=False, structuredContent=None))
+    mock_cm = MagicMock()
+    mock_cm.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_cm.__aexit__ = AsyncMock(return_value=False)
+
+    paths = Paths(tmp_path)
+    connection = {"transport": "sse", "url": "http://localhost:9000/sse", "env": {"KEEP": "1"}}
+    mock_runtime = MagicMock()
+    mock_runtime.context = {"thread_id": "thread-42", "user_id": "user-7"}
+    mock_runtime.config = {}
+
+    with (
+        patch("deerflow.mcp.tools.get_paths", return_value=paths) as get_paths,
+        patch("langchain_mcp_adapters.sessions.create_session", return_value=mock_cm) as create_session,
+    ):
+        wrapped = _make_session_pool_tool(original_tool, "srv", connection)
+        await wrapped.coroutine(runtime=mock_runtime, url="https://example.com")
+
+    session_connection = create_session.call_args.args[0]
+    assert "cwd" not in session_connection
+    assert session_connection["env"] == {"KEEP": "1"}
+    # No filesystem work at all: get_paths() is never consulted and no thread
+    # workspace directory is created for non-stdio transports.
+    get_paths.assert_not_called()
+    assert not paths.sandbox_work_dir("thread-42", user_id="user-7").exists()
+
+
+@pytest.mark.asyncio
+async def test_session_pool_tool_skips_after_walk_when_no_text_content(tmp_path):
+    """With no text content to rewrite, the post-call snapshot diff must be skipped."""
+    from langchain_core.tools import StructuredTool
+    from pydantic import BaseModel, Field
+
+    from deerflow.config.paths import Paths
+    from deerflow.mcp.tools import _make_session_pool_tool
+
+    class Args(BaseModel):
+        url: str = Field(..., description="url")
+
+    original_tool = StructuredTool(
+        name="playwright_navigate",
+        description="Navigate browser",
+        args_schema=Args,
+        coroutine=AsyncMock(),
+        response_format="content_and_artifact",
+    )
+
+    # An image-only result carries no text, so bare-filename correlation has
+    # nothing to do and the second recursive walk should not run.
+    from mcp.types import ImageContent
+
+    image_result = MagicMock(content=[ImageContent(type="image", data="QUJD", mimeType="image/png")], isError=False, structuredContent=None)
+    mock_session = AsyncMock()
+    mock_session.call_tool = AsyncMock(return_value=image_result)
+    mock_cm = MagicMock()
+    mock_cm.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_cm.__aexit__ = AsyncMock(return_value=False)
+
+    paths = Paths(tmp_path)
+    connection = {"transport": "stdio", "command": "pw", "args": []}
+    mock_runtime = MagicMock()
+    mock_runtime.context = {"thread_id": "thread-42", "user_id": "user-7"}
+    mock_runtime.config = {}
+
+    with (
+        patch("deerflow.mcp.tools.get_paths", return_value=paths),
+        patch("langchain_mcp_adapters.sessions.create_session", return_value=mock_cm),
+        patch("deerflow.mcp.tools._changed_workspace_files") as changed_files,
+    ):
+        wrapped = _make_session_pool_tool(original_tool, "playwright", connection)
+        await wrapped.coroutine(runtime=mock_runtime, url="https://example.com")
+
+    changed_files.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_session_pool_tool_runs_after_walk_when_text_content_present(tmp_path):
+    """A text result must trigger the post-call snapshot diff for path rewriting."""
+    from langchain_core.tools import StructuredTool
+    from pydantic import BaseModel, Field
+
+    from deerflow.config.paths import Paths
+    from deerflow.mcp.tools import _make_session_pool_tool
+
+    class Args(BaseModel):
+        url: str = Field(..., description="url")
+
+    original_tool = StructuredTool(
+        name="playwright_navigate",
+        description="Navigate browser",
+        args_schema=Args,
+        coroutine=AsyncMock(),
+        response_format="content_and_artifact",
+    )
+
+    from mcp.types import TextContent
+
+    text_result = MagicMock(content=[TextContent(type="text", text="Saved as shot.png")], isError=False, structuredContent=None)
+    mock_session = AsyncMock()
+    mock_session.call_tool = AsyncMock(return_value=text_result)
+    mock_cm = MagicMock()
+    mock_cm.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_cm.__aexit__ = AsyncMock(return_value=False)
+
+    paths = Paths(tmp_path)
+    connection = {"transport": "stdio", "command": "pw", "args": []}
+    mock_runtime = MagicMock()
+    mock_runtime.context = {"thread_id": "thread-42", "user_id": "user-7"}
+    mock_runtime.config = {}
+
+    with (
+        patch("deerflow.mcp.tools.get_paths", return_value=paths),
+        patch("langchain_mcp_adapters.sessions.create_session", return_value=mock_cm),
+        patch("deerflow.mcp.tools._changed_workspace_files", return_value=[]) as changed_files,
+    ):
+        wrapped = _make_session_pool_tool(original_tool, "playwright", connection)
+        await wrapped.coroutine(runtime=mock_runtime, url="https://example.com")
+
+    changed_files.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_session_pool_tool_forwards_interceptor_headers():
     """Regression for PR #3294: when an interceptor sets ``request.headers``, the
     pooled stdio call must forward them via ``meta={"headers": ...}`` so downstream
