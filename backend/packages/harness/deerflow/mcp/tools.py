@@ -116,9 +116,12 @@ def _local_uri_to_virtual_path(
     except ValueError:
         # The file lives outside this thread's user-data mount; we cannot
         # express it as a virtual path, so leave the original reference as-is.
+        logger.debug("MCP path rewrite skipped outside user-data tree: %s", real)
         return None
 
-    return f"{VIRTUAL_PATH_PREFIX}/{relative.as_posix()}"
+    virtual_path = f"{VIRTUAL_PATH_PREFIX}/{relative.as_posix()}"
+    logger.debug("MCP path rewrite: %s -> %s", real, virtual_path)
+    return virtual_path
 
 
 def _snapshot_workspace_files(root: Path) -> _FILE_SNAPSHOT:
@@ -160,7 +163,7 @@ def _prepare_stdio_workspace(paths: Paths, *, thread_id: str, user_id: str) -> t
     tmp_dir = source_base_dir / _MCP_TMP_SUBDIR
     try:
         tmp_dir.mkdir(parents=True, exist_ok=True)
-        tmp_dir.chmod(0o777)
+        tmp_dir.chmod(0o700)
     except OSError:
         logger.warning("Failed to prepare MCP temp dir: %s", tmp_dir, exc_info=True)
     before_files = _snapshot_workspace_files(source_base_dir)
@@ -216,6 +219,10 @@ def _rewrite_unique_bare_filenames(
 
     unique = {name: paths[0] for name, paths in candidates.items() if len(set(paths)) == 1}
     if not unique:
+        if candidates:
+            logger.debug("MCP bare filename rewrite skipped: no unique candidate in %s", sorted(candidates))
+        else:
+            logger.debug("MCP bare filename rewrite skipped: no snapshot candidates")
         return text
 
     rewritten = text
@@ -223,7 +230,10 @@ def _rewrite_unique_bare_filenames(
         # Do not rewrite inside longer paths/words. A final sentence period is
         # allowed, but ".bak" or another path segment is not.
         pattern = re.compile(rf"(?<![\w./-]){re.escape(name)}(?!(?:[\w/-]|\.[\w]))")
-        rewritten = pattern.sub(unique[name], rewritten)
+        rewritten_text, count = pattern.subn(unique[name], rewritten)
+        if count:
+            logger.debug("MCP bare filename rewrite: %s -> %s", name, unique[name])
+        rewritten = rewritten_text
     return rewritten
 
 
@@ -440,6 +450,7 @@ def _make_session_pool_tool(
         # entirely for them (avoids needless dir creation and recursive walks).
         is_stdio = session_connection.get("transport", "stdio") == "stdio"
         source_base_dir: Path | None = None
+        process_cwd: Path | None = None
         before_files: _FILE_SNAPSHOT | None = None
         if is_stdio:
             paths = get_paths()
@@ -452,7 +463,9 @@ def _make_session_pool_tool(
             # tree so files produced by tools like Playwright land where the
             # sandbox/artifact API can serve them and their references can be
             # translated to virtual paths.
-            session_connection["cwd"] = source_base_dir
+            configured_cwd = session_connection.get("cwd", str(source_base_dir))
+            session_connection["cwd"] = str(configured_cwd)
+            process_cwd = Path(configured_cwd)
             # Pin the subprocess temp dir under the same mounted tree. Tools that
             # default to the OS temp dir (Node's os.tmpdir(), Python's tempfile,
             # many CLIs) then write inside user-data instead of an unreachable
@@ -511,7 +524,7 @@ def _make_session_pool_tool(
             call_tool_result,
             thread_id=thread_id,
             user_id=user_id,
-            source_base_dir=source_base_dir,
+            source_base_dir=process_cwd,
             changed_files=changed_files,
         )
 
