@@ -10,7 +10,15 @@ import {
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import { env } from "@/env";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { cn } from "@/lib/utils";
 
 import {
@@ -28,6 +36,7 @@ const ChatBox: React.FC<{ children: React.ReactNode; threadId: string }> = ({
   threadId,
 }) => {
   const { thread } = useThread();
+  const isMobile = useIsMobile();
   const pathname = usePathname();
   const threadIdRef = useRef(threadId);
   const layoutRef = useRef<GroupImperativeHandle>(null);
@@ -100,6 +109,70 @@ const ChatBox: React.FC<{ children: React.ReactNode; threadId: string }> = ({
     }
   }, [artifactPanelOpen]);
 
+  const artifactContent = selectedArtifact ? (
+    <ArtifactFileDetail
+      className="size-full"
+      filepath={selectedArtifact}
+      threadId={threadId}
+    />
+  ) : (
+    <div className="relative flex size-full justify-center">
+      <div className="absolute top-1 right-1 z-30">
+        <Button
+          size="icon-sm"
+          variant="ghost"
+          onClick={() => {
+            setArtifactsOpen(false);
+          }}
+        >
+          <XIcon />
+        </Button>
+      </div>
+      {thread.values.artifacts?.length === 0 ? (
+        <ConversationEmptyState
+          icon={<FilesIcon />}
+          title="No artifact selected"
+          description="Select an artifact to view its details"
+        />
+      ) : (
+        <div className="flex size-full max-w-(--container-width-sm) flex-col justify-center p-4 pt-8">
+          <header className="shrink-0">
+            <h2 className="text-lg font-medium">Artifacts</h2>
+          </header>
+          <main className="min-h-0 grow">
+            <ArtifactFileList
+              className="max-w-(--container-width-sm) p-4 pt-12"
+              files={thread.values.artifacts ?? []}
+              threadId={threadId}
+            />
+          </main>
+        </div>
+      )}
+    </div>
+  );
+
+  if (isMobile) {
+    return (
+      <>
+        <div className="relative size-full min-w-0">{children}</div>
+        <Sheet open={artifactPanelOpen} onOpenChange={setArtifactsOpen}>
+          <SheetContent
+            className="w-[calc(100vw-1rem)] max-w-none gap-0 p-0 sm:max-w-md [&>button]:hidden"
+            side="right"
+          >
+            <SheetHeader className="sr-only">
+              <SheetTitle>Artifacts</SheetTitle>
+              <SheetDescription>
+                Browse artifacts for this conversation.
+              </SheetDescription>
+            </SheetHeader>
+            <div className="min-h-0 flex-1 p-3 pt-10">{artifactContent}</div>
+          </SheetContent>
+        </Sheet>
+      </>
+    );
+  }
+
   return (
     <ResizablePanelGroup
       id={`${resizableIdBase}-panels`}
@@ -130,47 +203,7 @@ const ChatBox: React.FC<{ children: React.ReactNode; threadId: string }> = ({
             artifactPanelOpen ? "translate-x-0" : "translate-x-full",
           )}
         >
-          {selectedArtifact ? (
-            <ArtifactFileDetail
-              className="size-full"
-              filepath={selectedArtifact}
-              threadId={threadId}
-            />
-          ) : (
-            <div className="relative flex size-full justify-center">
-              <div className="absolute top-1 right-1 z-30">
-                <Button
-                  size="icon-sm"
-                  variant="ghost"
-                  onClick={() => {
-                    setArtifactsOpen(false);
-                  }}
-                >
-                  <XIcon />
-                </Button>
-              </div>
-              {thread.values.artifacts?.length === 0 ? (
-                <ConversationEmptyState
-                  icon={<FilesIcon />}
-                  title="No artifact selected"
-                  description="Select an artifact to view its details"
-                />
-              ) : (
-                <div className="flex size-full max-w-(--container-width-sm) flex-col justify-center p-4 pt-8">
-                  <header className="shrink-0">
-                    <h2 className="text-lg font-medium">Artifacts</h2>
-                  </header>
-                  <main className="min-h-0 grow">
-                    <ArtifactFileList
-                      className="max-w-(--container-width-sm) p-4 pt-12"
-                      files={thread.values.artifacts ?? []}
-                      threadId={threadId}
-                    />
-                  </main>
-                </div>
-              )}
-            </div>
-          )}
+          {artifactContent}
         </div>
       </ResizablePanel>
     </ResizablePanelGroup>
