@@ -58,7 +58,7 @@ export function Hero({ className }: { className?: string }) {
         <h1 className="text-center text-5xl leading-tight font-bold break-words md:text-6xl">
           DeerFlow
         </h1>
-        <div className="mt-3 flex max-w-full flex-wrap items-center justify-center gap-x-2 gap-y-1 text-center text-2xl font-semibold md:text-4xl">
+        <div className="mt-3 flex w-full max-w-full min-w-0 flex-wrap items-center justify-center gap-x-2 gap-y-1 text-center text-2xl font-semibold md:text-4xl">
           <HeroWordRotate words={HERO_WORDS} />
           <span>SuperAgent</span>
         </div>
@@ -108,16 +108,21 @@ function HeroWordRotate({
   }, [words, duration]);
 
   return (
-    <div className="overflow-hidden py-2">
+    <div className="relative max-w-full min-w-0 overflow-hidden py-2">
       <AnimatePresence mode="popLayout">
         <motion.div
           key={words[index]}
+          className="max-w-full"
           initial={{ opacity: 0, y: -50, filter: "blur(16px)" }}
           animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
           exit={{ opacity: 0, y: 50, filter: "blur(16px)" }}
           transition={{ duration: 0.3, ease: "easeOut" }}
         >
-          <AuroraText speed={3} colors={["#efefbb", "#e9c665", "#e3a812"]}>
+          <AuroraText
+            className="max-w-full [overflow-wrap:anywhere] whitespace-normal"
+            speed={3}
+            colors={["#efefbb", "#e9c665", "#e3a812"]}
+          >
             {words[index]}
           </AuroraText>
         </motion.div>

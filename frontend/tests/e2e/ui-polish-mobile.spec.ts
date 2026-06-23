@@ -37,7 +37,9 @@ test.describe("UI polish mobile regressions", () => {
     await page.goto(`/workspace/chats/${MOCK_THREAD_ID}`);
     await page.getByRole("button", { name: /artifacts/i }).click();
 
-    await expect(page.getByRole("dialog", { name: /artifacts/i })).toBeVisible();
+    await expect(
+      page.getByRole("dialog", { name: /artifacts/i }),
+    ).toBeVisible();
     await expect(page.getByText("mobile-summary.md")).toBeVisible();
     await expect
       .poll(() => page.evaluate(() => document.documentElement.scrollWidth))
