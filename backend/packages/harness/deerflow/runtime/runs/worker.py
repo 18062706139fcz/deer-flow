@@ -32,7 +32,12 @@ if TYPE_CHECKING:
 from deerflow.config.app_config import AppConfig
 from deerflow.runtime.serialization import serialize
 from deerflow.runtime.stream_bridge import StreamBridge
-from deerflow.runtime.user_context import get_effective_user_id
+from deerflow.runtime.user_context import (
+    get_current_user,
+    get_effective_user_id,
+    reset_current_user,
+    set_current_user,
+)
 from deerflow.tracing import inject_langfuse_metadata
 
 from .manager import RunManager, RunRecord
@@ -43,6 +48,11 @@ logger = logging.getLogger(__name__)
 
 # Valid stream_mode values for LangGraph's graph.astream()
 _VALID_LG_MODES = {"values", "updates", "checkpoints", "tasks", "debug", "messages", "custom"}
+
+
+@dataclass(frozen=True)
+class _RunUser:
+    id: str
 
 
 def _build_runtime_context(
@@ -153,6 +163,7 @@ async def run_agent(
     llm_error_fallback_message: str | None = None
 
     journal = None
+    run_user_token = None
 
     # Track whether "events" was requested but skipped
     if "events" in requested_modes:
@@ -225,6 +236,16 @@ async def run_agent(
         # runtime-internal channel; user code must not depend on the key name.
         if journal is not None:
             runtime_ctx["__run_journal"] = journal
+        # Bridge ``runtime.context['user_id']`` onto the current-user ContextVar so
+        # legacy consumers that resolve identity via ``get_effective_user_id()``
+        # (e.g. sandbox mount resolution) align with the run's owner. Skip when the
+        # ContextVar already carries the same id to avoid downgrading a full ``User``
+        # (with role/oauth attributes) to an id-only stub.
+        runtime_user_id = runtime_ctx.get("user_id")
+        if runtime_user_id:
+            current_user = get_current_user()
+            if current_user is None or str(current_user.id) != str(runtime_user_id):
+                run_user_token = set_current_user(_RunUser(id=str(runtime_user_id)))
         _install_runtime_context(config, runtime_ctx)
         runtime = Runtime(context=cast(Any, runtime_ctx), store=store)
         config.setdefault("configurable", {})["__pregel_runtime"] = runtime
@@ -433,7 +454,11 @@ async def run_agent(
             except Exception:
                 logger.debug("Failed to update thread_meta status for %s (non-fatal)", thread_id)
 
-        await bridge.publish_end(run_id)
+        try:
+            await bridge.publish_end(run_id)
+        finally:
+            if run_user_token is not None:
+                reset_current_user(run_user_token)
         asyncio.create_task(bridge.cleanup(run_id, delay=60))
 
 

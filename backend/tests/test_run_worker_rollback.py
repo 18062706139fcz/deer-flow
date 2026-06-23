@@ -105,6 +105,113 @@ async def test_run_agent_threads_explicit_app_config_into_config_only_factory():
     bridge.cleanup.assert_awaited_once_with(record.run_id, delay=60)
 
 
+@pytest.mark.no_auto_user
+@pytest.mark.anyio
+async def test_run_agent_installs_runtime_user_for_sandbox_mounts(tmp_path, monkeypatch):
+    from deerflow.community.aio_sandbox.aio_sandbox_provider import AioSandboxProvider
+    from deerflow.config.paths import Paths
+    from deerflow.runtime.user_context import DEFAULT_USER_ID, get_effective_user_id
+
+    run_manager = RunManager()
+    record = await run_manager.create("thread-3724")
+    bridge = SimpleNamespace(
+        publish=AsyncMock(),
+        publish_end=AsyncMock(),
+        cleanup=AsyncMock(),
+    )
+    paths = Paths(base_dir=tmp_path)
+    captured: dict[str, object] = {}
+
+    import deerflow.community.aio_sandbox.aio_sandbox_provider as aio_mod
+
+    monkeypatch.delenv("DEER_FLOW_HOST_BASE_DIR", raising=False)
+    monkeypatch.setattr(aio_mod, "get_paths", lambda: paths)
+
+    assert get_effective_user_id() == DEFAULT_USER_ID
+
+    class DummyAgent:
+        metadata: dict[str, object] = {}
+
+        async def astream(self, graph_input, config=None, stream_mode=None, subgraphs=False):
+            mounts = AioSandboxProvider._get_thread_mounts("thread-3724")
+            captured["outputs_mount"] = next(host for host, container, _ in mounts if container == "/mnt/user-data/outputs")
+            captured["effective_user_id"] = get_effective_user_id()
+            yield {"messages": []}
+
+    def factory(*, config):
+        captured["factory_effective_user_id"] = get_effective_user_id()
+        return DummyAgent()
+
+    await run_agent(
+        bridge,
+        run_manager,
+        record,
+        ctx=RunContext(checkpointer=None),
+        agent_factory=factory,
+        graph_input={},
+        config={"context": {"user_id": "ou_123456"}},
+    )
+    await asyncio.sleep(0)
+
+    expected_outputs = paths.host_sandbox_outputs_dir("thread-3724", user_id="ou_123456")
+    assert captured["factory_effective_user_id"] == "ou_123456"
+    assert captured["effective_user_id"] == "ou_123456"
+    assert captured["outputs_mount"] == expected_outputs
+    assert get_effective_user_id() == DEFAULT_USER_ID
+    bridge.publish_end.assert_awaited_once_with(record.run_id)
+    bridge.cleanup.assert_awaited_once_with(record.run_id, delay=60)
+
+
+@pytest.mark.no_auto_user
+@pytest.mark.anyio
+async def test_run_agent_preserves_existing_user_when_id_matches():
+    from deerflow.runtime.user_context import (
+        get_current_user,
+        reset_current_user,
+        set_current_user,
+    )
+
+    run_manager = RunManager()
+    record = await run_manager.create("thread-match")
+    bridge = SimpleNamespace(
+        publish=AsyncMock(),
+        publish_end=AsyncMock(),
+        cleanup=AsyncMock(),
+    )
+    captured: dict[str, object] = {}
+
+    full_user = SimpleNamespace(id="ou_match", system_role="member")
+    token = set_current_user(full_user)
+
+    class DummyAgent:
+        metadata: dict[str, object] = {}
+
+        async def astream(self, graph_input, config=None, stream_mode=None, subgraphs=False):
+            captured["in_run_user"] = get_current_user()
+            yield {"messages": []}
+
+    def factory(*, config):
+        return DummyAgent()
+
+    try:
+        await run_agent(
+            bridge,
+            run_manager,
+            record,
+            ctx=RunContext(checkpointer=None),
+            agent_factory=factory,
+            graph_input={},
+            config={"context": {"user_id": "ou_match"}},
+        )
+        await asyncio.sleep(0)
+        # The same-id full user object must survive the run without being
+        # downgraded to an id-only stub.
+        assert captured["in_run_user"] is full_user
+        assert get_current_user() is full_user
+    finally:
+        reset_current_user(token)
+
+
 @pytest.mark.anyio
 async def test_run_agent_marks_llm_error_fallback_as_error_status():
     run_manager = RunManager()
