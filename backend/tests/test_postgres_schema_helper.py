@@ -9,6 +9,7 @@ from deerflow.persistence.postgres_schema import (
     build_psycopg_options,
     create_schema_sql,
     dsn_with_search_path,
+    normalize_libpq_dsn,
 )
 
 
@@ -123,3 +124,32 @@ class TestDsnWithSearchPath:
         assert parts.hostname == "h"
         assert parts.port == 5432
         assert parts.path == "/db"
+
+    def test_preserves_option_value_containing_space(self):
+        # libpq's options parameter separates args on spaces unless they are
+        # backslash-escaped. shlex.join would emit single-quotes, which libpq
+        # treats as literal characters and would corrupt the option. A token
+        # carrying a space must round-trip as a single backslash-escaped token.
+        from deerflow.persistence.postgres_schema import _merge_search_path_option
+
+        merged = _merge_search_path_option(r"-c application_name=My\ App", "deerflow")
+        assert "'" not in merged
+        assert r"application_name=My\ App" in merged
+        assert merged.endswith("-c search_path=deerflow")
+
+
+class TestNormalizeLibpqDsn:
+    def test_strips_asyncpg_driver_suffix(self):
+        assert normalize_libpq_dsn("postgresql+asyncpg://u:p@h:5432/db") == "postgresql://u:p@h:5432/db"
+
+    def test_leaves_bare_postgres_scheme_unchanged(self):
+        dsn = "postgresql://u:p@h:5432/db"
+        assert normalize_libpq_dsn(dsn) == dsn
+
+    def test_leaves_keyword_dsn_unchanged(self):
+        dsn = "host=localhost dbname=deerflow"
+        assert normalize_libpq_dsn(dsn) == dsn
+
+    def test_rejects_non_postgres_scheme(self):
+        with pytest.raises(ValueError, match="Unsupported PostgreSQL DSN scheme"):
+            normalize_libpq_dsn("mysql://localhost/db")

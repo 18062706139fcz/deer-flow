@@ -19,7 +19,7 @@ driver payloads.
 
 from __future__ import annotations
 
-import shlex
+import re
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 
@@ -43,6 +43,51 @@ def build_psycopg_options(schema: str) -> str | None:
     return f"-c search_path={schema}"
 
 
+def _split_libpq_options(options: str) -> list[str]:
+    """Tokenize a libpq ``options`` string.
+
+    libpq splits on unescaped whitespace; a backslash escapes the next
+    character (so ``\\ `` is a literal space and ``\\\\`` a literal backslash).
+    This is NOT POSIX shell quoting -- single/double quotes are literal here.
+    """
+    tokens: list[str] = []
+    current: list[str] = []
+    in_token = False
+    escaped = False
+    for char in options:
+        if escaped:
+            current.append(char)
+            escaped = False
+            in_token = True
+            continue
+        if char == "\\":
+            escaped = True
+            in_token = True
+            continue
+        if char.isspace():
+            if in_token:
+                tokens.append("".join(current))
+                current = []
+                in_token = False
+            continue
+        current.append(char)
+        in_token = True
+    if in_token:
+        tokens.append("".join(current))
+    return tokens
+
+
+def _join_libpq_options(tokens: list[str]) -> str:
+    """Join tokens into a libpq ``options`` string.
+
+    Spaces and backslashes inside a token are backslash-escaped so libpq
+    keeps each token intact. ``shlex.join`` cannot be used: it emits POSIX
+    shell quoting (single quotes), which libpq treats as literal characters.
+    """
+    escaped = [re.sub(r"([\\ ])", r"\\\1", token) for token in tokens]
+    return " ".join(escaped)
+
+
 def _merge_search_path_option(existing_options: str, schema: str) -> str:
     """Return libpq options with search_path replaced while preserving others."""
     new_option = build_psycopg_options(schema)
@@ -52,13 +97,7 @@ def _merge_search_path_option(existing_options: str, schema: str) -> str:
     if not existing_options:
         return new_option
 
-    try:
-        tokens = shlex.split(existing_options)
-    except ValueError:
-        # Keep existing options even when they cannot be parsed safely; libpq
-        # applies later -c values after earlier ones, so the appended
-        # search_path still wins.
-        return f"{existing_options} {new_option}"
+    tokens = _split_libpq_options(existing_options)
 
     merged: list[str] = []
     index = 0
@@ -78,8 +117,8 @@ def _merge_search_path_option(existing_options: str, schema: str) -> str:
         merged.append(token)
         index += 1
 
-    merged.extend(shlex.split(new_option))
-    return shlex.join(merged)
+    merged.extend(_split_libpq_options(new_option))
+    return _join_libpq_options(merged)
 
 
 def create_schema_sql(schema: str) -> str | None:
@@ -87,6 +126,28 @@ def create_schema_sql(schema: str) -> str | None:
     if not schema:
         return None
     return f'CREATE SCHEMA IF NOT EXISTS "{schema}"'
+
+
+def normalize_libpq_dsn(dsn: str) -> str:
+    """Return *dsn* with any SQLAlchemy ``+driver`` suffix dropped.
+
+    ``DatabaseConfig.postgres_url`` may carry a SQLAlchemy driver suffix such
+    as ``postgresql+asyncpg://``. psycopg's libpq only understands the bare
+    ``postgres``/``postgresql`` scheme, so a raw ``+asyncpg`` DSN handed to
+    ``psycopg.connect`` raises an opaque parse error. Keyword/DSN strings
+    without a URL scheme (``host=... dbname=...``) are returned unchanged.
+
+    Raises ``ValueError`` for URL schemes that are not a PostgreSQL variant.
+    """
+    parts = urlsplit(dsn)
+    if not parts.scheme:
+        return dsn
+    scheme_base = parts.scheme.split("+", 1)[0]
+    if scheme_base not in {"postgres", "postgresql"}:
+        raise ValueError(f"Unsupported PostgreSQL DSN scheme for schema injection: {parts.scheme!r}")
+    if scheme_base == parts.scheme:
+        return dsn
+    return urlunsplit((scheme_base, parts.netloc, parts.path, parts.query, parts.fragment))
 
 
 def dsn_with_search_path(dsn: str, schema: str) -> str:
@@ -135,3 +196,40 @@ def dsn_with_search_path(dsn: str, schema: str) -> str:
     # quote_via=quote encodes space as %20 (libpq-safe), not + (form-style).
     query = urlencode(query_pairs, quote_via=quote)
     return urlunsplit((scheme_base, parts.netloc, parts.path, query, parts.fragment))
+
+
+def ensure_postgres_schema(conn_string: str, schema: str, *, install_hint: str) -> None:
+    """Create *schema* over a fresh sync psycopg connection.
+
+    No-op when *schema* is empty. A missing ``psycopg`` dependency is mapped to
+    *install_hint* so callers surface the same actionable message they use for
+    the rest of the backend. The DSN is normalized so a SQLAlchemy ``+driver``
+    suffix does not reach libpq.
+    """
+    statement = create_schema_sql(schema)
+    if statement is None:
+        return
+    try:
+        import psycopg
+    except ImportError as exc:
+        raise ImportError(install_hint) from exc
+
+    with psycopg.connect(normalize_libpq_dsn(conn_string), autocommit=True) as conn:
+        conn.execute(statement)
+
+
+async def ensure_postgres_schema_async(conn_string: str, schema: str, *, install_hint: str) -> None:
+    """Async counterpart of :func:`ensure_postgres_schema`."""
+    statement = create_schema_sql(schema)
+    if statement is None:
+        return
+    try:
+        import psycopg
+    except ImportError as exc:
+        raise ImportError(install_hint) from exc
+
+    conn = await psycopg.AsyncConnection.connect(normalize_libpq_dsn(conn_string), autocommit=True)
+    try:
+        await conn.execute(statement)
+    finally:
+        await conn.close()

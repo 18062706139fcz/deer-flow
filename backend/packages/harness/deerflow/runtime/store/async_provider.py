@@ -24,7 +24,7 @@ from collections.abc import AsyncIterator
 from langgraph.store.base import BaseStore
 
 from deerflow.config.app_config import AppConfig, get_app_config
-from deerflow.persistence.postgres_schema import create_schema_sql, dsn_with_search_path
+from deerflow.persistence.postgres_schema import dsn_with_search_path, ensure_postgres_schema_async
 from deerflow.runtime.store.provider import POSTGRES_CONN_REQUIRED, POSTGRES_STORE_INSTALL, SQLITE_STORE_INSTALL, ensure_sqlite_parent_dir, resolve_sqlite_conn_str
 
 logger = logging.getLogger(__name__)
@@ -32,19 +32,7 @@ logger = logging.getLogger(__name__)
 
 async def _ensure_postgres_schema(conn_string: str, schema: str) -> None:
     """Create the configured schema before LangGraph creates its store tables."""
-    statement = create_schema_sql(schema)
-    if statement is None:
-        return
-    try:
-        import psycopg
-    except ImportError as exc:
-        raise ImportError(POSTGRES_STORE_INSTALL) from exc
-
-    conn = await psycopg.AsyncConnection.connect(conn_string, autocommit=True)
-    try:
-        await conn.execute(statement)
-    finally:
-        await conn.close()
+    await ensure_postgres_schema_async(conn_string, schema, install_hint=POSTGRES_STORE_INSTALL)
 
 
 # ---------------------------------------------------------------------------

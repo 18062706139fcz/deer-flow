@@ -71,7 +71,7 @@ class TestDatabaseConfig:
         c = DatabaseConfig(backend="postgres", postgres_url="postgresql://u:p@h:5432/db", postgres_schema=schema)
         assert c.postgres_schema == schema
 
-    @pytest.mark.parametrize("schema", ["1abc", "a b", "a;b", "a-b", "a" * 64, 'a"b'])
+    @pytest.mark.parametrize("schema", ["1abc", "a b", "a;b", "a-b", "a" * 64, 'a"b', "MySchema", "Orders", "Public"])
     def test_postgres_schema_rejects_invalid_identifier(self, schema):
         from pydantic import ValidationError
 

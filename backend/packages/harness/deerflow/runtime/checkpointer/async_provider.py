@@ -25,7 +25,7 @@ from collections.abc import AsyncIterator
 from langgraph.types import Checkpointer
 
 from deerflow.config.app_config import AppConfig, get_app_config
-from deerflow.persistence.postgres_schema import build_psycopg_options, create_schema_sql
+from deerflow.persistence.postgres_schema import create_schema_sql, dsn_with_search_path, normalize_libpq_dsn
 from deerflow.runtime.checkpointer.provider import (
     POSTGRES_CONN_REQUIRED,
     POSTGRES_INSTALL,
@@ -62,12 +62,15 @@ def _build_postgres_pool(conn_string: str, schema: str = ""):
         "keepalives_interval": 10,
         "keepalives_count": 6,
     }
-    options = build_psycopg_options(schema)
-    if options is not None:
-        kwargs["options"] = options
+    # Inject search_path into the DSN (merging with any libpq options already in
+    # the conn string) rather than via kwargs["options"], which psycopg applies
+    # *on top of* the conninfo and would silently drop a DSN-supplied option
+    # such as statement_timeout. This also strips a SQLAlchemy ``+driver``
+    # suffix so libpq can parse the DSN. Matches the sync/DSN paths.
+    dsn = dsn_with_search_path(normalize_libpq_dsn(conn_string), schema)
 
     return AsyncConnectionPool(
-        conn_string,
+        dsn,
         kwargs=kwargs,
         check=AsyncConnectionPool.check_connection,
     )

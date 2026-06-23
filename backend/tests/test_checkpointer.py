@@ -147,7 +147,7 @@ class TestCheckpointerConfig:
         config = CheckpointerConfig(type="postgres", connection_string="postgresql://localhost/db", postgres_schema="deerflow")
         assert config.postgres_schema == "deerflow"
 
-    @pytest.mark.parametrize("schema", ["1abc", "a b", "a;b", "a-b", "a" * 64, 'a"b'])
+    @pytest.mark.parametrize("schema", ["1abc", "a b", "a;b", "a-b", "a" * 64, 'a"b', "MySchema", "Orders", "Public"])
     def test_postgres_schema_rejects_invalid_identifier(self, schema):
         from pydantic import ValidationError
 
@@ -696,9 +696,11 @@ class TestAsyncCheckpointer:
         # Verify the pool was constructed with check Connection
         mock_pool_cls.assert_called_once()
         call_kwargs = mock_pool_cls.call_args
-        assert call_kwargs[0][0] == "postgresql://localhost/db"
+        # search_path is injected into the DSN (merged with any existing libpq
+        # options), not via kwargs["options"] which would clobber DSN options.
+        assert "options=-c%20search_path%3Ddeerflow" in call_kwargs[0][0]
         assert call_kwargs[1]["check"] is mock_pool_cls.check_connection
-        assert call_kwargs[1]["kwargs"]["options"] == "-c search_path=deerflow"
+        assert "options" not in call_kwargs[1]["kwargs"]
         mock_conn.execute.assert_awaited_once_with('CREATE SCHEMA IF NOT EXISTS "deerflow"')
 
         # Verify saver was constructed with the pool (not via from_conn_string)
@@ -750,9 +752,9 @@ class TestAsyncCheckpointer:
 
         mock_pool_cls.assert_called_once()
         call_kwargs = mock_pool_cls.call_args
-        assert call_kwargs[0][0] == "postgresql://localhost/db"
+        assert "options=-c%20search_path%3Ddeerflow" in call_kwargs[0][0]
         assert call_kwargs[1]["check"] is mock_pool_cls.check_connection
-        assert call_kwargs[1]["kwargs"]["options"] == "-c search_path=deerflow"
+        assert "options" not in call_kwargs[1]["kwargs"]
         mock_conn.execute.assert_awaited_once_with('CREATE SCHEMA IF NOT EXISTS "deerflow"')
 
         mock_saver_cls.assert_called_once_with(conn=mock_pool_instance)
