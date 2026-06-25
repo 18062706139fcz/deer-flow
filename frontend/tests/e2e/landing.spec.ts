@@ -18,8 +18,8 @@ test.describe("Landing page", () => {
     ).toBeVisible();
   });
 
-  test("does not overflow at common mobile widths", async ({ page }) => {
-    for (const width of [320, 375, 390]) {
+  for (const width of [320, 375, 390]) {
+    test(`does not overflow at ${width}px width`, async ({ page }) => {
       await page.setViewportSize({ width, height: 812 });
       await page.goto("/");
 
@@ -27,8 +27,8 @@ test.describe("Landing page", () => {
         .poll(() => page.evaluate(() => document.documentElement.scrollWidth))
         .toBeLessThanOrEqual(width);
       await expect(page.locator("main").first()).toBeInViewport();
-    }
-  });
+    });
+  }
 
   test("Get Started link navigates to workspace", async ({ page }) => {
     mockLangGraphAPI(page);

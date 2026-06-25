@@ -109,46 +109,50 @@ const ChatBox: React.FC<{ children: React.ReactNode; threadId: string }> = ({
     }
   }, [artifactPanelOpen]);
 
-  const artifactContent = selectedArtifact ? (
-    <ArtifactFileDetail
-      className="size-full"
-      filepath={selectedArtifact}
-      threadId={threadId}
-    />
-  ) : (
-    <div className="relative flex size-full justify-center">
-      <div className="absolute top-1 right-1 z-30">
-        <Button
-          size="icon-sm"
-          variant="ghost"
-          onClick={() => {
-            setArtifactsOpen(false);
-          }}
-        >
-          <XIcon />
-        </Button>
-      </div>
-      {thread.values.artifacts?.length === 0 ? (
-        <ConversationEmptyState
-          icon={<FilesIcon />}
-          title="No artifact selected"
-          description="Select an artifact to view its details"
+  const artifactContent = useMemo(
+    () =>
+      selectedArtifact ? (
+        <ArtifactFileDetail
+          className="size-full"
+          filepath={selectedArtifact}
+          threadId={threadId}
         />
       ) : (
-        <div className="flex size-full max-w-(--container-width-sm) flex-col justify-center p-4 pt-8">
-          <header className="shrink-0">
-            <h2 className="text-lg font-medium">Artifacts</h2>
-          </header>
-          <main className="min-h-0 grow">
-            <ArtifactFileList
-              className="max-w-(--container-width-sm) p-4 pt-12"
-              files={thread.values.artifacts ?? []}
-              threadId={threadId}
+        <div className="relative flex size-full justify-center">
+          <div className="absolute top-1 right-1 z-30">
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              onClick={() => {
+                setArtifactsOpen(false);
+              }}
+            >
+              <XIcon />
+            </Button>
+          </div>
+          {thread.values.artifacts?.length === 0 ? (
+            <ConversationEmptyState
+              icon={<FilesIcon />}
+              title="No artifact selected"
+              description="Select an artifact to view its details"
             />
-          </main>
+          ) : (
+            <div className="flex size-full max-w-(--container-width-sm) flex-col justify-center p-4 pt-8">
+              <header className="shrink-0">
+                <h2 className="text-lg font-medium">Artifacts</h2>
+              </header>
+              <main className="min-h-0 grow">
+                <ArtifactFileList
+                  className="max-w-(--container-width-sm) p-4 pt-12"
+                  files={thread.values.artifacts ?? []}
+                  threadId={threadId}
+                />
+              </main>
+            </div>
+          )}
         </div>
-      )}
-    </div>
+      ),
+    [selectedArtifact, thread.values.artifacts, threadId, setArtifactsOpen],
   );
 
   if (isMobile) {

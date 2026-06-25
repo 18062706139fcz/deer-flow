@@ -18,6 +18,7 @@ export const ArtifactTrigger = () => {
       <Button
         className="text-muted-foreground hover:text-foreground"
         variant="ghost"
+        data-testid="artifact-trigger"
         onClick={() => {
           setArtifactsOpen(true);
         }}

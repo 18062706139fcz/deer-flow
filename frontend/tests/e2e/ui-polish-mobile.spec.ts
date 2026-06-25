@@ -35,7 +35,7 @@ test.describe("UI polish mobile regressions", () => {
     });
 
     await page.goto(`/workspace/chats/${MOCK_THREAD_ID}`);
-    await page.getByRole("button", { name: /artifacts/i }).click();
+    await page.getByTestId("artifact-trigger").click();
 
     await expect(
       page.getByRole("dialog", { name: /artifacts/i }),
@@ -52,20 +52,27 @@ test.describe("UI polish mobile regressions", () => {
     mockLangGraphAPI(page);
     await page.goto("/workspace/chats/new");
 
-    const lightRing = await page.evaluate(() =>
-      getComputedStyle(document.documentElement)
-        .getPropertyValue("--ring")
-        .trim(),
+    const readRing = () =>
+      page.evaluate(() =>
+        getComputedStyle(document.documentElement)
+          .getPropertyValue("--ring")
+          .trim(),
+      );
+
+    await page.evaluate(() =>
+      document.documentElement.classList.remove("dark"),
     );
+    const lightRing = await readRing();
     expect(lightRing).not.toBe("transparent");
+    expect(lightRing).not.toBe("");
 
     await page.evaluate(() => document.documentElement.classList.add("dark"));
-
-    const darkRing = await page.evaluate(() =>
-      getComputedStyle(document.documentElement)
-        .getPropertyValue("--ring")
-        .trim(),
-    );
+    const darkRing = await readRing();
     expect(darkRing).not.toBe("transparent");
+    expect(darkRing).not.toBe("");
+
+    // The two themes must resolve to different ring tokens, otherwise the test
+    // would pass trivially if <html> were stuck in one mode.
+    expect(darkRing).not.toBe(lightRing);
   });
 });
