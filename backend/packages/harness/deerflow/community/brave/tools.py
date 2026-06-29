@@ -211,6 +211,7 @@ def web_search_tool(query: str, max_results: int = 5) -> str:
         max_results = config.model_extra["max_results"]
 
     count = _coerce_max_results(max_results, max_allowed=_BRAVE_WEB_MAX_COUNT)
+    query = _clean_query(query)
 
     api_key = _get_api_key("web_search")
     if not api_key:

@@ -354,6 +354,23 @@ class TestWebSearchTool:
         assert params["q"] == "hello world"
         assert params["count"] == 5
 
+    def test_long_query_is_truncated_to_brave_limit(self, mock_config_with_key):
+        results = [{"title": "T", "url": "https://x.com", "description": "D"}]
+        mock_resp = _make_brave_response(results)
+
+        with patch("deerflow.community.brave.tools.httpx.Client") as mock_client_cls:
+            mock_get = mock_client_cls.return_value.__enter__.return_value.get
+            mock_get.return_value = mock_resp
+
+            from deerflow.community.brave.tools import web_search_tool
+
+            result = web_search_tool.invoke({"query": "a" * 500})
+            parsed = json.loads(result)
+            params = mock_get.call_args.kwargs["params"]
+
+        assert len(params["q"]) == 400
+        assert parsed["query"] == "a" * 400
+
     def test_uses_env_key_when_config_absent(self):
         with patch("deerflow.community.brave.tools.get_app_config") as mock:
             mock.return_value.get_tool_config.return_value = None
