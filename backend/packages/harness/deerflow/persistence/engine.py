@@ -10,6 +10,7 @@ None and fall back to in-memory implementations.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 
@@ -102,7 +103,11 @@ async def init_engine(
 
         from sqlalchemy import event
 
-        os.makedirs(sqlite_dir or ".", exist_ok=True)
+        # Offload the directory creation: ``init_engine`` runs on the FastAPI
+        # lifespan event loop, and a sync ``os.makedirs`` (a stat + mkdir
+        # syscall) blocks it during startup. Mirrors the #1912 fix for the
+        # checkpointer's ``ensure_sqlite_parent_dir``.
+        await asyncio.to_thread(os.makedirs, sqlite_dir or ".", exist_ok=True)
         _engine = create_async_engine(url, echo=echo, json_serializer=_json_serializer)
 
         # Enable WAL on every new connection. SQLite PRAGMA settings are
@@ -112,11 +117,14 @@ async def init_engine(
         # SQLite deployment (TC-UPG-06 in AUTH_TEST_PLAN.md). The companion
         # ``synchronous=NORMAL`` is the safe-and-fast pairing — fsync only
         # at WAL checkpoint boundaries instead of every commit.
-        # Note: we do not set PRAGMA busy_timeout here — Python's sqlite3
-        # driver already defaults to a 5-second busy timeout (see the
-        # ``timeout`` kwarg of ``sqlite3.connect``), and aiosqlite /
-        # SQLAlchemy's aiosqlite dialect inherit that default.  Setting
-        # it again would be a no-op.
+        # We also widen ``busy_timeout`` to 30s here. Python's sqlite3 driver
+        # defaults to 5s, which is fine for transient row contention but too
+        # tight for cross-process bootstrap: the second-N-th Gateway process
+        # may need to wait while the first runs ``ALTER TABLE`` /
+        # ``CREATE TABLE`` for a fresh schema. The same widened timeout is
+        # mirrored on the alembic-spawned engine in
+        # ``migrations/env.py::run_migrations_online`` so its connections
+        # behave identically.
         @event.listens_for(_engine.sync_engine, "connect")
         def _enable_sqlite_wal(dbapi_conn, _record):  # noqa: ARG001 — SQLAlchemy contract
             cursor = dbapi_conn.cursor()
@@ -124,6 +132,7 @@ async def init_engine(
                 cursor.execute("PRAGMA journal_mode=WAL;")
                 cursor.execute("PRAGMA synchronous=NORMAL;")
                 cursor.execute("PRAGMA foreign_keys=ON;")
+                cursor.execute("PRAGMA busy_timeout=30000;")
             finally:
                 cursor.close()
     elif backend == "postgres":
@@ -143,38 +152,39 @@ async def init_engine(
 
     _session_factory = async_sessionmaker(_engine, expire_on_commit=False)
 
-    # Auto-create tables (dev convenience). Production should use Alembic.
-    from deerflow.persistence.base import Base
+    # Schema bootstrap (hybrid):
+    #   - empty DB        -> create_all + alembic stamp head
+    #   - legacy DB       -> create_all (baseline tables only, backfill) + alembic stamp baseline + upgrade head
+    #   - already managed -> alembic upgrade head
+    # Concurrency: Postgres advisory lock (true cross-process); SQLite uses an
+    # in-process asyncio.Lock plus a 30s PRAGMA busy_timeout (also set on
+    # alembic's own connections in env.py) -- multi-process SQLite bootstrap
+    # is best-effort, gated by SQLite's natural file-level write lock.
+    # See deerflow.persistence.bootstrap for the full state machine.
+    from deerflow.persistence.bootstrap import bootstrap_schema
 
-    # Import all models so Base.metadata discovers them.
-    # When no models exist yet (scaffolding phase), this is a no-op.
-    try:
-        import deerflow.persistence.models  # noqa: F401
-    except ImportError:
-        # Models package not yet available — tables won't be auto-created.
-        # This is expected during initial scaffolding or minimal installs.
-        logger.debug("deerflow.persistence.models not found; skipping auto-create tables")
-
-    async def _ensure_schema_and_tables(conn) -> None:
+    async def _ensure_postgres_schema() -> None:
         # CREATE SCHEMA is DDL and is unaffected by search_path, so it is
         # safe even though the connection's search_path already points at
-        # the (not-yet-existing) target schema.
+        # the (not-yet-existing) target schema. It must run before
+        # ``bootstrap_schema`` so the subsequent ``create_all`` / alembic
+        # DDL lands in the target schema instead of failing on a missing one.
         if backend == "postgres" and postgres_schema:
             from sqlalchemy.schema import CreateSchema
 
-            await conn.execute(CreateSchema(postgres_schema, if_not_exists=True))
-        await conn.run_sync(Base.metadata.create_all)
+            async with _engine.begin() as conn:
+                await conn.execute(CreateSchema(postgres_schema, if_not_exists=True))
 
     try:
-        async with _engine.begin() as conn:
-            await _ensure_schema_and_tables(conn)
+        await _ensure_postgres_schema()
+        await bootstrap_schema(_engine, backend=backend, postgres_schema=postgres_schema)
     except Exception as exc:
         if backend == "postgres" and "does not exist" in str(exc):
-            # Database not yet created — attempt to auto-create it, then retry.
+            # Database not yet created -- attempt to auto-create it, then retry.
             await _auto_create_postgres_db(url)
             # Rebuild engine against the now-existing database. The rebuilt
-            # engine MUST keep the same connect_args so the retried
-            # create_all lands in the target schema, not the default one.
+            # engine MUST keep the same connect_args so the retried bootstrap
+            # lands in the target schema, not the default one.
             await _engine.dispose()
             _engine = create_async_engine(
                 url,
@@ -185,8 +195,8 @@ async def init_engine(
                 connect_args=pg_connect_args,
             )
             _session_factory = async_sessionmaker(_engine, expire_on_commit=False)
-            async with _engine.begin() as conn:
-                await _ensure_schema_and_tables(conn)
+            await _ensure_postgres_schema()
+            await bootstrap_schema(_engine, backend=backend, postgres_schema=postgres_schema)
         else:
             raise
 

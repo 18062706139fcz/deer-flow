@@ -7,7 +7,9 @@ Run from repo root:
 from __future__ import annotations
 
 import yaml
+from wizard import ui as wizard_ui
 from wizard.providers import LLM_PROVIDERS, SEARCH_PROVIDERS, WEB_FETCH_PROVIDERS, LLMProvider
+from wizard.steps import channels as channels_step
 from wizard.steps import llm as llm_step
 from wizard.steps import search as search_step
 from wizard.writer import (
@@ -53,6 +55,29 @@ class TestProviders:
         assert providers["mimo"].use == "deerflow.models.patched_mimo:PatchedChatMiMo"
         assert providers["deepseek"].use == "deerflow.models.patched_deepseek:PatchedChatDeepSeek"
         assert providers["volcengine"].extra_config["api_base"] == "https://ark.cn-beijing.volces.com/api/v3"
+
+    def test_minimax_vision_is_per_model(self):
+        """M3 supports vision; M2.7 variants are text-only.
+
+        The provider-level extra_config carries the default (M3) capability, but
+        extra_config_for() must drop vision when an M2.7 model is selected.
+        """
+        providers = {provider.name: provider for provider in LLM_PROVIDERS}
+
+        for name in ("minimax", "minimax_cn"):
+            provider = providers[name]
+            assert provider.extra_config["supports_vision"] is True
+            assert provider.extra_config_for("MiniMax-M3")["supports_vision"] is True
+            assert provider.extra_config_for("MiniMax-M2.7")["supports_vision"] is False
+            assert provider.extra_config_for("MiniMax-M2.7-highspeed")["supports_vision"] is False
+            # Override must not mutate the shared provider-level config.
+            assert provider.extra_config["supports_vision"] is True
+
+    def test_extra_config_for_returns_provider_config_without_override(self):
+        """Providers without per-model overrides return their config unchanged."""
+        providers = {provider.name: provider for provider in LLM_PROVIDERS}
+        openai = providers["openai"]
+        assert openai.extra_config_for("gpt-5") == openai.extra_config
 
     def test_llm_providers_have_required_fields(self):
         for p in LLM_PROVIDERS:
@@ -304,6 +329,44 @@ class TestBuildMinimalConfig:
         assert model["when_thinking_enabled"]["extra_body"]["thinking"]["type"] == "enabled"
         assert model["when_thinking_disabled"]["extra_body"]["thinking"]["type"] == "disabled"
 
+    def test_can_enable_selected_channel_connections(self):
+        content = build_minimal_config(
+            provider_use="langchain_openai:ChatOpenAI",
+            model_name="gpt-4o",
+            display_name="OpenAI",
+            api_key_field="api_key",
+            env_var="OPENAI_API_KEY",
+            channel_connection_providers=["feishu", "slack"],
+        )
+
+        data = yaml.safe_load(content)
+        channel_connections = data["channel_connections"]
+
+        assert channel_connections["enabled"] is True
+        assert channel_connections["feishu"]["enabled"] is True
+        assert channel_connections["slack"]["enabled"] is True
+        assert channel_connections["telegram"]["enabled"] is False
+        assert channel_connections["discord"]["enabled"] is False
+        assert channel_connections["dingtalk"]["enabled"] is False
+        assert channel_connections["wechat"]["enabled"] is False
+        assert channel_connections["wecom"]["enabled"] is False
+
+    def test_channel_connections_disabled_when_no_channels_selected(self):
+        content = build_minimal_config(
+            provider_use="langchain_openai:ChatOpenAI",
+            model_name="gpt-4o",
+            display_name="OpenAI",
+            api_key_field="api_key",
+            env_var="OPENAI_API_KEY",
+            channel_connection_providers=[],
+        )
+
+        data = yaml.safe_load(content)
+        channel_connections = data["channel_connections"]
+
+        assert channel_connections["enabled"] is False
+        assert all(not config["enabled"] for provider, config in channel_connections.items() if provider != "enabled")
+
 
 class TestLLMStep:
     def test_model_selection_defaults_to_provider_default_model(self, monkeypatch):
@@ -359,6 +422,41 @@ class TestLLMStep:
         result = llm_step.run_llm_step()
 
         assert result.base_url == "https://gateway.example/v1"
+
+
+class TestChannelsStep:
+    def test_returns_selected_channel_keys(self, monkeypatch):
+        monkeypatch.setattr(channels_step, "print_header", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(channels_step, "print_info", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(channels_step, "print_success", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(channels_step, "ask_multi_choice", lambda *_args, **_kwargs: [0, 3, 6])
+
+        result = channels_step.run_channels_step()
+
+        assert result.enabled_providers == ["telegram", "feishu", "wecom"]
+
+    def test_empty_selection_disables_channel_connections(self, monkeypatch):
+        monkeypatch.setattr(channels_step, "print_header", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(channels_step, "print_info", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(channels_step, "print_success", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(channels_step, "ask_multi_choice", lambda *_args, **_kwargs: [])
+
+        result = channels_step.run_channels_step()
+
+        assert result.enabled_providers == []
+
+
+class TestWizardUi:
+    def test_multi_choice_blank_requires_input_without_default(self, monkeypatch):
+        answers = iter(["", "2"])
+        monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+
+        assert wizard_ui.ask_multi_choice("Pick", ["First", "Second"], default=None) == [1]
+
+    def test_multi_choice_blank_accepts_empty_default(self, monkeypatch):
+        monkeypatch.setattr("builtins.input", lambda _prompt: "")
+
+        assert wizard_ui.ask_multi_choice("Pick", ["First", "Second"], default=[]) == []
 
 
 # ---------------------------------------------------------------------------
