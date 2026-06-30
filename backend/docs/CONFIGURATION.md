@@ -235,13 +235,36 @@ tools:
 
 **Built-in Tools**:
 - `web_search` - Search the web (DuckDuckGo, Tavily, Brave, Exa, InfoQuest, Firecrawl, fastCRW, GroundRoute)
-- `web_fetch` - Fetch web pages (Jina AI, Exa, InfoQuest, Firecrawl, fastCRW, GroundRoute)
+- `web_fetch` - Fetch web pages (Jina AI, Exa, InfoQuest, Firecrawl, fastCRW, GroundRoute, Browserless)
+- `web_capture` - Capture rendered webpage screenshots as artifacts (Browserless)
 - `image_search` - Search for reference images (DuckDuckGo, InfoQuest, Serper)
 - `ls` - List directory contents
 - `read_file` - Read file contents
 - `write_file` - Write file contents
 - `str_replace` - String replacement in files
 - `bash` - Execute bash commands
+
+Browserless can be configured as an opt-in visual capture tool:
+
+```yaml
+tools:
+  - name: web_capture
+    group: web
+    use: deerflow.community.browserless.tools:web_capture_tool
+    base_url: http://localhost:3032
+    # token: $BROWSERLESS_TOKEN
+    output_format: png
+    full_page: true
+    viewport_width: 1280
+    viewport_height: 720
+    # allow_private_addresses: false  # SSRF guard; keep false in production
+```
+
+`web_capture` writes screenshots to the current thread's `/mnt/user-data/outputs`
+directory and presents the image path through the standard artifact mechanism. By
+default it refuses URLs that resolve to private, loopback, link-local, or
+cloud-metadata addresses; set `allow_private_addresses: true` only when you
+intentionally point the tool at an internal target.
 
 ### Sandbox
 
@@ -417,6 +440,7 @@ models:
 - `BRAVE_SEARCH_API_KEY` - Brave Search API key
 - `SERPER_API_KEY` - Serper (Google Search/Images API) key for `web_search` and `image_search`
 - `GROUNDROUTE_API_KEY` - GroundRoute meta-search API key for `web_search` and `web_fetch` (routes across Serper, Brave, Exa, Tavily, Firecrawl, Perplexity with gain-share pricing)
+- `BROWSERLESS_TOKEN` - Browserless Cloud token for `web_capture` (optional for self-hosted Browserless)
 - `DEER_FLOW_PROJECT_ROOT` - Project root for relative runtime paths
 - `DEER_FLOW_CONFIG_PATH` - Custom config file path
 - `DEER_FLOW_EXTENSIONS_CONFIG_PATH` - Custom extensions config file path
