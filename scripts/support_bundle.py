@@ -21,9 +21,11 @@ except Exception:  # pragma: no cover - exercised only in broken environments
 
 
 SECRET_KEY_RE = re.compile(
-    r"(api[_-]?key|token|secret|password|passwd|authorization|cookie|credential|private[_-]?key)",
+    r"(api[_-]?key|access[_-]?key|token|secret|password|passwd|pwd|authorization|cookie|credential|private[_-]?key)",
     re.IGNORECASE,
 )
+ENV_KEY_RE = re.compile(r"(?i)^env$")
+VAR_REFERENCE_RE = re.compile(r"^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?$")
 ENV_SECRET_RE = re.compile(r"(?im)^([A-Z0-9_]*(?:API[_-]?KEY|TOKEN|SECRET|PASSWORD|PASSWD|AUTHORIZATION|COOKIE|CREDENTIAL)[A-Z0-9_]*\s*=\s*)(.+)$")
 YAML_SECRET_RE = re.compile(r"(?im)^(\s*[\w.-]*(?:api[_-]?key|token|secret|password|passwd|authorization|cookie|credential|private[_-]?key)[\w.-]*\s*:\s*)(.+)$")
 BEARER_RE = re.compile(r"(?i)(Bearer\s+)[A-Za-z0-9._~+/=-]+")
@@ -88,6 +90,15 @@ def _redact_secret_flag_list(items: list[Any]) -> list[Any]:
     return redacted
 
 
+def _redact_env_value(value: Any) -> Any:
+    """Mask env values by default; keep only ``$VAR`` / ``${VAR}`` references visible."""
+    if isinstance(value, str) and VAR_REFERENCE_RE.fullmatch(value.strip()):
+        return value
+    if isinstance(value, (dict, list, tuple)):
+        return redact_data(value)
+    return "<redacted>"
+
+
 def redact_data(value: Any) -> Any:
     """Recursively redact secret-like mapping keys while preserving structure."""
     if isinstance(value, dict):
@@ -95,6 +106,8 @@ def redact_data(value: Any) -> Any:
         for key, item in value.items():
             if SECRET_KEY_RE.search(str(key)):
                 redacted[key] = "<redacted>"
+            elif ENV_KEY_RE.fullmatch(str(key)) and isinstance(item, dict):
+                redacted[key] = {k: _redact_env_value(v) for k, v in item.items()}
             elif HEADER_KEY_RE.search(str(key)) and isinstance(item, dict):
                 redacted[key] = {k: "<redacted>" for k in item}
             else:

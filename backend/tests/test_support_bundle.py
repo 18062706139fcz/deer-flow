@@ -145,6 +145,94 @@ def test_redact_text_masks_home_directory_paths():
     assert r"C:\Users\<user>\deer-flow\config.yaml" in redacted
 
 
+def test_redact_data_masks_non_keyword_env_secrets_but_keeps_var_references():
+    data = {
+        "mcpServers": {
+            "supabase": {
+                "command": "npx",
+                "env": {
+                    "SUPABASE_SERVICE_ROLE_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.payload.sig",
+                    "R2_ACCESS_KEY": "0123456789abcdef0123456789abcdef",
+                    "GEMINI_KEY": "AIzaSyA-EXAMPLE-hardcoded-google-key",
+                    "PROJECT_REF": "$SUPABASE_PROJECT_REF",
+                    "REGION": "${AWS_REGION}",
+                },
+            }
+        }
+    }
+
+    redacted = support_bundle.redact_data(data)
+    env = redacted["mcpServers"]["supabase"]["env"]
+
+    assert env["SUPABASE_SERVICE_ROLE_KEY"] == "<redacted>"
+    assert env["R2_ACCESS_KEY"] == "<redacted>"
+    assert env["GEMINI_KEY"] == "<redacted>"
+    assert env["PROJECT_REF"] == "$SUPABASE_PROJECT_REF"
+    assert env["REGION"] == "${AWS_REGION}"
+
+    dumped = json.dumps(redacted)
+    assert "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9" not in dumped
+    assert "0123456789abcdef" not in dumped
+    assert "AIzaSyA-EXAMPLE-hardcoded-google-key" not in dumped
+
+
+def test_redact_data_masks_broadened_secret_key_names():
+    data = {
+        "aws_access_key_id": "AKIAIOSFODNN7EXAMPLE",
+        "db_pwd": "hunter2",
+        "signing_private_key": "-----BEGIN KEY-----abc-----END KEY-----",
+    }
+
+    redacted = support_bundle.redact_data(data)
+
+    assert redacted["aws_access_key_id"] == "<redacted>"
+    assert redacted["db_pwd"] == "<redacted>"
+    assert redacted["signing_private_key"] == "<redacted>"
+
+
+def test_create_support_bundle_masks_hardcoded_env_secret(tmp_path):
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    (project_root / "config.yaml").write_text(
+        "config_version: 5\nmodels:\n  - name: default\n",
+        encoding="utf-8",
+    )
+    (project_root / "extensions_config.json").write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "supabase": {
+                        "command": "npx",
+                        "env": {
+                            "SUPABASE_SERVICE_ROLE_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.leak.sig",
+                            "R2_ACCESS_KEY": "0123456789abcdef0123456789abcdef",
+                            "PROJECT_REF": "$SUPABASE_PROJECT_REF",
+                        },
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    output_path = tmp_path / "support.zip"
+    support_bundle.create_support_bundle(
+        project_root=project_root,
+        out_path=output_path,
+        include_doctor=False,
+    )
+
+    all_text = "\n".join(_zip_text(output_path, name) for name in zipfile.ZipFile(output_path).namelist())
+    assert "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.leak.sig" not in all_text
+    assert "0123456789abcdef" not in all_text
+
+    extensions_summary = json.loads(_zip_text(output_path, "extensions-summary.json"))
+    env = extensions_summary["mcpServers"]["supabase"]["env"]
+    assert env["SUPABASE_SERVICE_ROLE_KEY"] == "<redacted>"
+    assert env["R2_ACCESS_KEY"] == "<redacted>"
+    assert env["PROJECT_REF"] == "$SUPABASE_PROJECT_REF"
+
+
 def test_create_support_bundle_writes_sanitized_zip(tmp_path):
     project_root = tmp_path / "project"
     project_root.mkdir()
