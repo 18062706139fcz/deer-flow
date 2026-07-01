@@ -266,6 +266,39 @@ default it refuses URLs that resolve to private, loopback, link-local, or
 cloud-metadata addresses; set `allow_private_addresses: true` only when you
 intentionally point the tool at an internal target.
 
+Both `web_fetch` (Browserless provider) and `web_capture` need a running
+Browserless instance. You can point `base_url` at [Browserless Cloud](https://www.browserless.io/)
+(set `BROWSERLESS_TOKEN`) or run one locally with Docker:
+
+```bash
+# Browserless listens on port 3000 inside the container; map it to 3032 to
+# match the default base_url (http://localhost:3032). Recent Browserless
+# images always require a token — if you don't pass one, a random token is
+# generated and requests without it are rejected — so set it explicitly.
+docker run -d --name browserless -p 3032:3000 -e "TOKEN=local-dev-token" ghcr.io/browserless/chromium
+```
+
+Then set the same token so the tool sends it (uncomment `token: $BROWSERLESS_TOKEN`
+in the config above):
+
+```bash
+export BROWSERLESS_TOKEN=local-dev-token
+```
+
+Verify the instance is reachable before enabling the tool:
+
+```bash
+curl -sS "http://localhost:3032/screenshot?token=local-dev-token" \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://example.com", "options": {"type": "png"}}' \
+  -o /tmp/browserless-check.png  # writes a PNG on success
+```
+
+For Docker Compose deployments, run Browserless as a service and point `base_url`
+at the service name (e.g. `http://browserless:3000`) instead of `localhost`. See
+the [Browserless project](https://github.com/browserless/browserless) for full
+deployment and configuration options.
+
 ### Sandbox
 
 DeerFlow supports multiple sandbox execution modes. Configure your preferred mode in `config.yaml`:

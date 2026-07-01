@@ -116,14 +116,7 @@ def _resolve_host_addresses(hostname: str) -> list[ipaddress._BaseAddress]:
 
 def _is_blocked_address(address: ipaddress._BaseAddress) -> bool:
     """Return True for addresses that must never be reachable via this tool."""
-    return (
-        address.is_private
-        or address.is_loopback
-        or address.is_link_local
-        or address.is_reserved
-        or address.is_multicast
-        or address.is_unspecified
-    )
+    return address.is_private or address.is_loopback or address.is_link_local or address.is_reserved or address.is_multicast or address.is_unspecified
 
 
 def _validate_capture_url(url: str, allow_private_addresses: bool = False) -> str | None:
