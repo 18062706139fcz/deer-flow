@@ -300,7 +300,20 @@ function MessageContent_({
             />
           );
         }
-        return <a {...props} href={href} />;
+        const { className, target, rel, ...rest } = props;
+        const external = !!href && /^https?:\/\//.test(href);
+        return (
+          <a
+            {...rest}
+            href={href}
+            className={cn(
+              "text-primary decoration-primary/30 hover:decoration-primary/60 underline underline-offset-2 transition-colors",
+              className,
+            )}
+            target={target ?? (external ? "_blank" : undefined)}
+            rel={rel ?? (external ? "noopener noreferrer" : undefined)}
+          />
+        );
       },
     }),
     [threadId],
