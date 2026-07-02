@@ -13,7 +13,7 @@ giving structured results, authenticated quota, and a documented SLA.
 import json
 import logging
 import os
-from ipaddress import IPv4Address, ip_address
+from ipaddress import IPv4Address, IPv6Address, ip_address, ip_network
 from urllib.parse import urlparse
 
 import httpx
@@ -30,6 +30,8 @@ _DEFAULT_MAX_RESULTS = 5
 _BRAVE_WEB_MAX_COUNT = 20
 # Brave Image Search supports larger batches than web search.
 _BRAVE_IMAGE_MAX_COUNT = 200
+# NAT64 well-known prefix (RFC 6052): IPv6 literals embedding an IPv4 address.
+_NAT64_PREFIX = ip_network("64:ff9b::/96")
 _api_key_warned: set[str] = set()
 
 
@@ -135,19 +137,44 @@ def _is_url_present(value: object) -> bool:
     return isinstance(value, str) and bool(value.strip())
 
 
+def _embedded_ipv4(ip: IPv6Address) -> IPv4Address | None:
+    """Extract an IPv4 address embedded in an IPv6 literal, if any.
+
+    Covers IPv4-mapped (``::ffff:a.b.c.d``), 6to4 (``2002::/16``), NAT64
+    (``64:ff9b::/96``), and IPv4-compatible (``::a.b.c.d``) forms. These all
+    smuggle a v4 destination through the IPv6 path, where ``is_global`` on the
+    v6 literal alone would otherwise report a loopback/private target as safe.
+    """
+    if ip.ipv4_mapped is not None:
+        return ip.ipv4_mapped
+    if ip.sixtofour is not None:
+        return ip.sixtofour
+    if ip in _NAT64_PREFIX:
+        return IPv4Address(int(ip) & 0xFFFFFFFF)
+    # IPv4-compatible ``::a.b.c.d`` (high 96 bits zero, excluding ::/:: 1).
+    packed = int(ip)
+    if packed >> 32 == 0 and packed > 1:
+        return IPv4Address(packed & 0xFFFFFFFF)
+    return None
+
+
 def _safe_public_url(value: object) -> str:
     """Return ``value`` only if it is a safe, public http(s) URL, else "".
 
     This is a best-effort SSRF guard that rejects non-http(s) schemes,
     ``localhost``, and private/non-global IP literals (including obfuscated
-    decimal/hex/octal encodings). It only inspects the URL string and cannot
-    catch public hostnames that resolve to internal IPs; any consumer that
-    actually downloads these URLs must re-validate the resolved IP at fetch time.
+    decimal/hex/octal encodings and IPv6 literals embedding a non-global IPv4).
+    It only inspects the URL string and cannot catch public hostnames that
+    resolve to internal IPs; any consumer that actually downloads these URLs
+    must re-validate the resolved IP at fetch time.
     """
     if not isinstance(value, str):
         return ""
     url = value.strip()
-    parsed = urlparse(url)
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return ""
     if parsed.scheme not in {"http", "https"} or not parsed.netloc or not parsed.hostname:
         return ""
 
@@ -163,6 +190,10 @@ def _safe_public_url(value: object) -> str:
         ip = _decode_ipv4(host)
         if ip is None:
             return url
+    if isinstance(ip, IPv6Address):
+        embedded = _embedded_ipv4(ip)
+        if embedded is not None and not embedded.is_global:
+            return ""
     return url if ip.is_global else ""
 
 
@@ -303,10 +334,27 @@ def image_search_tool(query: str, max_results: int = 5) -> str:
         safe_thumb = _safe_public_url(raw_thumb)
         safe_source = _safe_public_url(raw_source)
 
-        image_url = safe_image or (safe_thumb if not _is_url_present(raw_image) else "")
-        thumbnail_url = safe_thumb or (safe_image if not _is_url_present(raw_thumb) else "")
+        # Surface a URL and remember which dict it came from, so the reported
+        # width/height describe the URL we actually return rather than a
+        # dropped one.
+        if safe_image:
+            image_url, image_dims = safe_image, properties
+        elif not _is_url_present(raw_image):
+            image_url, image_dims = safe_thumb, thumbnail
+        else:
+            image_url, image_dims = "", {}
+
+        if safe_thumb:
+            thumbnail_url, thumb_dims = safe_thumb, thumbnail
+        elif not _is_url_present(raw_thumb):
+            thumbnail_url, thumb_dims = safe_image, properties
+        else:
+            thumbnail_url, thumb_dims = "", {}
+
         if not image_url and not thumbnail_url:
             continue
+
+        dims = image_dims if image_url else thumb_dims
 
         normalized_results.append(
             {
@@ -315,8 +363,8 @@ def image_search_tool(query: str, max_results: int = 5) -> str:
                 "thumbnail_url": thumbnail_url,
                 "source_url": safe_source,
                 "source": item.get("source", ""),
-                "width": properties.get("width"),
-                "height": properties.get("height"),
+                "width": dims.get("width"),
+                "height": dims.get("height"),
             }
         )
         if len(normalized_results) >= count:

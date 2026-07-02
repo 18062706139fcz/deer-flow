@@ -431,6 +431,36 @@ class TestSafePublicUrl:
 
         assert _safe_public_url("http://2130706433/i.jpg") == ""
 
+    def test_malformed_ipv6_url_does_not_raise(self):
+        from deerflow.community.brave.tools import _safe_public_url
+
+        assert _safe_public_url("http://[::1/i.jpg") == ""
+
+    def test_nat64_embedded_loopback_is_filtered(self):
+        from deerflow.community.brave.tools import _safe_public_url
+
+        assert _safe_public_url("http://[64:ff9b::127.0.0.1]/i.jpg") == ""
+
+    def test_ipv4_compatible_embedded_private_is_filtered(self):
+        from deerflow.community.brave.tools import _safe_public_url
+
+        assert _safe_public_url("http://[::10.0.0.1]/i.jpg") == ""
+
+    def test_ipv4_mapped_loopback_is_filtered(self):
+        from deerflow.community.brave.tools import _safe_public_url
+
+        assert _safe_public_url("http://[::ffff:127.0.0.1]/i.jpg") == ""
+
+    def test_sixtofour_loopback_is_filtered(self):
+        from deerflow.community.brave.tools import _safe_public_url
+
+        assert _safe_public_url("http://[2002:7f00:1::]/i.jpg") == ""
+
+    def test_global_ipv6_passes(self):
+        from deerflow.community.brave.tools import _safe_public_url
+
+        assert _safe_public_url("http://[2001:4860:4860::8888]/i.jpg") == "http://[2001:4860:4860::8888]/i.jpg"
+
 
 class TestImageSearchTool:
     def test_basic_image_search_returns_normalized_results(self, mock_config_with_key):
@@ -573,6 +603,32 @@ class TestImageSearchTool:
         assert parsed["results"][0]["thumbnail_url"] == "https://imgs.search.brave.com/only-thumb.jpg"
         assert parsed["results"][1]["image_url"] == "https://cdn.example.com/original.jpg"
         assert parsed["results"][1]["thumbnail_url"] == "https://cdn.example.com/original.jpg"
+
+    def test_image_search_reports_thumbnail_dimensions_when_original_dropped(self, mock_config_with_key):
+        """When only the thumbnail URL survives, width/height must describe it, not the dropped original."""
+        results = [
+            {
+                "title": "Unsafe original with dims",
+                "url": "https://example.com/page",
+                "thumbnail": {"src": "https://imgs.search.brave.com/thumb.jpg", "width": 300, "height": 200},
+                "properties": {"url": "http://127.0.0.1/image.jpg", "width": 1920, "height": 1080},
+            },
+        ]
+
+        with patch("deerflow.community.brave.tools.httpx.Client") as mock_client_cls:
+            mock_client_cls.return_value.__enter__.return_value.get.return_value = _make_brave_images_response(results)
+
+            from deerflow.community.brave.tools import image_search_tool
+
+            result = image_search_tool.invoke({"query": "dims"})
+            parsed = json.loads(result)
+
+        assert parsed["total_results"] == 1
+        entry = parsed["results"][0]
+        assert entry["image_url"] == ""
+        assert entry["thumbnail_url"] == "https://imgs.search.brave.com/thumb.jpg"
+        assert entry["width"] == 300
+        assert entry["height"] == 200
 
     def test_image_search_missing_api_key_returns_error_json(self, mock_config_no_key):
         with patch.dict("os.environ", {}, clear=True):
