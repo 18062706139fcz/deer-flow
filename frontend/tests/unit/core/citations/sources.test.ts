@@ -80,6 +80,45 @@ describe("extractCitationSources", () => {
     ]);
   });
 
+  it("keeps every source when citations are directly adjacent", () => {
+    const markdown =
+      "[citation:A](https://example.com/a)[citation:B](https://example.com/b)[citation:C](https://example.com/c)";
+
+    expect(extractCitationSources(markdown).map((s) => s.url)).toEqual([
+      "https://example.com/a",
+      "https://example.com/b",
+      "https://example.com/c",
+    ]);
+  });
+
+  it("keeps URLs that contain multiple balanced parenthetical groups", () => {
+    const markdown = "[citation:W](https://en.wikipedia.org/wiki/Foo_(a)_(b))";
+
+    expect(extractCitationSources(markdown)[0]).toMatchObject({
+      url: "https://en.wikipedia.org/wiki/Foo_(a)_(b)",
+      domain: "en.wikipedia.org",
+    });
+  });
+
+  it("ignores citations inside inline code spans", () => {
+    const markdown =
+      "Example: `[citation:X](https://x.com/inline)` then real [citation:Real](https://example.com/real).";
+
+    expect(extractCitationSources(markdown).map((s) => s.url)).toEqual([
+      "https://example.com/real",
+    ]);
+  });
+
+  it("ignores citations inside an unclosed fenced code block", () => {
+    const markdown = [
+      "Streaming output:",
+      "```md",
+      "[citation:Streaming](https://example.com/streaming)",
+    ].join("\n");
+
+    expect(extractCitationSources(markdown)).toEqual([]);
+  });
+
   it("uses the source domain when the citation label is generic", () => {
     const markdown = "See [citation:Source](https://www.example.com/path).";
 

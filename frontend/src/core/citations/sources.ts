@@ -12,8 +12,13 @@ export type CitationSource = {
   occurrences: CitationOccurrence[];
 };
 
+// Uses a non-consuming lookbehind (?<!!) to skip image links (![citation:…])
+// without eating the boundary char, so back-to-back citations both match. The
+// URL sub-pattern consumes either non-paren chars or a balanced (…) group, so
+// disambiguation URLs like .../Foo_(a)_(b) survive rather than truncating at
+// the first inner paren.
 const CITATION_LINK_RE =
-  /(^|[^!])\[citation:\s*([^\]]+?)\]\((https?:\/\/[^\s)]+(?:\([^\s)]*\)[^\s)]*)?)\)/gi;
+  /(?<!!)\[citation:\s*([^\]]+?)\]\((https?:\/\/(?:[^\s()]|\([^\s()]*\))+)\)/gi;
 
 const GENERIC_CITATION_TITLES = new Set(["source", "来源"]);
 
@@ -22,13 +27,12 @@ export function extractCitationSources(markdown: string): CitationSource[] {
     return [];
   }
 
-  const searchable = maskFencedCodeBlocks(markdown);
+  const searchable = maskCode(markdown);
   const sourcesByUrl = new Map<string, CitationSource>();
 
   for (const match of searchable.matchAll(CITATION_LINK_RE)) {
-    const prefix = match[1] ?? "";
-    const rawTitle = (match[2] ?? "").trim();
-    const rawUrl = match[3] ?? "";
+    const rawTitle = (match[1] ?? "").trim();
+    const rawUrl = match[2] ?? "";
     const url = normalizeUrl(rawUrl);
     if (!url) {
       continue;
@@ -36,7 +40,7 @@ export function extractCitationSources(markdown: string): CitationSource[] {
 
     const domain = extractDomain(url);
     const title = normalizeTitle(rawTitle, domain);
-    const index = (match.index ?? 0) + prefix.length;
+    const index = match.index ?? 0;
     const existing = sourcesByUrl.get(url);
 
     if (existing) {
@@ -92,9 +96,28 @@ function extractDomain(url: string): string {
   }
 }
 
+// Blanks out code regions so example citations inside code aren't scraped as
+// real sources, while preserving string length (and newlines) so occurrence
+// indices stay aligned with the original markdown.
+function maskCode(markdown: string): string {
+  return maskInlineCode(maskFencedCodeBlocks(markdown));
+}
+
 function maskFencedCodeBlocks(markdown: string): string {
+  // Match a fenced block up to its matching closing fence, or — while the
+  // message is still streaming — to end of input when the fence is unclosed.
   return markdown.replace(
-    /(^|\n)(`{3,}|~{3,})[^\n]*\n[\s\S]*?\n\2(?=\n|$)/g,
-    (block) => " ".repeat(block.length),
+    /(^|\n)(`{3,}|~{3,})[^\n]*(?:\n[\s\S]*?\n\2[^\n]*(?=\n|$)|[\s\S]*$)/g,
+    maskKeepingNewlines,
   );
+}
+
+function maskInlineCode(markdown: string): string {
+  // Only mask closed spans: an unclosed backtick run renders as literal text,
+  // so a citation after it is a real, rendered link and must not be masked.
+  return markdown.replace(/(`+)[\s\S]*?\1/g, maskKeepingNewlines);
+}
+
+function maskKeepingNewlines(block: string): string {
+  return block.replace(/[^\n]/g, " ");
 }

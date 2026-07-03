@@ -11,7 +11,6 @@ import {
   useMemo,
   useState,
   useEffect,
-  type AnchorHTMLAttributes,
   type ImgHTMLAttributes,
 } from "react";
 
@@ -46,11 +45,11 @@ import { useRehypeSplitWordsIntoSpans } from "@/core/rehype";
 import { SafeReasoningContent } from "@/core/streamdown/components";
 import { cn } from "@/lib/utils";
 
-import { CitationLink } from "../citations/citation-link";
 import { CitationSourcesPanel } from "../citations/citation-sources-panel";
 import { CopyButton } from "../copy-button";
 
 import { MarkdownContent } from "./markdown-content";
+import { createMarkdownLinkComponent } from "./markdown-link";
 
 function FeedbackButtons({
   threadId,
@@ -277,44 +276,7 @@ function MessageContent_({
       img: (props: ImgHTMLAttributes<HTMLImageElement>) => (
         <MessageImage {...props} threadId={threadId} maxWidth="90%" />
       ),
-      a: ({ href, ...props }: AnchorHTMLAttributes<HTMLAnchorElement>) => {
-        if (typeof props.children === "string") {
-          const match = /^citation:(.+)$/.exec(props.children);
-          if (match) {
-            const [, text] = match;
-            return (
-              <CitationLink {...props} href={href}>
-                {text}
-              </CitationLink>
-            );
-          }
-        }
-        if (href?.startsWith("/mnt/")) {
-          const url = resolveArtifactURL(href, threadId);
-          return (
-            <a
-              {...props}
-              href={url}
-              target="_blank"
-              rel="noopener noreferrer"
-            />
-          );
-        }
-        const { className, target, rel, ...rest } = props;
-        const external = !!href && /^https?:\/\//.test(href);
-        return (
-          <a
-            {...rest}
-            href={href}
-            className={cn(
-              "text-primary decoration-primary/30 hover:decoration-primary/60 underline underline-offset-2 transition-colors",
-              className,
-            )}
-            target={target ?? (external ? "_blank" : undefined)}
-            rel={rel ?? (external ? "noopener noreferrer" : undefined)}
-          />
-        );
-      },
+      a: createMarkdownLinkComponent(threadId),
     }),
     [threadId],
   );
