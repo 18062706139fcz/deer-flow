@@ -1,0 +1,25 @@
+backend/packages/harness/deerflow/workspace_changes/recorder.py
+  s_04516446e84dd5::t_a6c86ce1c97e1b 66
+backend/packages/harness/deerflow/workspace_changes/scanner.py
+  s_04516446e84dd5::t_f97e6ceee1722e 101
+backend/packages/harness/deerflow/workspace_changes/types.py
+  s_04516446e84dd5::t_66c5aee86303df 97
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "64c2e8dfec3182ea0b38752a61a9f53174816d93",
+  "prompts": {},
+  "sessions": {
+    "s_04516446e84dd5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f2dc7-834b-76a2-9c35-154f480b3935",
+        "model": "unknown"
+      },
+      "human_author": "ryker <2279549769@qq.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
