@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from deerflow.config.paths import Paths
@@ -16,6 +18,7 @@ from deerflow.workspace_changes import (
     scan_workspace_roots,
 )
 from deerflow.workspace_changes.api import get_workspace_changes_response
+from deerflow.workspace_changes.scanner import is_sensitive_workspace_path
 
 
 def _roots(tmp_path):
@@ -81,6 +84,29 @@ def test_scan_workspace_roots_skips_excluded_directories(tmp_path):
 
     assert "/mnt/user-data/workspace/visible.txt" in snapshot.files
     assert "/mnt/user-data/workspace/node_modules/ignored.js" not in snapshot.files
+
+
+def test_scan_workspace_roots_can_skip_text_loading(tmp_path):
+    roots = _roots(tmp_path)
+    workspace = roots[0].host_path
+    (workspace / "visible.txt").write_text("visible", encoding="utf-8")
+
+    snapshot = scan_workspace_roots(roots, include_text=False)
+    file = snapshot.files["/mnt/user-data/workspace/visible.txt"]
+
+    assert file.sha256 is not None
+    assert file.text is None
+    assert file.content_unavailable_reason is None
+
+
+def test_sensitive_workspace_path_covers_common_secret_names():
+    for filename in (
+        "password.txt",
+        "api_key.txt",
+        "apikey",
+        "private_key.json",
+    ):
+        assert is_sensitive_workspace_path(f"/mnt/user-data/workspace/{filename}")
 
 
 def test_compare_snapshots_hides_sensitive_and_binary_file_content(tmp_path):
@@ -181,6 +207,13 @@ async def test_workspace_changes_response_returns_summary_only_and_full_payload(
         "run-1",
         include_files=False,
     )
+    metadata_only = await get_workspace_changes_response(
+        store,
+        "thread-1",
+        "run-1",
+        include_files=True,
+        include_diff=False,
+    )
     full = await get_workspace_changes_response(
         store,
         "thread-1",
@@ -191,6 +224,8 @@ async def test_workspace_changes_response_returns_summary_only_and_full_payload(
     assert summary["available"] is True
     assert summary["summary"]["created"] == 1
     assert summary["files"] == []
+    assert metadata_only["files"][0]["path"] == "/mnt/user-data/outputs/report.md"
+    assert metadata_only["files"][0]["diff"] == ""
     assert full["files"][0]["diff"] == "+hello"
 
 
@@ -274,15 +309,18 @@ async def test_record_workspace_changes_content_uses_total_changed_count(tmp_pat
     monkeypatch.setattr(paths_module, "_paths", Paths(tmp_path))
     user_id = get_effective_user_id()
     paths_module.get_paths().ensure_thread_dirs("thread-1", user_id=user_id)
+    workspace = paths_module.get_paths().sandbox_work_dir("thread-1", user_id=user_id)
+    (workspace / "unchanged.txt").write_text("keep me\n", encoding="utf-8")
 
     before = await capture_workspace_snapshot(
         "thread-1",
         user_id=user_id,
         limits=WorkspaceChangeLimits(max_files=1),
     )
-    workspace = paths_module.get_paths().sandbox_work_dir("thread-1", user_id=user_id)
     (workspace / "a.txt").write_text("a\n", encoding="utf-8")
     (workspace / "b.txt").write_text("b\n", encoding="utf-8")
+
+    assert before.files["/mnt/user-data/workspace/unchanged.txt"].text is None
 
     store = MemoryRunEventStore()
     await record_workspace_changes(
@@ -299,6 +337,40 @@ async def test_record_workspace_changes_content_uses_total_changed_count(tmp_pat
     payload = events[0]["metadata"]["workspace_changes"]
     assert payload["summary"]["created"] == 2
     assert len(payload["files"]) == 1
+
+
+@pytest.mark.anyio
+async def test_record_workspace_changes_uses_cached_baseline_for_modified_diff(tmp_path, monkeypatch):
+    from deerflow.config import paths as paths_module
+
+    monkeypatch.setattr(paths_module, "_paths", Paths(tmp_path))
+    user_id = get_effective_user_id()
+    paths_module.get_paths().ensure_thread_dirs("thread-1", user_id=user_id)
+    workspace = paths_module.get_paths().sandbox_work_dir("thread-1", user_id=user_id)
+    (workspace / "edit.txt").write_text("old\n", encoding="utf-8")
+
+    before = await capture_workspace_snapshot("thread-1", user_id=user_id)
+    assert before.files["/mnt/user-data/workspace/edit.txt"].text is None
+    assert before.text_cache_dir is not None
+    text_cache_dir = Path(before.text_cache_dir)
+    assert text_cache_dir.exists()
+
+    (workspace / "edit.txt").write_text("new\n", encoding="utf-8")
+
+    store = MemoryRunEventStore()
+    await record_workspace_changes(
+        store,
+        "thread-1",
+        "run-1",
+        before,
+        user_id=user_id,
+    )
+
+    events = await store.list_events("thread-1", "run-1", event_types=["workspace_changes"])
+    diff = events[0]["metadata"]["workspace_changes"]["files"][0]["diff"]
+    assert "-old" in diff
+    assert "+new" in diff
+    assert not text_cache_dir.exists()
 
 
 @pytest.mark.anyio
@@ -345,6 +417,7 @@ async def test_workspace_changes_route_forwards_include_files_flag():
         run_id="run-1",
         request=FakeRequest(),
         include_files=False,
+        include_diff=False,
     )
 
     assert response["available"] is True

@@ -750,6 +750,7 @@ async def get_run_workspace_changes(
     run_id: str,
     request: Request,
     include_files: bool = Query(default=True),
+    include_diff: bool = Query(default=True),
 ) -> dict:
     """Return workspace/output file changes recorded for one run."""
     event_store = get_run_event_store(request)
@@ -758,6 +759,7 @@ async def get_run_workspace_changes(
         thread_id,
         run_id,
         include_files=include_files,
+        include_diff=include_diff,
     )
 
 

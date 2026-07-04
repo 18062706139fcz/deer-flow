@@ -7,28 +7,47 @@ export function workspaceChangesQueryKey(
   threadId: string | undefined,
   runId: string | undefined,
   includeFiles: boolean,
+  includeDiff: boolean,
 ) {
-  return ["workspace-changes", threadId, runId, includeFiles] as const;
+  return [
+    "workspace-changes",
+    threadId,
+    runId,
+    includeFiles,
+    includeDiff,
+  ] as const;
 }
 
 export function useWorkspaceChanges({
   threadId,
   runId,
   includeFiles = true,
+  includeDiff = true,
   enabled = true,
 }: {
   threadId?: string;
   runId?: string;
   includeFiles?: boolean;
+  includeDiff?: boolean;
   enabled?: boolean;
 }) {
   return useQuery<WorkspaceChangesResponse>({
-    queryKey: workspaceChangesQueryKey(threadId, runId, includeFiles),
+    queryKey: workspaceChangesQueryKey(
+      threadId,
+      runId,
+      includeFiles,
+      includeDiff,
+    ),
     queryFn: () => {
       if (!threadId || !runId) {
         throw new Error("threadId and runId are required");
       }
-      return fetchWorkspaceChanges({ threadId, runId, includeFiles });
+      return fetchWorkspaceChanges({
+        threadId,
+        runId,
+        includeFiles,
+        includeDiff,
+      });
     },
     enabled: enabled && Boolean(threadId) && Boolean(runId),
     retry: false,

@@ -9,6 +9,7 @@ test.describe("Workspace changes", () => {
   test("shows changed files badge and opens the diff panel", async ({
     page,
   }) => {
+    const includeDiffValues: string[] = [];
     mockLangGraphAPI(page, {
       threads: [
         {
@@ -37,6 +38,7 @@ test.describe("Workspace changes", () => {
       async (route) => {
         const url = new URL(route.request().url());
         const includeFiles = url.searchParams.get("include_files") !== "false";
+        includeDiffValues.push(url.searchParams.get("include_diff") ?? "");
         await route.fulfill({
           status: 200,
           contentType: "application/json",
@@ -100,6 +102,7 @@ test.describe("Workspace changes", () => {
     });
     await expect(page.getByText("outputs/report.md")).toBeVisible();
     await expect(page.getByText("notes.txt")).toBeVisible();
+    expect(includeDiffValues).toContain("false");
 
     await page.getByRole("button", { name: "View changes" }).click();
     await expect(
@@ -110,6 +113,7 @@ test.describe("Workspace changes", () => {
         name: /\/mnt\/user-data\/outputs\/report\.md/i,
       }),
     ).toBeVisible();
+    expect(includeDiffValues).toContain("true");
     await expect(page.getByText("+Ready")).toBeVisible();
     await expect(page.getByText("-Draft")).toBeVisible();
   });

@@ -6,17 +6,23 @@ export async function fetchWorkspaceChanges({
   threadId,
   runId,
   includeFiles = true,
+  includeDiff = true,
 }: {
   threadId: string;
   runId: string;
   includeFiles?: boolean;
+  includeDiff?: boolean;
 }): Promise<WorkspaceChangesResponse> {
+  const query = new URLSearchParams({
+    include_files: includeFiles ? "true" : "false",
+    include_diff: includeDiff ? "true" : "false",
+  });
   const response = await fetch(
     `${getBackendBaseURL()}/api/threads/${encodeURIComponent(
       threadId,
     )}/runs/${encodeURIComponent(
       runId,
-    )}/workspace-changes?include_files=${includeFiles ? "true" : "false"}`,
+    )}/workspace-changes?${query}`,
   );
 
   if (!response.ok) {

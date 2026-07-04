@@ -20,6 +20,7 @@ async def get_workspace_changes_response(
     run_id: str,
     *,
     include_files: bool = True,
+    include_diff: bool = True,
 ) -> dict[str, Any]:
     events = await event_store.list_events(
         thread_id,
@@ -39,6 +40,8 @@ async def get_workspace_changes_response(
     response.setdefault("summary", dict(EMPTY_SUMMARY))
     if include_files:
         response.setdefault("files", [])
+        if not include_diff:
+            response["files"] = [_without_diff(file) for file in response["files"]]
     else:
         response["files"] = []
     return response
@@ -62,3 +65,11 @@ def _extract_workspace_changes_payload(event: dict[str, Any]) -> Any:
     if isinstance(content, dict):
         return content
     return None
+
+
+def _without_diff(file: Any) -> Any:
+    if not isinstance(file, dict):
+        return file
+    sanitized = dict(file)
+    sanitized["diff"] = ""
+    return sanitized

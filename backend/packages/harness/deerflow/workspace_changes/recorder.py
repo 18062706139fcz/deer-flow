@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shutil
+import tempfile
+from pathlib import Path
 from typing import Any
 
 from deerflow.config import get_paths
 
-from .diff import compare_snapshots
+from .diff import compare_snapshots, get_changed_paths
 from .scanner import scan_workspace_roots
 from .types import (
     WORKSPACE_CHANGES_EVENT_TYPE,
@@ -40,9 +43,22 @@ async def capture_workspace_snapshot(
     *,
     user_id: str | None = None,
     limits: WorkspaceChangeLimits | None = None,
+    include_text: bool = True,
 ) -> WorkspaceSnapshot:
     roots = build_thread_workspace_roots(thread_id, user_id=user_id)
-    return await asyncio.to_thread(scan_workspace_roots, roots, limits=limits)
+    text_cache_dir = Path(tempfile.mkdtemp(prefix="deerflow-workspace-changes-")) if include_text else None
+    try:
+        return await asyncio.to_thread(
+            scan_workspace_roots,
+            roots,
+            limits=limits,
+            include_text=include_text,
+            text_cache_dir=text_cache_dir,
+        )
+    except Exception:
+        if text_cache_dir is not None:
+            shutil.rmtree(text_cache_dir, ignore_errors=True)
+        raise
 
 
 async def record_workspace_changes(
@@ -54,21 +70,42 @@ async def record_workspace_changes(
     user_id: str | None = None,
     limits: WorkspaceChangeLimits | None = None,
 ) -> dict | None:
-    roots = build_thread_workspace_roots(thread_id, user_id=user_id)
-    after = await asyncio.to_thread(scan_workspace_roots, roots, limits=limits)
-    result = compare_snapshots(before, after, limits=limits)
-    if not result.has_changes():
-        return None
+    try:
+        roots = build_thread_workspace_roots(thread_id, user_id=user_id)
+        after_metadata = await asyncio.to_thread(
+            scan_workspace_roots,
+            roots,
+            limits=limits,
+            include_text=False,
+        )
+        changed_paths = get_changed_paths(before, after_metadata)
+        after = await asyncio.to_thread(
+            scan_workspace_roots,
+            roots,
+            limits=limits,
+            include_text=True,
+            text_paths=changed_paths,
+        )
+        result = compare_snapshots(before, after, limits=limits)
+        if not result.has_changes():
+            return None
 
-    payload = result.to_dict()
-    summary = result.summary
-    changed_file_count = summary.created + summary.modified + summary.deleted
-    content = f"{changed_file_count} file{'s' if changed_file_count != 1 else ''} changed +{summary.additions} -{summary.deletions}"
-    return await event_store.put(
-        thread_id=thread_id,
-        run_id=run_id,
-        event_type=WORKSPACE_CHANGES_EVENT_TYPE,
-        category="workspace",
-        content=content,
-        metadata={WORKSPACE_CHANGES_METADATA_KEY: payload},
-    )
+        payload = result.to_dict()
+        summary = result.summary
+        changed_file_count = summary.created + summary.modified + summary.deleted
+        content = f"{changed_file_count} file{'s' if changed_file_count != 1 else ''} changed +{summary.additions} -{summary.deletions}"
+        return await event_store.put(
+            thread_id=thread_id,
+            run_id=run_id,
+            event_type=WORKSPACE_CHANGES_EVENT_TYPE,
+            category="workspace",
+            content=content,
+            metadata={WORKSPACE_CHANGES_METADATA_KEY: payload},
+        )
+    finally:
+        _cleanup_snapshot_text_cache(before)
+
+
+def _cleanup_snapshot_text_cache(snapshot: WorkspaceSnapshot) -> None:
+    if snapshot.text_cache_dir:
+        shutil.rmtree(snapshot.text_cache_dir, ignore_errors=True)

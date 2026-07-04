@@ -43,6 +43,7 @@ class FileSnapshot:
     binary: bool = False
     sensitive: bool = False
     text: str | None = None
+    text_path: str | None = None
     content_unavailable_reason: DiffUnavailableReason | None = None
 
 
@@ -50,6 +51,7 @@ class FileSnapshot:
 class WorkspaceSnapshot:
     files: dict[str, FileSnapshot] = field(default_factory=dict)
     truncated: bool = False
+    text_cache_dir: str | None = None
 
 
 @dataclass(frozen=True)

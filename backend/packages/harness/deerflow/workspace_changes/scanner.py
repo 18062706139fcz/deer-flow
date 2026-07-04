@@ -3,6 +3,7 @@ from __future__ import annotations
 import fnmatch
 import hashlib
 import os
+import shutil
 from pathlib import Path
 
 from .types import (
@@ -61,9 +62,13 @@ BINARY_EXTENSIONS = {
 SENSITIVE_PATH_PATTERNS = (
     ".env",
     ".env.*",
+    "*api_key*",
+    "*apikey*",
     "*.key",
     "*.pem",
     "*credential*",
+    "*password*",
+    "*private_key*",
     "*secret*",
     "*token*",
 )
@@ -87,8 +92,14 @@ def scan_workspace_roots(
     roots: list[WorkspaceRoot],
     *,
     limits: WorkspaceChangeLimits | None = None,
+    include_text: bool = True,
+    text_paths: set[str] | None = None,
+    text_cache_dir: Path | None = None,
 ) -> WorkspaceSnapshot:
     resolved_limits = limits or WorkspaceChangeLimits()
+    cache_dir = Path(text_cache_dir) if text_cache_dir is not None else None
+    if cache_dir is not None:
+        cache_dir.mkdir(parents=True, exist_ok=True)
     files: dict[str, FileSnapshot] = {}
     scanned = 0
     truncated = False
@@ -102,18 +113,33 @@ def scan_workspace_roots(
             for filename in sorted(filenames):
                 if scanned >= resolved_limits.max_scanned_files:
                     truncated = True
-                    return WorkspaceSnapshot(files=files, truncated=truncated)
+                    return WorkspaceSnapshot(
+                        files=files,
+                        truncated=truncated,
+                        text_cache_dir=str(cache_dir) if cache_dir is not None else None,
+                    )
 
                 host_file = Path(dirpath) / filename
                 if host_file.is_symlink() or not host_file.is_file():
                     continue
 
-                snapshot = _snapshot_file(root, host_file, limits=resolved_limits)
+                snapshot = _snapshot_file(
+                    root,
+                    host_file,
+                    limits=resolved_limits,
+                    include_text=include_text,
+                    text_paths=text_paths,
+                    text_cache_dir=cache_dir,
+                )
                 if snapshot is not None:
                     files[snapshot.path] = snapshot
                     scanned += 1
 
-    return WorkspaceSnapshot(files=files, truncated=truncated)
+    return WorkspaceSnapshot(
+        files=files,
+        truncated=truncated,
+        text_cache_dir=str(cache_dir) if cache_dir is not None else None,
+    )
 
 
 def _snapshot_file(
@@ -121,6 +147,9 @@ def _snapshot_file(
     host_file: Path,
     *,
     limits: WorkspaceChangeLimits,
+    include_text: bool,
+    text_paths: set[str] | None,
+    text_cache_dir: Path | None,
 ) -> FileSnapshot | None:
     try:
         stat = host_file.stat()
@@ -153,12 +182,19 @@ def _snapshot_file(
     binary = host_file.suffix.lower() in BINARY_EXTENSIONS or _looks_binary(sample)
     sha256 = _sha256_file(host_file) if size <= limits.max_file_bytes_for_diff else None
     text: str | None = None
+    text_path: str | None = None
     reason: DiffUnavailableReason | None = None
+
+    should_include_text = include_text and (text_paths is None or virtual_path in text_paths)
 
     if binary:
         reason = "binary"
     elif size > limits.max_file_bytes_for_diff:
         reason = "large"
+    elif not should_include_text:
+        text = None
+    elif text_cache_dir is not None:
+        text_path = str(_cache_text_file(host_file, virtual_path, text_cache_dir))
     else:
         try:
             text = host_file.read_text(encoding="utf-8")
@@ -177,8 +213,16 @@ def _snapshot_file(
         binary=binary,
         sensitive=sensitive,
         text=text,
+        text_path=text_path,
         content_unavailable_reason=reason,
     )
+
+
+def _cache_text_file(source: Path, virtual_path: str, cache_dir: Path) -> Path:
+    cache_name = hashlib.sha256(virtual_path.encode("utf-8")).hexdigest()
+    target = cache_dir / cache_name
+    shutil.copyfile(source, target)
+    return target
 
 
 def _read_sample(path: Path) -> bytes:

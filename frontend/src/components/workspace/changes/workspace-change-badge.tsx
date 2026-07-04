@@ -30,6 +30,7 @@ export function WorkspaceChangeBadge({
     threadId,
     runId,
     includeFiles: true,
+    includeDiff: false,
     enabled: Boolean(runId) && !disabled,
   });
 

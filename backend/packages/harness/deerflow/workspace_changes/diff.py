@@ -92,6 +92,17 @@ def compare_snapshots(
     )
 
 
+def get_changed_paths(before: WorkspaceSnapshot, after: WorkspaceSnapshot) -> set[str]:
+    changed: set[str] = set()
+    for path in set(before.files) | set(after.files):
+        before_file = before.files.get(path)
+        after_file = after.files.get(path)
+        if before_file and after_file and _same_file(before_file, after_file):
+            continue
+        changed.add(path)
+    return changed
+
+
 def _status(
     before_file: FileSnapshot | None,
     after_file: FileSnapshot | None,
@@ -120,8 +131,14 @@ def _build_diff(
     if reason is not None:
         return "", 0, 0, False, reason
 
-    before_text = before_file.text if before_file and before_file.text is not None else ""
-    after_text = after_file.text if after_file and after_file.text is not None else ""
+    before_text = _snapshot_text(before_file) if before_file else ""
+    after_text = _snapshot_text(after_file) if after_file else ""
+
+    if before_file is not None and before_text is None:
+        return "", 0, 0, False, None
+    if after_file is not None and after_text is None:
+        return "", 0, 0, False, None
+
     lines = list(
         difflib.unified_diff(
             before_text.splitlines(),
@@ -146,6 +163,20 @@ def _diff_unavailable_reason(
     for preferred in ("sensitive", "binary", "large"):
         if any(file.content_unavailable_reason == preferred for file in files):
             return preferred  # type: ignore[return-value]
+    return None
+
+
+def _snapshot_text(file: FileSnapshot | None) -> str | None:
+    if file is None:
+        return ""
+    if file.text is not None:
+        return file.text
+    if file.text_path:
+        try:
+            with open(file.text_path, encoding="utf-8") as cached:
+                return cached.read()
+        except (OSError, UnicodeDecodeError):
+            return None
     return None
 
 
