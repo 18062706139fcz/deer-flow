@@ -48,35 +48,35 @@ export function WorkspaceChangeBadge({
   return (
     <Sheet open={open} onOpenChange={setOpen}>
       <div className="border-border/70 bg-muted/20 mt-3 overflow-hidden rounded-xl border">
-        <div className="border-border/70 flex items-center justify-between gap-4 border-b p-3 sm:p-4">
-          <div className="flex min-w-0 items-center gap-3">
-            <div className="bg-background/80 flex size-12 shrink-0 items-center justify-center rounded-xl">
-              <FileDiffIcon className="text-muted-foreground size-5" />
+        <div className="border-border/70 flex items-center justify-between gap-3 border-b p-3">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <div className="bg-background/80 flex size-10 shrink-0 items-center justify-center rounded-lg">
+              <FileDiffIcon className="text-muted-foreground size-4" />
             </div>
             <div className="min-w-0">
-              <div className="text-foreground text-base font-semibold">
+              <div className="text-foreground text-sm font-semibold">
                 {t.workspaceChanges.editedTitle(count)}
               </div>
               <button
                 type="button"
-                className="text-muted-foreground hover:text-foreground mt-0.5 inline-flex items-center gap-1 text-sm font-medium transition-colors"
+                className="text-muted-foreground hover:text-foreground mt-0.5 inline-flex items-center gap-1 text-xs font-medium transition-colors"
                 onClick={() => setOpen(true)}
               >
                 {t.workspaceChanges.viewChanges}
-                <ArrowUpRightIcon className="size-3.5" />
+                <ArrowUpRightIcon className="size-3" />
               </button>
             </div>
           </div>
           <SummaryDelta
             additions={data.summary.additions}
             deletions={data.summary.deletions}
-            className="hidden text-sm font-semibold sm:inline-flex"
+            className="hidden text-xs font-semibold sm:inline-flex"
           />
         </div>
 
         <div className="py-1">
           {isLoading && (
-            <div className="text-muted-foreground px-3 py-3 text-sm sm:px-4">
+            <div className="text-muted-foreground px-3 py-2 text-xs">
               {t.workspaceChanges.loading}
             </div>
           )}
@@ -103,9 +103,9 @@ function WorkspaceChangeSummaryRow({ file }: { file: WorkspaceFileChange }) {
   const pathParts = formatWorkspacePath(file.path);
 
   return (
-    <div className="flex items-center justify-between gap-4 px-3 py-3 sm:px-4">
+    <div className="flex items-center justify-between gap-3 px-3 py-2.5">
       <div
-        className="min-w-0 truncate text-sm sm:text-base"
+        className="min-w-0 truncate text-sm"
         title={file.path}
       >
         {pathParts.dirname && (
@@ -116,7 +116,7 @@ function WorkspaceChangeSummaryRow({ file }: { file: WorkspaceFileChange }) {
       <SummaryDelta
         additions={file.additions}
         deletions={file.deletions}
-        className="text-sm font-semibold sm:text-base"
+        className="text-sm font-semibold"
       />
     </div>
   );
