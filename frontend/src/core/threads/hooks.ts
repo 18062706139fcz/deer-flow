@@ -2069,7 +2069,11 @@ async function deleteSidecarThreadsForParent(
       apiClient,
       parentThreadId,
     );
-  } catch {
+  } catch (err) {
+    console.warn(
+      `Failed to look up sidecar threads for parent ${parentThreadId}; skipping cascade cleanup. Orphaned sidecar threads may remain.`,
+      err,
+    );
     return [];
   }
 
@@ -2078,6 +2082,23 @@ async function deleteSidecarThreadsForParent(
       deleteThreadEverywhere(apiClient, threadId),
     ),
   );
+
+  const failedDeletions = results
+    .map((result, index) =>
+      result.status === "rejected"
+        ? { threadId: sidecarThreadIds[index], reason: result.reason }
+        : null,
+    )
+    .filter((entry): entry is { threadId: string; reason: unknown } =>
+      Boolean(entry),
+    );
+
+  if (failedDeletions.length > 0) {
+    console.warn(
+      `Failed to delete ${failedDeletions.length} sidecar thread(s) for parent ${parentThreadId}; orphaned sidecar threads may remain.`,
+      failedDeletions,
+    );
+  }
 
   return sidecarThreadIds.filter((_, index) => {
     return results[index]?.status === "fulfilled";
