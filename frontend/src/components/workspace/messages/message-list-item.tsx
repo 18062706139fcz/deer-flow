@@ -46,6 +46,7 @@ import { readReferenceMessageContexts } from "@/core/sidecar";
 import { SafeReasoningContent } from "@/core/streamdown/components";
 import { cn } from "@/lib/utils";
 
+import { WorkspaceChangeBadge } from "../changes";
 import { CitationSourcesPanel } from "../citations/citation-sources-panel";
 import { CopyButton } from "../copy-button";
 import { ReferenceAttachmentSummary } from "../sidecar/reference-attachments";
@@ -150,6 +151,7 @@ export function MessageListItem({
         message={message}
         isLoading={isLoading}
         threadId={threadId}
+        runId={runId}
         turnStartTime={turnStartTime}
       />
       {!isLoading && showCopyButton && (
@@ -220,12 +222,14 @@ function MessageContent_({
   message,
   isLoading = false,
   threadId,
+  runId,
   turnStartTime,
 }: {
   className?: string;
   message: Message;
   isLoading?: boolean;
   threadId: string;
+  runId?: string;
   turnStartTime?: number | null;
 }) {
   const rehypePlugins = useRehypeSplitWordsIntoSpans(isLoading);
@@ -413,6 +417,11 @@ function MessageContent_({
         components={components}
       />
       <CitationSourcesPanel sources={citationSources} />
+      <WorkspaceChangeBadge
+        threadId={threadId}
+        runId={runId}
+        disabled={isLoading}
+      />
     </AIElementMessageContent>
   );
 }

@@ -578,6 +578,7 @@ export function MessageList({
                           groupIndex === groupedMessages.length - 1
                         }
                         threadId={threadId}
+                        runId={(msg as { run_id?: string }).run_id}
                         showCopyButton={group.type !== "assistant"}
                         turnStartTime={
                           groupIndex === groupedMessages.length - 1
