@@ -1,0 +1,63 @@
+README.md
+  s_bee3bfd42b6e45::t_e256a71e4018da 704-705
+backend/AGENTS.md
+  s_bee3bfd42b6e45::t_8bd45bf8a3fc9f 304,308-315
+backend/app/gateway/routers/thread_runs.py
+  s_bee3bfd42b6e45::t_c02d358a14afcf 29,746-763
+backend/packages/harness/deerflow/runtime/runs/worker.py
+  s_bee3bfd42b6e45::t_f3f8a2b1844634 56-57,234-235,275-284,562-573
+backend/packages/harness/deerflow/workspace_changes/__init__.py
+  s_bee3bfd42b6e45::t_e2afa55e8359a7 1-32
+backend/packages/harness/deerflow/workspace_changes/api.py
+  s_bee3bfd42b6e45::t_6e675062abfd51 1-64
+backend/packages/harness/deerflow/workspace_changes/diff.py
+  s_bee3bfd42b6e45::t_a734b58c9471c0 1-162
+backend/packages/harness/deerflow/workspace_changes/recorder.py
+  s_bee3bfd42b6e45::t_9e86ceee122c9e 1-77
+backend/packages/harness/deerflow/workspace_changes/scanner.py
+  s_bee3bfd42b6e45::t_93fe86ac9837bc 1-208
+backend/packages/harness/deerflow/workspace_changes/types.py
+  s_bee3bfd42b6e45::t_49f4a4ef6a3beb 1-111
+backend/tests/test_workspace_changes.py
+  s_bee3bfd42b6e45::t_5cfe64dc838b04 1-352
+frontend/AGENTS.md
+  s_bee3bfd42b6e45::t_c9befe0e2207da 56
+frontend/src/components/workspace/changes/index.ts
+  s_bee3bfd42b6e45::t_2fb94b95ce7ad1 1
+frontend/src/components/workspace/changes/workspace-change-panel.tsx
+  s_bee3bfd42b6e45::t_353e614fe3919c 1-241
+frontend/src/components/workspace/messages/message-list-item.tsx
+  s_bee3bfd42b6e45::t_901b60dd2a5fb9 48,152,223,230,401-405
+frontend/src/components/workspace/messages/message-list.tsx
+  s_bee3bfd42b6e45::t_14bab3dda30a66 406
+frontend/src/core/workspace-changes/api.ts
+  s_bee3bfd42b6e45::t_cddf95a8517725 1-30
+frontend/src/core/workspace-changes/hooks.ts
+  s_bee3bfd42b6e45::t_f398736e6d17c4 1-38
+frontend/src/core/workspace-changes/index.ts
+  s_bee3bfd42b6e45::t_6a22af73aa1b33 1-4
+frontend/src/core/workspace-changes/summary.ts
+  s_bee3bfd42b6e45::t_47cf12793baa6a 1-54
+frontend/src/core/workspace-changes/types.ts
+  s_bee3bfd42b6e45::t_28d983b4c71aa3 1-41
+frontend/tests/unit/core/workspace-changes/summary.test.ts
+  s_bee3bfd42b6e45::t_6e1aaf7b106c7e 1-44
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "7970bebf7e60451df794801bc5b62c4ae2c060d9",
+  "prompts": {},
+  "sessions": {
+    "s_bee3bfd42b6e45": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f1285-1d86-7c81-bbf5-f5fafead2492",
+        "model": "unknown"
+      },
+      "human_author": "ryker <2279549769@qq.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
