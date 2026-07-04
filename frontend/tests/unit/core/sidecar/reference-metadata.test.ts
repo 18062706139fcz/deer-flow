@@ -26,7 +26,7 @@ const contexts: SidecarContext[] = [
 test("builds visible message reference metadata for selected contexts", () => {
   expect(buildReferenceMessageMetadata(contexts)).toEqual({
     referenced_message_count: 2,
-    referenced_message_ids: ["parent-ai-1"],
+    referenced_message_ids: ["parent-ai-1", "parent-ai-1"],
     referenced_message_roles: ["assistant", "assistant"],
     referenced_message_contexts: [
       {

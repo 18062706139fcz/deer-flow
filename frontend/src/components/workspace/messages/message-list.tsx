@@ -15,6 +15,7 @@ import {
   useState,
   type MouseEvent,
 } from "react";
+import { toast } from "sonner";
 
 import {
   Conversation,
@@ -77,10 +78,17 @@ export const MESSAGE_LIST_DEFAULT_PADDING_BOTTOM = 24;
 
 const LOAD_MORE_HISTORY_THROTTLE_MS = 1200;
 
+const SELECTION_TOOLBAR_MARGIN = 8;
+// Approximate rendered height of the pill (p-1 padding + h-8 button). Used only
+// to decide whether the toolbar fits above the selection; exact height isn't
+// needed because we flip below when space is tight.
+const SELECTION_TOOLBAR_ESTIMATED_HEIGHT = 48;
+
 type SelectionToolbarState = {
   context: SidecarContext;
   x: number;
   y: number;
+  placement: "top" | "bottom";
 };
 
 function LoadMoreHistoryIndicator({
@@ -338,13 +346,25 @@ export function MessageList({
         return;
       }
 
-      const container = event.currentTarget;
-      if (
-        !selection.anchorNode ||
-        !selection.focusNode ||
-        !container.contains(selection.anchorNode) ||
-        !container.contains(selection.focusNode)
-      ) {
+      if (!selection.anchorNode || !selection.focusNode) {
+        return;
+      }
+
+      // Widen containment to the shared assistant-turn container so a selection
+      // that spans multiple AI messages within the same turn still yields a
+      // toolbar (#3553). Fall back to the per-message wrapper if the turn
+      // container can't be found.
+      const turnContainer =
+        event.currentTarget.closest<HTMLElement>("[data-assistant-turn]") ??
+        event.currentTarget;
+      if (!turnContainer.contains(selection.anchorNode)) {
+        return;
+      }
+      if (!turnContainer.contains(selection.focusNode)) {
+        // The selection leaked into another turn/message; the quote would be
+        // ambiguous, so surface a hint instead of failing silently.
+        toast.info(t.sidecar.selectionCrossesMessages);
+        setSelectionToolbar(null);
         return;
       }
 
@@ -355,14 +375,31 @@ export function MessageList({
         return;
       }
 
+      // The pill is rendered with `-translate-y-full`, so anchoring it at
+      // `rect.top` moves it up by its own height. When the selection sits near
+      // the viewport top there isn't room above, so flip it below the selection
+      // to keep both actions reachable (#3551).
       const rect = selection.getRangeAt(0).getBoundingClientRect();
+      const fitsAbove =
+        rect.top -
+          SELECTION_TOOLBAR_MARGIN -
+          SELECTION_TOOLBAR_ESTIMATED_HEIGHT >=
+        0;
       setSelectionToolbar({
         context: nextContext,
         x: rect.left + rect.width / 2,
-        y: Math.max(12, rect.top - 8),
+        y: fitsAbove
+          ? rect.top - SELECTION_TOOLBAR_MARGIN
+          : rect.bottom + SELECTION_TOOLBAR_MARGIN,
+        placement: fitsAbove ? "top" : "bottom",
       });
     },
-    [enableSidecarActions, sidecar, thread.isLoading],
+    [
+      enableSidecarActions,
+      sidecar,
+      t.sidecar.selectionCrossesMessages,
+      thread.isLoading,
+    ],
   );
 
   const handleAddSelectionToConversation = useCallback(() => {
@@ -524,6 +561,9 @@ export function MessageList({
               return (
                 <div
                   key={group.id}
+                  data-assistant-turn={
+                    group.type === "assistant" ? "" : undefined
+                  }
                   className={cn(
                     "w-full",
                     group.type === "assistant" && "group/assistant-turn",
@@ -764,7 +804,12 @@ export function MessageList({
       </Conversation>
       {selectionToolbar && sidecar && (
         <div
-          className="bg-popover text-popover-foreground border-border fixed z-50 flex -translate-x-1/2 -translate-y-full items-center gap-1 rounded-full border p-1 shadow-lg"
+          className={cn(
+            "bg-popover text-popover-foreground border-border fixed z-50 flex -translate-x-1/2 items-center gap-1 rounded-full border p-1 shadow-lg",
+            selectionToolbar.placement === "bottom"
+              ? "translate-y-0"
+              : "-translate-y-full",
+          )}
           data-sidecar-selection-toolbar
           style={{ left: selectionToolbar.x, top: selectionToolbar.y }}
         >

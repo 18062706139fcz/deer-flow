@@ -34,7 +34,9 @@ type SidecarContextValue = {
   isMock?: boolean;
   sidecarThreadId: string | null;
   setSidecarThreadId: (threadId: string | null) => void;
-  restoreSidecarThread: () => Promise<string | null>;
+  restoreSidecarThread: (options?: {
+    force?: boolean;
+  }) => Promise<string | null>;
   addContextToConversation: (context: SidecarContext) => void;
   clearConversationQuotes: (ids?: number[]) => void;
   clearActiveReferences: () => void;
@@ -104,44 +106,57 @@ export function SidecarProvider({
     setConversationQuotes([]);
   }, [context, parentThreadId, updateSidecarThreadId]);
 
-  const restoreSidecarThread = useCallback(async () => {
-    if (sidecarThreadIdRef.current) {
-      return sidecarThreadIdRef.current;
-    }
+  const restoreSidecarThread = useCallback(
+    async (options?: { force?: boolean }) => {
+      // A non-forced restore trusts the cached id; a forced restore always
+      // re-queries the backend so a sidecar deleted elsewhere reconciles to
+      // null instead of pointing the trigger at a dead thread (#3555).
+      if (!options?.force && sidecarThreadIdRef.current) {
+        return sidecarThreadIdRef.current;
+      }
 
-    const restoreRequest = restoreRequestRef.current;
-    if (restoreRequest?.parentThreadId === parentThreadId) {
-      return restoreRequest.promise;
-    }
+      const restoreRequest = restoreRequestRef.current;
+      if (restoreRequest?.parentThreadId === parentThreadId) {
+        return restoreRequest.promise;
+      }
 
-    const promise = findLatestSidecarThread({
-      parentThreadId,
-      isMock,
-    })
-      .then((thread) => {
-        const threadId = thread?.thread_id ?? null;
-        if (parentThreadIdRef.current !== parentThreadId) {
-          return null;
-        }
-        if (threadId && !sidecarThreadIdRef.current) {
-          updateSidecarThreadId(threadId);
-        }
-        return threadId;
+      const promise = findLatestSidecarThread({
+        parentThreadId,
+        isMock,
       })
-      .catch(() => null)
-      .finally(() => {
-        if (restoreRequestRef.current?.promise === promise) {
-          restoreRequestRef.current = null;
-        }
-      });
+        .then((thread) => {
+          const threadId = thread?.thread_id ?? null;
+          if (parentThreadIdRef.current !== parentThreadId) {
+            return null;
+          }
+          // Reconcile the cache with the backend: adopt a freshly found
+          // thread, and on a forced refresh clear a stale id when the backend
+          // no longer has a matching sidecar thread.
+          if (threadId) {
+            if (!sidecarThreadIdRef.current) {
+              updateSidecarThreadId(threadId);
+            }
+          } else if (options?.force && sidecarThreadIdRef.current) {
+            updateSidecarThreadId(null);
+          }
+          return threadId;
+        })
+        .catch(() => null)
+        .finally(() => {
+          if (restoreRequestRef.current?.promise === promise) {
+            restoreRequestRef.current = null;
+          }
+        });
 
-    restoreRequestRef.current = {
-      parentThreadId,
-      promise,
-    };
+      restoreRequestRef.current = {
+        parentThreadId,
+        promise,
+      };
 
-    return promise;
-  }, [isMock, parentThreadId, updateSidecarThreadId]);
+      return promise;
+    },
+    [isMock, parentThreadId, updateSidecarThreadId],
+  );
 
   useEffect(() => {
     void restoreSidecarThread();

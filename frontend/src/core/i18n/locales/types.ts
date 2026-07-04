@@ -232,6 +232,7 @@ export interface Translations {
     sendFailed: string;
     noContext: string;
     continuing: string;
+    selectionCrossesMessages: string;
   };
 
   // Channels

@@ -147,6 +147,7 @@ function escapeXmlAttribute(value: string) {
 export type InputBoxSubmitOptions = {
   additionalKwargs?: Record<string, unknown>;
   additionalInputMessages?: Message[];
+  onSent?: () => void;
 };
 
 function buildHiddenConversationQuoteMessage({
@@ -186,12 +187,10 @@ function buildHiddenConversationQuoteMessage({
     additional_kwargs: {
       hide_from_ui: true,
       conversation_quote_context: true,
-      referenced_message_ids: Array.from(
-        new Set(
-          contexts
-            .map((context) => context.messageId)
-            .filter((messageId): messageId is string => Boolean(messageId)),
-        ),
+      // Keep ids/roles/count 1:1 parallel with `contexts` so consumers can zip
+      // them safely; do not dedupe ids here.
+      referenced_message_ids: contexts.map(
+        (context) => context.messageId ?? "",
       ),
       referenced_message_roles: contexts.map((context) => context.role),
       quote_context_count: contexts.length,
@@ -644,19 +643,15 @@ export function InputBox({
                 contexts: quoteContexts,
               }),
             ],
+            // Clear quotes only once the send genuinely proceeds. If the send
+            // is dropped by the in-flight guard, `onSent` never fires and the
+            // quotes stay attached so they aren't silently lost.
+            onSent: () => {
+              sidecar?.clearConversationQuotes(quoteIds);
+            },
           }
         : undefined;
-      const submit = () => {
-        const result = onSubmit?.(message, submitOptions);
-        if (quoteIds.length > 0) {
-          void Promise.resolve(result)
-            .then(() => {
-              sidecar?.clearConversationQuotes(quoteIds);
-            })
-            .catch(() => undefined);
-        }
-        return result;
-      };
+      const submit = () => onSubmit?.(message, submitOptions);
 
       // Guard against submitting before the initial model auto-selection
       // effect has flushed thread settings to storage/state.

@@ -16,7 +16,37 @@ type SidecarThreadSearchClient = {
   };
 };
 
+// The find-then-create flow is two independent round-trips with no backend
+// upsert, so a double-click on "Ask in side chat" or two callers racing on the
+// same parent thread can each create a duplicate sidecar thread. Coalesce
+// concurrent creates for the same parent behind a single in-flight promise so
+// only one thread is created; the entry is cleared once it settles.
+const inFlightCreates = new Map<string, Promise<AgentThread>>();
+
 export async function createSidecarThread({
+  parentThreadId,
+  context,
+}: {
+  parentThreadId: string;
+  context: SidecarContext | SidecarContext[];
+}): Promise<AgentThread> {
+  const inFlight = inFlightCreates.get(parentThreadId);
+  if (inFlight) {
+    return inFlight;
+  }
+
+  const request = createSidecarThreadRequest({ parentThreadId, context });
+  inFlightCreates.set(parentThreadId, request);
+  try {
+    return await request;
+  } finally {
+    if (inFlightCreates.get(parentThreadId) === request) {
+      inFlightCreates.delete(parentThreadId);
+    }
+  }
+}
+
+async function createSidecarThreadRequest({
   parentThreadId,
   context,
 }: {

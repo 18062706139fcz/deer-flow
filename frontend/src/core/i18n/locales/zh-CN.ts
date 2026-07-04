@@ -1,4 +1,4 @@
-﻿import {
+import {
   CompassIcon,
   GraduationCapIcon,
   ImageIcon,
@@ -290,6 +290,8 @@ export const zhCN: Translations = {
     sendFailed: "侧边对话发送失败。",
     noContext: "未选择上下文",
     continuing: "继续当前侧边对话",
+    selectionCrossesMessages:
+      "选区跨越了多条消息，请在同一条回复内选择要引用的文本。",
   },
 
   // Channels

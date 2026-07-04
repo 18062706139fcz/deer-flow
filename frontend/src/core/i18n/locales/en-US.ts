@@ -305,6 +305,8 @@ export const enUS: Translations = {
     sendFailed: "Failed to send side chat message.",
     noContext: "No context selected",
     continuing: "Continue in this side chat",
+    selectionCrossesMessages:
+      "Selection spans multiple messages. Select text within a single reply to quote it.",
   },
 
   // Channels

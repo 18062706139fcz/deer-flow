@@ -26,12 +26,12 @@ export function buildSidecarThreadMetadata(
     throw new Error("At least one sidecar context is required.");
   }
 
-  const referencedMessageIds = Array.from(
-    new Set(
-      contexts
-        .map((context) => context.messageId)
-        .filter((messageId): messageId is string => Boolean(messageId)),
-    ),
+  // Keep `referenced_message_ids`, `referenced_message_roles`, and
+  // `sidecar_context_count` 1:1 parallel with `contexts` so consumers can zip
+  // them safely (two fragments of the same source message would otherwise make
+  // a deduped id array shorter than the role array).
+  const referencedMessageIds = contexts.map(
+    (context) => context.messageId ?? "",
   );
 
   return {

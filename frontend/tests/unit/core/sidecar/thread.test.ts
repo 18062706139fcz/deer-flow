@@ -60,6 +60,35 @@ test("builds searchable sidecar thread metadata from multiple contexts", () => {
   });
 });
 
+test("keeps referenced ids/roles parallel when quoting one message twice", () => {
+  const metadata = buildSidecarThreadMetadata("parent-1", [
+    {
+      type: "referenced_message",
+      label: "Selected assistant text #1",
+      messageId: "msg-1",
+      role: "assistant",
+      content: "First fragment",
+    },
+    {
+      type: "referenced_message",
+      label: "Selected assistant text #1",
+      messageId: "msg-1",
+      role: "assistant",
+      content: "Second fragment",
+    },
+  ] as never);
+
+  expect(metadata.sidecar_context_count).toBe(2);
+  expect(metadata.referenced_message_ids).toEqual(["msg-1", "msg-1"]);
+  expect(metadata.referenced_message_roles).toEqual(["assistant", "assistant"]);
+  expect(metadata.referenced_message_ids).toHaveLength(
+    metadata.referenced_message_roles.length,
+  );
+  expect(metadata.referenced_message_ids).toHaveLength(
+    metadata.sidecar_context_count,
+  );
+});
+
 test("identifies sidecar threads and hides them from primary thread lists", () => {
   const sidecar = {
     thread_id: "sidecar-1",

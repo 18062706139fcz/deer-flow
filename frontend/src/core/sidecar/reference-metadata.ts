@@ -21,15 +21,13 @@ function isSidecarContextRole(value: unknown): value is SidecarContextRole {
 export function buildReferenceMessageMetadata(
   contexts: SidecarContext[],
 ): ReferenceMessageMetadata {
+  // `referenced_message_count`, `referenced_message_ids`, and
+  // `referenced_message_roles` are kept 1:1 parallel with `contexts` so
+  // consumers can safely zip them. Do not dedupe ids here: two fragments of the
+  // same source message would otherwise leave the arrays non-parallel.
   return {
     referenced_message_count: contexts.length,
-    referenced_message_ids: Array.from(
-      new Set(
-        contexts
-          .map((context) => context.messageId)
-          .filter((messageId): messageId is string => Boolean(messageId)),
-      ),
-    ),
+    referenced_message_ids: contexts.map((context) => context.messageId ?? ""),
     referenced_message_roles: contexts.map((context) => context.role),
     referenced_message_contexts: contexts.map((context) => ({
       label: context.label,

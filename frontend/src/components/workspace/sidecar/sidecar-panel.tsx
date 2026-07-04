@@ -326,6 +326,7 @@ export function SidecarPanel({ className }: { className?: string }) {
       threadId: string,
       message: PromptInputMessage,
       references: SidecarReference[],
+      onSent?: () => void,
     ) => {
       const contexts = references.map((reference) => reference.context);
       const parentConversation = buildParentConversationContext(
@@ -350,6 +351,7 @@ export function SidecarPanel({ className }: { className?: string }) {
             ? buildReferenceMessageMetadata(contexts)
             : {}),
         },
+        onSent,
       });
     },
     [parentThread.messages, sendMessage, sidecar.parentThreadId],
@@ -366,17 +368,18 @@ export function SidecarPanel({ className }: { className?: string }) {
       sidecar.sidecarThreadId,
       nextSubmit.message,
       nextSubmit.references,
-    )
-      .then(() => {
+      // Clear references only once the send genuinely proceeds; a send dropped
+      // by the in-flight guard leaves them attached instead of losing them.
+      () => {
         if (nextSubmit.references.length > 0) {
           sidecar.clearActiveReferences();
         }
-      })
-      .catch((error) => {
-        toast.error(
-          error instanceof Error ? error.message : t.sidecar.sendFailed,
-        );
-      });
+      },
+    ).catch((error) => {
+      toast.error(
+        error instanceof Error ? error.message : t.sidecar.sendFailed,
+      );
+    });
   }, [
     queuedSubmit,
     sidecar,
@@ -411,10 +414,12 @@ export function SidecarPanel({ className }: { className?: string }) {
           sidecar.sidecarThreadId,
           message,
           pendingReferences,
+          () => {
+            if (pendingReferences.length > 0) {
+              sidecar.clearActiveReferences();
+            }
+          },
         );
-        if (pendingReferences.length > 0) {
-          sidecar.clearActiveReferences();
-        }
       } catch (error) {
         toast.error(
           error instanceof Error ? error.message : t.sidecar.sendFailed,

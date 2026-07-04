@@ -61,6 +61,13 @@ export type ThreadStreamOptions = {
 type SendMessageOptions = {
   additionalKwargs?: Record<string, unknown>;
   additionalInputMessages?: Message[];
+  /**
+   * Invoked exactly once when the send passes the in-flight guard and is
+   * genuinely dispatched. It never fires on the early-return path, so callers
+   * can safely perform one-time cleanup (e.g. clearing quoted references)
+   * without losing state when a concurrent send is dropped.
+   */
+  onSent?: () => void;
 };
 
 type ThreadDeleteClient = {
@@ -1209,6 +1216,10 @@ export function useThreadStream({
         return;
       }
       sendInFlightRef.current = true;
+
+      // The send has genuinely proceeded past the in-flight guard, so callers
+      // can now run one-time cleanup that must not fire on the dropped path.
+      options?.onSent?.();
 
       const text = message.text.trim();
 

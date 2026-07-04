@@ -839,7 +839,7 @@ test.describe("Side chat", () => {
         referenced_message_id: "parent-ai-1",
         referenced_message_role: "assistant",
         sidecar_context_count: 2,
-        referenced_message_ids: ["parent-ai-1"],
+        referenced_message_ids: ["parent-ai-1", "parent-ai-1"],
         referenced_message_roles: ["assistant", "assistant"],
       });
 
@@ -894,7 +894,7 @@ test.describe("Side chat", () => {
     expect(messages[1]?.additional_kwargs).toMatchObject({
       sidecar_visible_message: true,
       referenced_message_count: 2,
-      referenced_message_ids: ["parent-ai-1"],
+      referenced_message_ids: ["parent-ai-1", "parent-ai-1"],
       referenced_message_roles: ["assistant", "assistant"],
       referenced_message_contexts: [
         {
@@ -1189,5 +1189,82 @@ test.describe("Side chat", () => {
     await expect(page.getByTestId("sidecar-panel")).toBeHidden();
     await page.waitForTimeout(350);
     await openSidecarAndExpectNoAnimatedScroll(page);
+  });
+
+  test("self-heals the trigger when the sidecar thread is deleted elsewhere", async ({
+    page,
+  }) => {
+    mockLangGraphAPI(page, {
+      threads: [
+        {
+          thread_id: MOCK_THREAD_ID,
+          title: "Main conversation",
+          messages: [
+            {
+              type: "human",
+              id: "parent-human-1",
+              content: [{ type: "text", text: "Plan the feature." }],
+            },
+            {
+              type: "ai",
+              id: "parent-ai-1",
+              content: "Build it as a side conversation.",
+            },
+          ],
+        },
+        {
+          thread_id: MOCK_SIDECAR_THREAD_ID,
+          title: "Restored side chat",
+          updated_at: "2025-01-01T00:00:01Z",
+          metadata: {
+            deerflow_sidecar: true,
+            parent_thread_id: MOCK_THREAD_ID,
+            sidecar_context_type: "referenced_message",
+            sidecar_context_label: "Selected assistant text #2",
+            sidecar_context_count: 1,
+            referenced_message_id: "parent-ai-1",
+            referenced_message_ids: ["parent-ai-1"],
+            referenced_message_role: "assistant",
+            referenced_message_roles: ["assistant"],
+          },
+          messages: [
+            {
+              type: "ai",
+              id: "side-ai-1",
+              content: "Restored side answer.",
+            },
+          ],
+        },
+      ],
+    });
+
+    await page.goto(`/workspace/chats/${MOCK_THREAD_ID}`);
+    await expect(
+      page.getByText("Build it as a side conversation."),
+    ).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId("sidecar-header-trigger")).toBeVisible({
+      timeout: 10_000,
+    });
+
+    // Simulate the sidecar thread being deleted from another surface: the
+    // backend search now returns no matching sidecar thread.
+    await page.route("**/api/langgraph/threads/search", (route) => {
+      if (route.request().method() !== "POST") {
+        return route.fallback();
+      }
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([]),
+      });
+    });
+
+    // Clicking the (still-cached) trigger forces a re-query; because the thread
+    // is gone the trigger hides itself instead of opening a dead thread (#3555).
+    await page.getByTestId("sidecar-header-trigger").click();
+    await expect(page.getByTestId("sidecar-panel")).toBeHidden();
+    await expect(page.getByTestId("sidecar-header-trigger")).toBeHidden({
+      timeout: 10_000,
+    });
   });
 });
