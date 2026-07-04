@@ -1,0 +1,21 @@
+backend/packages/harness/deerflow/runtime/runs/worker.py
+  s_bee3bfd42b6e45::t_868da323fa2d2c 52
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "68e5db2ebb13431e8157356aca80c20b943d1410",
+  "prompts": {},
+  "sessions": {
+    "s_bee3bfd42b6e45": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f1285-1d86-7c81-bbf5-f5fafead2492",
+        "model": "unknown"
+      },
+      "human_author": "ryker <2279549769@qq.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
