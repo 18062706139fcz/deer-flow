@@ -1,0 +1,23 @@
+frontend/src/components/workspace/changes/workspace-change-badge.tsx
+  s_d6e78a9e411034::t_0e2c99d4bdb862 33
+frontend/tests/e2e/workspace-changes.spec.ts
+  s_d6e78a9e411034::t_19cf3c1657cfaf 12,41,105,116
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "fd336b5d9b3c4a5d95d3f9bf2dd647d8908ca9bb",
+  "prompts": {},
+  "sessions": {
+    "s_d6e78a9e411034": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f2d9a-6cda-7eb3-9c24-0ce5c4d41474",
+        "model": "unknown"
+      },
+      "human_author": "ryker <2279549769@qq.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
