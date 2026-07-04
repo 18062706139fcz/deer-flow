@@ -1,0 +1,125 @@
+frontend/src/app/workspace/chats/[thread_id]/page.tsx
+  s_404fc978333748::t_525ff01b1fb642 210-212 gitai:{"mixed_line_ranges":[],"operations":[{"operation_id":"6a49261a5390ac447b498fa5","tool_type":"agent","tool_id":"Edit","line_ranges":[{"Range":[210,212]}]}]}
+frontend/playwright.config.ts
+  s_404fc978333748::t_c21609985ada86 31-32 gitai:{"mixed_line_ranges":[],"operations":[{"operation_id":"6a4925985390ac447b498f96","tool_type":"agent","tool_id":"Edit","line_ranges":[{"Range":[31,32]}]}]}
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "8830fda9a275034c586cbcd8d2bac8b7d702d761",
+  "prompts": {},
+  "sessions": {
+    "s_404fc978333748": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a48c5555390ac447b498c2c",
+        "model": "openrouter-3o__dev"
+      },
+      "human_author": "ryker <2279549769@qq.com>"
+    }
+  },
+  "attestation_metadata": {
+    "frontend/playwright.config.ts": [
+      {
+        "hash": "s_404fc978333748::t_c21609985ada86",
+        "line_ranges": [
+          {
+            "Range": [
+              31,
+              32
+            ]
+          }
+        ],
+        "mixed_line_ranges": [],
+        "operations": [
+          {
+            "operation_id": "6a4925985390ac447b498f96",
+            "tool_type": "agent",
+            "tool_id": "Edit",
+            "line_ranges": [
+              {
+                "Range": [
+                  31,
+                  32
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "frontend/src/app/workspace/chats/[thread_id]/page.tsx": [
+      {
+        "hash": "s_404fc978333748::t_525ff01b1fb642",
+        "line_ranges": [
+          {
+            "Range": [
+              210,
+              212
+            ]
+          }
+        ],
+        "mixed_line_ranges": [],
+        "operations": [
+          {
+            "operation_id": "6a49261a5390ac447b498fa5",
+            "tool_type": "agent",
+            "tool_id": "Edit",
+            "line_ranges": [
+              {
+                "Range": [
+                  210,
+                  212
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "remote_transcripts": {
+    "s_404fc978333748": {
+      "tool": "trae",
+      "conversation_id": "6a48c5555390ac447b498c2c",
+      "session_id": "6a48c5555390ac447b498c2c",
+      "status": "remote_only",
+      "message": "Remote transcript resolution is not implemented yet for TRAE prompts."
+    },
+    "s_404fc978333748::t_3f388c445f4d1f": {
+      "tool": "trae",
+      "conversation_id": "6a48c5555390ac447b498c2c",
+      "session_id": "6a48c5555390ac447b498c2c",
+      "status": "remote_only",
+      "message": "Remote transcript resolution is not implemented yet for TRAE prompts."
+    },
+    "s_404fc978333748::t_525ff01b1fb642": {
+      "tool": "trae",
+      "conversation_id": "6a48c5555390ac447b498c2c",
+      "session_id": "6a48c5555390ac447b498c2c",
+      "status": "remote_only",
+      "message": "Remote transcript resolution is not implemented yet for TRAE prompts."
+    },
+    "s_404fc978333748::t_aafe36a02fb48c": {
+      "tool": "trae",
+      "conversation_id": "6a48c5555390ac447b498c2c",
+      "session_id": "6a48c5555390ac447b498c2c",
+      "status": "remote_only",
+      "message": "Remote transcript resolution is not implemented yet for TRAE prompts."
+    },
+    "s_404fc978333748::t_c21609985ada86": {
+      "tool": "trae",
+      "conversation_id": "6a48c5555390ac447b498c2c",
+      "session_id": "6a48c5555390ac447b498c2c",
+      "status": "remote_only",
+      "message": "Remote transcript resolution is not implemented yet for TRAE prompts."
+    },
+    "s_404fc978333748::t_e68c43c6227669": {
+      "tool": "trae",
+      "conversation_id": "6a48c5555390ac447b498c2c",
+      "session_id": "6a48c5555390ac447b498c2c",
+      "status": "remote_only",
+      "message": "Remote transcript resolution is not implemented yet for TRAE prompts."
+    }
+  }
+}
