@@ -100,6 +100,9 @@ test.describe("Workspace changes", () => {
     await expect(page.getByText("Edited 2 files")).toBeVisible({
       timeout: 15_000,
     });
+    // The human prompt carries the same run_id, but the badge must only render
+    // under the assistant turn — never under the user's message.
+    await expect(page.getByText("Edited 2 files")).toHaveCount(1);
     await expect(page.getByText("outputs/report.md")).toBeVisible();
     await expect(page.getByText("notes.txt")).toBeVisible();
     expect(includeDiffValues).toContain("false");
