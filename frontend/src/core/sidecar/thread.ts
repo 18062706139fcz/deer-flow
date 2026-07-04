@@ -1,9 +1,6 @@
 import type { AgentThread } from "@/core/threads";
 
-import {
-  normalizeSidecarContexts,
-  type SidecarContext,
-} from "./context";
+import { normalizeSidecarContexts, type SidecarContext } from "./context";
 
 export const SIDECAR_METADATA_KEY = "deerflow_sidecar";
 

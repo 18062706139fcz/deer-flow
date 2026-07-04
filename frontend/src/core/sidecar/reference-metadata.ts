@@ -1,7 +1,4 @@
-import type {
-  SidecarContext,
-  SidecarContextRole,
-} from "./context";
+import type { SidecarContext, SidecarContextRole } from "./context";
 
 export type ReferenceMessageContextMetadata = {
   label: string;

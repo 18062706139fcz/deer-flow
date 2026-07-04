@@ -49,7 +49,10 @@ import {
   buildSidecarContextPrompt,
 } from "@/core/sidecar";
 import { createSidecarThread } from "@/core/sidecar/api";
-import { useThreadStream, type ThreadStreamOptions } from "@/core/threads/hooks";
+import {
+  useThreadStream,
+  type ThreadStreamOptions,
+} from "@/core/threads/hooks";
 import {
   formatUploadSize,
   useUploadLimits,
@@ -214,10 +217,7 @@ export function SidecarPanel({ className }: { className?: string }) {
     );
     const modeChanged = sidecar.context.mode !== nextMode;
 
-    if (
-      sidecar.context.model_name === nextModelName &&
-      !modeChanged
-    ) {
+    if (sidecar.context.model_name === nextModelName && !modeChanged) {
       return;
     }
 
@@ -294,29 +294,32 @@ export function SidecarPanel({ className }: { className?: string }) {
     [sidecar, supportThinking],
   );
 
-  const ensureSidecarThread = useCallback(async (references: SidecarReference[]) => {
-    if (sidecar.sidecarThreadId) {
-      return sidecar.sidecarThreadId;
-    }
-    const restoredThreadId = await sidecar.restoreSidecarThread();
-    if (restoredThreadId) {
-      return restoredThreadId;
-    }
-    if (references.length === 0) {
-      throw new Error(t.sidecar.noContext);
-    }
-    setCreatingThread(true);
-    try {
-      const created = await createSidecarThread({
-        parentThreadId: sidecar.parentThreadId,
-        context: references.map((reference) => reference.context),
-      });
-      sidecar.setSidecarThreadId(created.thread_id);
-      return created.thread_id;
-    } finally {
-      setCreatingThread(false);
-    }
-  }, [sidecar, t.sidecar.noContext]);
+  const ensureSidecarThread = useCallback(
+    async (references: SidecarReference[]) => {
+      if (sidecar.sidecarThreadId) {
+        return sidecar.sidecarThreadId;
+      }
+      const restoredThreadId = await sidecar.restoreSidecarThread();
+      if (restoredThreadId) {
+        return restoredThreadId;
+      }
+      if (references.length === 0) {
+        throw new Error(t.sidecar.noContext);
+      }
+      setCreatingThread(true);
+      try {
+        const created = await createSidecarThread({
+          parentThreadId: sidecar.parentThreadId,
+          context: references.map((reference) => reference.context),
+        });
+        sidecar.setSidecarThreadId(created.thread_id);
+        return created.thread_id;
+      } finally {
+        setCreatingThread(false);
+      }
+    },
+    [sidecar, t.sidecar.noContext],
+  );
 
   const submitToSidecarThread = useCallback(
     async (
@@ -353,11 +356,7 @@ export function SidecarPanel({ className }: { className?: string }) {
   );
 
   useEffect(() => {
-    if (
-      !queuedSubmit ||
-      !sidecar.sidecarThreadId ||
-      thread.isLoading
-    ) {
+    if (!queuedSubmit || !sidecar.sidecarThreadId || thread.isLoading) {
       return;
     }
 
@@ -528,7 +527,7 @@ export function SidecarPanel({ className }: { className?: string }) {
               </PromptInputTools>
               <PromptInputTools className="min-w-0 justify-end">
                 <SidecarModelSelector
-                  className="@max-[240px]:hidden max-w-40 min-w-0 sm:max-w-56"
+                  className="max-w-40 min-w-0 sm:max-w-56 @max-[240px]:hidden"
                   context={sidecar.context}
                   models={models}
                   open={modelDialogOpen}
@@ -601,7 +600,7 @@ function SidecarModeMenu({
   return (
     <PromptInputActionMenu>
       <ModeHoverGuide mode={mode}>
-        <PromptInputActionMenuTrigger className="min-w-0 max-w-20 gap-1! px-2!">
+        <PromptInputActionMenuTrigger className="max-w-20 min-w-0 gap-1! px-2!">
           <div>
             {mode === "flash" && <ZapIcon className="size-3" />}
             {mode === "thinking" && <LightbulbIcon className="size-3" />}
@@ -704,7 +703,9 @@ function SidecarModeMenu({
                 />
                 {t.inputBox.proMode}
               </div>
-              <div className="pl-7 text-xs">{t.inputBox.proModeDescription}</div>
+              <div className="pl-7 text-xs">
+                {t.inputBox.proModeDescription}
+              </div>
             </div>
             {mode === "pro" ? (
               <CheckIcon className="ml-auto size-4" />

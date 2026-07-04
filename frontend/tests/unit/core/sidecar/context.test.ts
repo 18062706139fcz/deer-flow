@@ -83,26 +83,24 @@ test("renders hidden sidecar context prompt around multiple quoted materials", (
 });
 
 test("builds compact parent conversation context from visible messages", () => {
-  const parentContext = buildParentConversationContext(
-    [
-      {
-        type: "human",
-        id: "parent-human-1",
-        content: "Plan the feature.",
-      },
-      {
-        type: "human",
-        id: "hidden-context",
-        content: "Hidden implementation note.",
-        additional_kwargs: { hide_from_ui: true },
-      },
-      {
-        type: "ai",
-        id: "parent-ai-1",
-        content: "Use a side conversation with cited snippets.",
-      },
-    ] as never,
-  );
+  const parentContext = buildParentConversationContext([
+    {
+      type: "human",
+      id: "parent-human-1",
+      content: "Plan the feature.",
+    },
+    {
+      type: "human",
+      id: "hidden-context",
+      content: "Hidden implementation note.",
+      additional_kwargs: { hide_from_ui: true },
+    },
+    {
+      type: "ai",
+      id: "parent-ai-1",
+      content: "Use a side conversation with cited snippets.",
+    },
+  ] as never);
 
   expect(parentContext).toEqual([
     {

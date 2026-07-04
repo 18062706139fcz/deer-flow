@@ -62,9 +62,9 @@ export function SidecarProvider({
   isMock?: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const [activeReferences, setActiveReferences] = useState<
-    SidecarReference[]
-  >([]);
+  const [activeReferences, setActiveReferences] = useState<SidecarReference[]>(
+    [],
+  );
   const [sidecarThreadId, setSidecarThreadId] = useState<string | null>(null);
   const [sidecarContext, setSidecarContext] =
     useState<ThreadStreamOptions["context"]>(context);
@@ -123,10 +123,7 @@ export function SidecarProvider({
         if (parentThreadIdRef.current !== parentThreadId) {
           return null;
         }
-        if (
-          threadId &&
-          !sidecarThreadIdRef.current
-        ) {
+        if (threadId && !sidecarThreadIdRef.current) {
           updateSidecarThreadId(threadId);
         }
         return threadId;
@@ -150,19 +147,23 @@ export function SidecarProvider({
     void restoreSidecarThread();
   }, [restoreSidecarThread]);
 
-  const openContext = useCallback((nextContext: SidecarContext) => {
-    const nextReference = createReference(nextContext);
+  const openContext = useCallback(
+    (nextContext: SidecarContext) => {
+      const nextReference = createReference(nextContext);
 
-    setActiveReferences((references) =>
-      getNextSidecarOpenState({
-        open,
-        sidecarThreadId,
-        activeReferences: references,
-        nextReference,
-      }).activeReferences,
-    );
-    setOpen(true);
-  }, [createReference, open, sidecarThreadId]);
+      setActiveReferences(
+        (references) =>
+          getNextSidecarOpenState({
+            open,
+            sidecarThreadId,
+            activeReferences: references,
+            nextReference,
+          }).activeReferences,
+      );
+      setOpen(true);
+    },
+    [createReference, open, sidecarThreadId],
+  );
 
   const addContextToConversation = useCallback(
     (nextContext: SidecarContext) => {

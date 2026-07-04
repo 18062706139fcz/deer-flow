@@ -31,40 +31,40 @@ async function selectTextOnPage(
   text: string,
   scopeTestId = "main-message-list",
 ) {
-  await page.evaluate(({ targetText, scopeTestId }) => {
-    window.getSelection()?.removeAllRanges();
-    const root =
-      document.querySelector(`[data-testid="${scopeTestId}"]`) ??
-      document.body;
-    const walker = document.createTreeWalker(
-      root,
-      NodeFilter.SHOW_TEXT,
-    );
-    let node = walker.nextNode();
-    while (node) {
-      const value = node.textContent ?? "";
-      const start = value.indexOf(targetText);
-      if (start >= 0) {
-        const range = document.createRange();
-        range.setStart(node, start);
-        range.setEnd(node, start + targetText.length);
-        const selection = window.getSelection();
-        selection?.removeAllRanges();
-        selection?.addRange(range);
-        const rect = range.getBoundingClientRect();
-        node.parentElement?.dispatchEvent(
-          new MouseEvent("mouseup", {
-            bubbles: true,
-            clientX: rect.left + rect.width / 2,
-            clientY: rect.top + rect.height / 2,
-          }),
-        );
-        return;
+  await page.evaluate(
+    ({ targetText, scopeTestId }) => {
+      window.getSelection()?.removeAllRanges();
+      const root =
+        document.querySelector(`[data-testid="${scopeTestId}"]`) ??
+        document.body;
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      let node = walker.nextNode();
+      while (node) {
+        const value = node.textContent ?? "";
+        const start = value.indexOf(targetText);
+        if (start >= 0) {
+          const range = document.createRange();
+          range.setStart(node, start);
+          range.setEnd(node, start + targetText.length);
+          const selection = window.getSelection();
+          selection?.removeAllRanges();
+          selection?.addRange(range);
+          const rect = range.getBoundingClientRect();
+          node.parentElement?.dispatchEvent(
+            new MouseEvent("mouseup", {
+              bubbles: true,
+              clientX: rect.left + rect.width / 2,
+              clientY: rect.top + rect.height / 2,
+            }),
+          );
+          return;
+        }
+        node = walker.nextNode();
       }
-      node = walker.nextNode();
-    }
-    throw new Error(`Unable to find text: ${targetText}`);
-  }, { targetText: text, scopeTestId });
+      throw new Error(`Unable to find text: ${targetText}`);
+    },
+    { targetText: text, scopeTestId },
+  );
   await expect(page.locator("[data-sidecar-selection-toolbar]")).toBeVisible();
 }
 
@@ -75,9 +75,7 @@ async function clickSelectionToolbarButton(page: Page, label: string) {
         "[data-sidecar-selection-toolbar] button",
       ),
     ).find((candidate) =>
-      candidate.textContent
-        ?.toLowerCase()
-        .includes(buttonLabel.toLowerCase()),
+      candidate.textContent?.toLowerCase().includes(buttonLabel.toLowerCase()),
     );
     if (button?.offsetParent == null) {
       return false;
@@ -391,7 +389,8 @@ test.describe("Side chat", () => {
       {
         type: "ai",
         id: "parent-ai-1",
-        content: "Build it as a side conversation. Keep the cited snippets compact.",
+        content:
+          "Build it as a side conversation. Keep the cited snippets compact.",
       },
     ];
     let createdThreadBody: { metadata?: Record<string, unknown> } | undefined;
@@ -561,10 +560,7 @@ test.describe("Side chat", () => {
               run_id: `run-${MOCK_THREAD_ID}`,
               content: message,
               metadata: { caller: "lead_agent" },
-              created_at: `2025-01-01T00:00:${String(index).padStart(
-                2,
-                "0",
-              )}Z`,
+              created_at: `2025-01-01T00:00:${String(index).padStart(2, "0")}Z`,
             })),
             hasMore: false,
           }),
@@ -662,10 +658,7 @@ test.describe("Side chat", () => {
               run_id: `run-${MOCK_SIDECAR_THREAD_ID}`,
               content: message,
               metadata: { caller: "lead_agent" },
-              created_at: `2025-01-01T00:00:${String(index).padStart(
-                2,
-                "0",
-              )}Z`,
+              created_at: `2025-01-01T00:00:${String(index).padStart(2, "0")}Z`,
             })),
             hasMore: false,
           }),
@@ -718,10 +711,7 @@ test.describe("Side chat", () => {
       "**/api/langgraph/threads/*/runs/stream",
       fulfillSidecarRunStream,
     );
-    await page.route(
-      "**/api/langgraph/runs/stream",
-      fulfillSidecarRunStream,
-    );
+    await page.route("**/api/langgraph/runs/stream", fulfillSidecarRunStream);
     await page.route("**/runs/stream", fulfillSidecarRunStream);
 
     await page.goto(`/workspace/chats/${MOCK_THREAD_ID}`);
@@ -935,14 +925,14 @@ test.describe("Side chat", () => {
     await expect(page.getByTestId("sidecar-header-trigger")).toBeVisible();
     await page.getByTestId("sidecar-header-trigger").click();
     await expect(page.getByTestId("sidecar-panel")).toBeVisible();
-    await expect(page.getByTestId("sidecar-header-trigger")).toHaveAccessibleName(
-      "Close side chat",
-    );
+    await expect(
+      page.getByTestId("sidecar-header-trigger"),
+    ).toHaveAccessibleName("Close side chat");
     await page.getByTestId("sidecar-header-trigger").click();
     await expect(page.getByTestId("sidecar-panel")).toBeHidden();
-    await expect(page.getByTestId("sidecar-header-trigger")).toHaveAccessibleName(
-      "Open side chat",
-    );
+    await expect(
+      page.getByTestId("sidecar-header-trigger"),
+    ).toHaveAccessibleName("Open side chat");
     await page.getByTestId("sidecar-header-trigger").click();
     await expect(page.getByTestId("sidecar-panel")).toBeVisible();
 
@@ -986,10 +976,7 @@ test.describe("Side chat", () => {
     await sidecarInput.press("Enter");
     await expect
       .poll(
-        () =>
-          textFromContent(
-            streamBody?.input?.messages?.at(1)?.content,
-          ),
+        () => textFromContent(streamBody?.input?.messages?.at(1)?.content),
         { timeout: 10_000 },
       )
       .toBe("What did the side answer say?");
@@ -1020,10 +1007,7 @@ test.describe("Side chat", () => {
     await sidecarInput.press("Enter");
     await expect
       .poll(
-        () =>
-          textFromContent(
-            streamBody?.input?.messages?.at(1)?.content,
-          ),
+        () => textFromContent(streamBody?.input?.messages?.at(1)?.content),
         { timeout: 10_000 },
       )
       .toBe("Can you continue with the left context?");
@@ -1123,9 +1107,9 @@ test.describe("Side chat", () => {
     await expect(
       page.getByText("What tradeoffs should we consider?"),
     ).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByTestId("message-reference-attachment")).toContainText(
-      "2 selected text fragments",
-    );
+    await expect(
+      page.getByTestId("message-reference-attachment"),
+    ).toContainText("2 selected text fragments");
     await expect(page.getByTestId("message-reference-attachment")).toHaveClass(
       /max-w-\[min\(18rem,100%\)\]/,
     );

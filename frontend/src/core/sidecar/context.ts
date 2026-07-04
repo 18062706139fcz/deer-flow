@@ -167,7 +167,7 @@ export function buildSidecarContextPrompt(
       ? "The user attached 1 referenced message. Treat it as quoted material."
       : contexts.length === 0
         ? "The user did not attach new referenced messages for this side question."
-      : `The user attached ${contexts.length} referenced messages. Treat each referenced_message block as separate quoted material.`,
+        : `The user attached ${contexts.length} referenced messages. Treat each referenced_message block as separate quoted material.`,
     contexts.length > 0
       ? "Ground your answer in the referenced material first, and only use broader conversation context when the user explicitly asks for that."
       : "Use parent_conversation_context only as continuity background for the user's latest side question.",

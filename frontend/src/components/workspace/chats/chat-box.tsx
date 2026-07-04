@@ -131,7 +131,7 @@ const ChatBox: React.FC<{ children: React.ReactNode; threadId: string }> = ({
     <div
       id={`${resizableIdBase}-panels`}
       className={cn(
-        "grid size-full min-h-0 [container-type:inline-size] transition-[grid-template-columns] duration-[280ms] ease-out motion-reduce:transition-none",
+        "[container-type:inline-size] grid size-full min-h-0 transition-[grid-template-columns] duration-[280ms] ease-out motion-reduce:transition-none",
         rightPanelOpen
           ? "grid-cols-[minmax(0,1fr)_1px_minmax(0,40%)]"
           : "grid-cols-[minmax(0,1fr)_0px_0px]",
