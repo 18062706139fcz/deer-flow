@@ -98,11 +98,7 @@ def scan_workspace_roots(
             continue
 
         for dirpath, dirnames, filenames in os.walk(root.host_path, followlinks=False):
-            dirnames[:] = [
-                dirname
-                for dirname in dirnames
-                if dirname not in EXCLUDED_DIR_NAMES and not (Path(dirpath) / dirname).is_symlink()
-            ]
+            dirnames[:] = [dirname for dirname in dirnames if dirname not in EXCLUDED_DIR_NAMES and not (Path(dirpath) / dirname).is_symlink()]
             for filename in sorted(filenames):
                 if scanned >= resolved_limits.max_scanned_files:
                     truncated = True

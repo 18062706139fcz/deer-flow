@@ -94,13 +94,7 @@ class WorkspaceChangeResult:
     version: int = 1
 
     def has_changes(self) -> bool:
-        return bool(
-            self.summary.created
-            or self.summary.modified
-            or self.summary.deleted
-            or self.summary.additions
-            or self.summary.deletions
-        )
+        return bool(self.summary.created or self.summary.modified or self.summary.deleted or self.summary.additions or self.summary.deletions)
 
     def to_dict(self) -> dict:
         return {
