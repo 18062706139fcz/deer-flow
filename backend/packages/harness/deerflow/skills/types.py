@@ -12,10 +12,14 @@ class SkillCategory(StrEnum):
 
     - ``PUBLIC``: built-in skill bundled with the platform, read-only.
     - ``CUSTOM``: user-authored skill that can be edited or deleted.
+    - ``LEGACY``: global custom skill from before user-isolation migration,
+      presented as read-only (visible but not editable/deletable). These
+      skills are mounted at ``/mnt/skills/legacy/<name>/`` in the sandbox.
     """
 
     PUBLIC = "public"
     CUSTOM = "custom"
+    LEGACY = "legacy"
 
 
 @dataclass(frozen=True)
@@ -31,7 +35,7 @@ class SecretRequirement:
     optional: bool = False
 
 
-@dataclass
+@dataclass(frozen=True)
 class Skill:
     """Represents a skill with its metadata and file path"""
 
@@ -42,9 +46,9 @@ class Skill:
     skill_file: Path
     relative_path: Path  # Relative path from category root to skill directory
     category: SkillCategory  # 'public' or 'custom'
-    allowed_tools: list[str] | None = None
+    allowed_tools: tuple[str, ...] | None = None
     enabled: bool = False  # Whether this skill is enabled
-    required_secrets: list[SecretRequirement] = field(default_factory=list)
+    required_secrets: tuple[SecretRequirement, ...] = field(default_factory=tuple)
 
     @property
     def skill_path(self) -> str:

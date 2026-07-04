@@ -26,6 +26,7 @@ import {
   SidecarProvider,
   SidecarTrigger,
 } from "@/components/workspace/sidecar";
+import { ThreadScheduledTasksLink } from "@/components/workspace/thread-scheduled-tasks-link";
 import { ThreadTitle } from "@/components/workspace/thread-title";
 import { TodoList } from "@/components/workspace/todo-list";
 import { TokenUsageIndicator } from "@/components/workspace/token-usage-indicator";
@@ -206,6 +207,9 @@ export default function ChatPage() {
                 <ThreadTitle threadId={threadId} thread={thread} />
               </div>
               <div className="flex shrink-0 items-center gap-2">
+                {!isNewThread && (
+                  <ThreadScheduledTasksLink threadId={threadId} />
+                )}
                 <TokenUsageIndicator
                   threadId={isNewThread ? undefined : threadId}
                   backendUsage={backendTokenUsage}
