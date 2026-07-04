@@ -287,6 +287,26 @@ export const enUS: Translations = {
     loadOlderChats: "Load older chats",
   },
 
+  // Sidecar
+  sidecar: {
+    title: "Side chat",
+    open: "Open side chat",
+    close: "Close side chat",
+    addToConversation: "Add to conversation",
+    askInSideChat: "Ask in side chat",
+    reference: "Reference",
+    selectedTextFragment: "{count} selected text fragment",
+    selectedTextFragments: "{count} selected text fragments",
+    clearReferences: "Clear selected references",
+    emptyTitle: "Ask a follow-up",
+    emptyDescription: "Ask a follow-up grounded in the referenced text.",
+    placeholder: "Ask a deeper follow-up...",
+    send: "Send",
+    sendFailed: "Failed to send side chat message.",
+    noContext: "No context selected",
+    continuing: "Continue in this side chat",
+  },
+
   // Channels
   channels: {
     title: "Channels",
