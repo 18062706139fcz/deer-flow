@@ -1,0 +1,21 @@
+backend/app/channels/manager.py
+  s_a08d78d47f6a2e::t_3a417d573e40d0 30,89,1317
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "e9bd0e56521beb081027b156cd8a15af8c3f2e77",
+  "prompts": {},
+  "sessions": {
+    "s_a08d78d47f6a2e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f28a3-4426-7913-bdbc-569a6cd4391a",
+        "model": "unknown"
+      },
+      "human_author": "ryker <2279549769@qq.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
