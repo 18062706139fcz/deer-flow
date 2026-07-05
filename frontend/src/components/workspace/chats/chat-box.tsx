@@ -1,15 +1,9 @@
 import { FilesIcon, XIcon } from "lucide-react";
 import { usePathname } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { GroupImperativeHandle } from "react-resizable-panels";
 
 import { ConversationEmptyState } from "@/components/ai-elements/conversation";
 import { Button } from "@/components/ui/button";
-import {
-  ResizableHandle,
-  ResizablePanel,
-  ResizablePanelGroup,
-} from "@/components/ui/resizable";
 import {
   Sheet,
   SheetContent,
@@ -27,9 +21,11 @@ import {
   useArtifacts,
 } from "../artifacts";
 import { useThread } from "../messages/context";
+import { SidecarPanel, useMaybeSidecar } from "../sidecar";
 
-const CLOSE_MODE = { chat: 100, artifacts: 0 };
-const OPEN_MODE = { chat: 60, artifacts: 40 };
+const RIGHT_PANEL_ANIMATION_MS = 280;
+
+type RightPanelKind = "sidecar" | "artifacts";
 
 const ChatBox: React.FC<{ children: React.ReactNode; threadId: string }> = ({
   children,
@@ -39,7 +35,6 @@ const ChatBox: React.FC<{ children: React.ReactNode; threadId: string }> = ({
   const isMobile = useIsMobile();
   const pathname = usePathname();
   const threadIdRef = useRef(threadId);
-  const layoutRef = useRef<GroupImperativeHandle>(null);
 
   const {
     artifacts,
@@ -50,16 +45,25 @@ const ChatBox: React.FC<{ children: React.ReactNode; threadId: string }> = ({
     deselect,
     selectedArtifact,
   } = useArtifacts();
+  const sidecar = useMaybeSidecar();
+  const sidecarOpen = sidecar?.open ?? false;
 
   const [autoSelectFirstArtifact, setAutoSelectFirstArtifact] = useState(true);
   useEffect(() => {
+    const threadArtifacts = Array.isArray(thread.values.artifacts)
+      ? thread.values.artifacts
+      : undefined;
+
     if (threadIdRef.current !== threadId) {
       threadIdRef.current = threadId;
       deselect();
+      setArtifacts([]);
     }
 
     // Update artifacts from the current thread
-    setArtifacts(thread.values.artifacts);
+    if (threadArtifacts) {
+      setArtifacts(threadArtifacts);
+    }
 
     // DO NOT automatically deselect the artifact when switching threads, because the artifacts auto discovering is not work now.
     // if (
@@ -73,9 +77,9 @@ const ChatBox: React.FC<{ children: React.ReactNode; threadId: string }> = ({
       env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY === "true" &&
       autoSelectFirstArtifact
     ) {
-      if (thread?.values?.artifacts?.length > 0) {
+      if (threadArtifacts && threadArtifacts.length > 0) {
         setAutoSelectFirstArtifact(false);
-        selectArtifact(thread.values.artifacts[0]!);
+        selectArtifact(threadArtifacts[0]!);
       }
     }
   }, [
@@ -89,35 +93,64 @@ const ChatBox: React.FC<{ children: React.ReactNode; threadId: string }> = ({
   ]);
 
   const artifactPanelOpen = useMemo(() => {
+    if (sidecarOpen) {
+      return false;
+    }
     if (env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY === "true") {
       return artifactsOpen && artifacts?.length > 0;
     }
     return artifactsOpen;
-  }, [artifactsOpen, artifacts]);
+  }, [artifactsOpen, artifacts, sidecarOpen]);
+
+  const activeRightPanel: RightPanelKind | null = sidecarOpen
+    ? "sidecar"
+    : artifactPanelOpen
+      ? "artifacts"
+      : null;
+  const rightPanelOpen = activeRightPanel !== null;
+  const [renderedRightPanel, setRenderedRightPanel] =
+    useState<RightPanelKind | null>(activeRightPanel);
 
   const resizableIdBase = useMemo(() => {
     return pathname.replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
   }, [pathname]);
 
   useEffect(() => {
-    if (layoutRef.current) {
-      if (artifactPanelOpen) {
-        layoutRef.current.setLayout(OPEN_MODE);
-      } else {
-        layoutRef.current.setLayout(CLOSE_MODE);
-      }
+    if (activeRightPanel) {
+      setRenderedRightPanel(activeRightPanel);
+      return;
     }
-  }, [artifactPanelOpen]);
 
-  const artifactContent = useMemo(
-    () =>
-      selectedArtifact ? (
+    const timeout = window.setTimeout(() => {
+      setRenderedRightPanel(null);
+    }, RIGHT_PANEL_ANIMATION_MS);
+
+    return () => {
+      window.clearTimeout(timeout);
+    };
+  }, [activeRightPanel]);
+
+  useEffect(() => {
+    if (sidecarOpen && artifactsOpen) {
+      setArtifactsOpen(false);
+    }
+  }, [artifactsOpen, setArtifactsOpen, sidecarOpen]);
+
+  const rightPanelContent = useMemo(() => {
+    if (renderedRightPanel === "sidecar") {
+      return <SidecarPanel />;
+    }
+    if (renderedRightPanel === "artifacts" && selectedArtifact) {
+      return (
         <ArtifactFileDetail
           className="size-full"
           filepath={selectedArtifact}
           threadId={threadId}
         />
-      ) : (
+      );
+    }
+    if (renderedRightPanel === "artifacts") {
+      return (
         <div className="relative flex size-full justify-center">
           <div className="absolute top-1 right-1 z-30">
             <Button
@@ -130,7 +163,7 @@ const ChatBox: React.FC<{ children: React.ReactNode; threadId: string }> = ({
               <XIcon />
             </Button>
           </div>
-          {thread.values.artifacts?.length === 0 ? (
+          {artifacts.length === 0 ? (
             <ConversationEmptyState
               icon={<FilesIcon />}
               title="No artifact selected"
@@ -144,33 +177,55 @@ const ChatBox: React.FC<{ children: React.ReactNode; threadId: string }> = ({
               <main className="min-h-0 grow">
                 <ArtifactFileList
                   className="max-w-(--container-width-sm) p-4 pt-12"
-                  files={thread.values.artifacts ?? []}
+                  files={artifacts}
                   threadId={threadId}
                 />
               </main>
             </div>
           )}
         </div>
-      ),
-    [selectedArtifact, thread.values.artifacts, threadId, setArtifactsOpen],
-  );
+      );
+    }
+    return null;
+  }, [
+    renderedRightPanel,
+    selectedArtifact,
+    threadId,
+    artifacts,
+    setArtifactsOpen,
+  ]);
 
   if (isMobile) {
     return (
       <>
         <div className="relative size-full min-w-0">{children}</div>
-        <Sheet open={artifactPanelOpen} onOpenChange={setArtifactsOpen}>
+        <Sheet
+          open={rightPanelOpen}
+          onOpenChange={(open) => {
+            if (open) {
+              return;
+            }
+            if (sidecarOpen) {
+              sidecar?.close();
+            }
+            if (artifactsOpen) {
+              setArtifactsOpen(false);
+            }
+          }}
+        >
           <SheetContent
             className="w-[calc(100vw-1rem)] max-w-none gap-0 p-0 sm:max-w-md [&>button]:hidden"
             side="right"
           >
             <SheetHeader className="sr-only">
-              <SheetTitle>Artifacts</SheetTitle>
+              <SheetTitle>
+                {renderedRightPanel === "sidecar" ? "Sidecar" : "Artifacts"}
+              </SheetTitle>
               <SheetDescription>
-                Browse artifacts for this conversation.
+                Browse the side panel for this conversation.
               </SheetDescription>
             </SheetHeader>
-            <div className="min-h-0 flex-1 p-3 pt-10">{artifactContent}</div>
+            <div className="min-h-0 flex-1 p-3 pt-10">{rightPanelContent}</div>
           </SheetContent>
         </Sheet>
       </>
@@ -178,39 +233,45 @@ const ChatBox: React.FC<{ children: React.ReactNode; threadId: string }> = ({
   }
 
   return (
-    <ResizablePanelGroup
+    <div
       id={`${resizableIdBase}-panels`}
-      orientation="horizontal"
-      defaultLayout={{ chat: 100, artifacts: 0 }}
-      groupRef={layoutRef}
+      className={cn(
+        "[container-type:inline-size] grid size-full min-h-0 transition-[grid-template-columns] duration-[280ms] ease-out motion-reduce:transition-none",
+        rightPanelOpen
+          ? "grid-cols-[minmax(0,1fr)_1px_minmax(0,40%)]"
+          : "grid-cols-[minmax(0,1fr)_0px_0px]",
+      )}
     >
-      <ResizablePanel className="relative" defaultSize={100} id="chat">
+      <div className="relative min-h-0 min-w-0" id="chat">
         {children}
-      </ResizablePanel>
-      <ResizableHandle
+      </div>
+      <div
         id={`${resizableIdBase}-separator`}
+        aria-hidden="true"
         className={cn(
-          "opacity-33 hover:opacity-100",
-          !artifactPanelOpen && "pointer-events-none opacity-0",
+          "bg-border opacity-33 transition-opacity duration-200 ease-out motion-reduce:transition-none",
+          !rightPanelOpen && "pointer-events-none opacity-0",
         )}
       />
-      <ResizablePanel
+      <aside
+        aria-hidden={!rightPanelOpen}
         className={cn(
-          "transition-all duration-300 ease-in-out",
-          !artifactsOpen && "opacity-0",
+          "min-h-0 min-w-0 overflow-hidden transition-opacity duration-[280ms] ease-out motion-reduce:transition-none",
+          !rightPanelOpen && "pointer-events-none opacity-0",
         )}
         id="artifacts"
       >
         <div
           className={cn(
-            "h-full p-4 transition-transform duration-300 ease-in-out",
-            artifactPanelOpen ? "translate-x-0" : "translate-x-full",
+            "ml-auto h-full w-[40cqw] transition-opacity duration-[280ms] ease-out motion-reduce:transition-none",
+            renderedRightPanel === "sidecar" ? "p-0" : "p-4",
+            rightPanelOpen ? "opacity-100" : "opacity-0",
           )}
         >
-          {artifactContent}
+          {rightPanelContent}
         </div>
-      </ResizablePanel>
-    </ResizablePanelGroup>
+      </aside>
+    </div>
   );
 };
 
