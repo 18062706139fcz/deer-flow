@@ -41,6 +41,7 @@ export interface Translations {
     exportSuccess: string;
     regenerate: string;
     branch: string;
+    showArtifacts: string;
   };
 
   home: {
@@ -70,6 +71,26 @@ export interface Translations {
     citeCount: (count: number) => string;
     copyReference: (title: string) => string;
     copiedReference: (title: string) => string;
+  };
+
+  // Workspace Changes
+  workspaceChanges: {
+    title: string;
+    editedTitle: (count: number) => string;
+    badge: (count: number, additions: number, deletions: number) => string;
+    viewChanges: string;
+    created: string;
+    modified: string;
+    deleted: string;
+    openFile: string;
+    loading: string;
+    noChanges: string;
+    diffUnavailable: string;
+    binaryUnavailable: string;
+    largeUnavailable: string;
+    sensitiveUnavailable: string;
+    truncatedUnavailable: string;
+    truncatedSummary: string;
   };
 
   // Input Box
