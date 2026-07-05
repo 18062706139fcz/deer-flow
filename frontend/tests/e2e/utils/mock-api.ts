@@ -717,9 +717,7 @@ export function mockLangGraphAPI(page: Page, options?: MockAPIOptions) {
       );
       let sourceTitle = sourceThread?.title?.trim();
       if (sourceThread?.metadata?.deerflow_branch === true) {
-        sourceTitle = sourceTitle
-          ?.replace(/^(Branch:\s*)+/i, "")
-          .trim();
+        sourceTitle = sourceTitle?.replace(/^(Branch:\s*)+/i, "").trim();
       }
       const title = body.title ?? sourceTitle;
 
