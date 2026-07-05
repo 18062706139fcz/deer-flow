@@ -104,14 +104,13 @@ function WorkspaceChangeSummaryRow({ file }: { file: WorkspaceFileChange }) {
 
   return (
     <div className="flex items-center justify-between gap-3 px-3 py-2.5">
-      <div
-        className="min-w-0 truncate text-sm"
-        title={file.path}
-      >
+      <div className="min-w-0 truncate text-sm" title={file.path}>
         {pathParts.dirname && (
           <span className="text-muted-foreground">{pathParts.dirname}/</span>
         )}
-        <span className="text-foreground font-medium">{pathParts.basename}</span>
+        <span className="text-foreground font-medium">
+          {pathParts.basename}
+        </span>
       </div>
       <SummaryDelta
         additions={file.additions}

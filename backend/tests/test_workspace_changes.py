@@ -70,6 +70,26 @@ def test_compare_snapshots_reports_text_file_changes(tmp_path):
     assert changes["/mnt/user-data/workspace/old.txt"].status == "deleted"
 
 
+def test_count_diff_lines_ignores_only_real_headers():
+    from deerflow.workspace_changes.diff import _count_diff_lines
+
+    lines = [
+        "--- a/mnt/user-data/workspace/file.txt",
+        "+++ b/mnt/user-data/workspace/file.txt",
+        "@@ -1,2 +1,2 @@",
+        "-old",
+        "+new",
+        # Content lines that happen to start with +++/--- must still count.
+        "+++added",
+        "---removed",
+    ]
+
+    additions, deletions = _count_diff_lines(lines)
+
+    assert additions == 2
+    assert deletions == 2
+
+
 def test_scan_workspace_roots_skips_excluded_directories(tmp_path):
     roots = _roots(tmp_path)
     workspace = roots[0].host_path

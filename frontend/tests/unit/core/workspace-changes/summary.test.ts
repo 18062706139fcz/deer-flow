@@ -41,4 +41,9 @@ describe("workspace change summary helpers", () => {
     expect(getWorkspaceChangeLineClass("+++ b/file.md")).toBe("meta");
     expect(getWorkspaceChangeLineClass("--- a/file.md")).toBe("meta");
   });
+
+  test("treats content lines beginning with +++/--- as add/remove, not meta", () => {
+    expect(getWorkspaceChangeLineClass("+++foo")).toBe("addition");
+    expect(getWorkspaceChangeLineClass("---bar")).toBe("deletion");
+  });
 });

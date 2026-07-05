@@ -1,7 +1,4 @@
-import type {
-  WorkspaceChangeSummary,
-  WorkspaceFileChange,
-} from "./types";
+import type { WorkspaceChangeSummary, WorkspaceFileChange } from "./types";
 
 export type WorkspaceChangeLineClass =
   | "addition"
@@ -22,7 +19,10 @@ export function getWorkspaceChangeBadgeLabel(summary: WorkspaceChangeSummary) {
 export function getWorkspaceChangeLineClass(
   line: string,
 ): WorkspaceChangeLineClass {
-  if (line.startsWith("+++") || line.startsWith("---")) {
+  // Unified-diff file headers are "+++ " / "--- " with a trailing space. A bare
+  // "+++"/"---" prefix would also match real content lines that begin with those
+  // sequences (e.g. an added line "+++foo"), styling them as meta by mistake.
+  if (line.startsWith("+++ ") || line.startsWith("--- ")) {
     return "meta";
   }
   if (line.startsWith("@@")) {

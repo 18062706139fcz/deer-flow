@@ -184,7 +184,10 @@ def _count_diff_lines(lines: list[str]) -> tuple[int, int]:
     additions = 0
     deletions = 0
     for line in lines:
-        if line.startswith("+++") or line.startswith("---"):
+        # Unified-diff file headers are "+++ " / "--- " with a trailing space;
+        # a bare "+++"/"---" prefix would also swallow real content lines whose
+        # text begins with those sequences (e.g. an added line "+++foo").
+        if line.startswith("+++ ") or line.startswith("--- "):
             continue
         if line.startswith("+"):
             additions += 1

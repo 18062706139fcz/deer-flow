@@ -34,7 +34,8 @@ test("fetchWorkspaceChanges can request file metadata without diffs", async () =
   });
   rs.stubGlobal("fetch", fetchMock);
 
-  const { fetchWorkspaceChanges } = await import("@/core/workspace-changes/api");
+  const { fetchWorkspaceChanges } =
+    await import("@/core/workspace-changes/api");
 
   await fetchWorkspaceChanges({
     threadId: "thread-1",

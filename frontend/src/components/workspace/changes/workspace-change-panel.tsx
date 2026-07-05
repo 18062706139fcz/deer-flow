@@ -76,7 +76,9 @@ export function WorkspaceChangePanel({
             changes.summary.additions,
             changes.summary.deletions,
           )}
-          {changes.summary.truncated ? ` · ${t.workspaceChanges.truncatedSummary}` : ""}
+          {changes.summary.truncated
+            ? ` · ${t.workspaceChanges.truncatedSummary}`
+            : ""}
         </SheetDescription>
       </SheetHeader>
 
@@ -194,7 +196,10 @@ function StatusIcon({ status }: { status: WorkspaceChangeStatus }) {
   return <FilePenLineIcon className={cn(className, "text-sky-500")} />;
 }
 
-function statusLabel(status: WorkspaceChangeStatus, t: ReturnType<typeof useI18n>["t"]) {
+function statusLabel(
+  status: WorkspaceChangeStatus,
+  t: ReturnType<typeof useI18n>["t"],
+) {
   if (status === "created") {
     return t.workspaceChanges.created;
   }

@@ -20,9 +20,7 @@ export async function fetchWorkspaceChanges({
   const response = await fetch(
     `${getBackendBaseURL()}/api/threads/${encodeURIComponent(
       threadId,
-    )}/runs/${encodeURIComponent(
-      runId,
-    )}/workspace-changes?${query}`,
+    )}/runs/${encodeURIComponent(runId)}/workspace-changes?${query}`,
   );
 
   if (!response.ok) {

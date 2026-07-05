@@ -417,11 +417,13 @@ function MessageContent_({
         components={components}
       />
       <CitationSourcesPanel sources={citationSources} />
-      <WorkspaceChangeBadge
-        threadId={threadId}
-        runId={runId}
-        disabled={isLoading}
-      />
+      {message.type === "ai" && (
+        <WorkspaceChangeBadge
+          threadId={threadId}
+          runId={runId}
+          disabled={isLoading}
+        />
+      )}
     </AIElementMessageContent>
   );
 }
