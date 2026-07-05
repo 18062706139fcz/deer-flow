@@ -1,0 +1,59 @@
+README.md
+  s_bee3bfd42b6e45::t_29fb80f71e1764 633-634
+README_zh.md
+  s_bee3bfd42b6e45::t_89d6ac7f823075 487-488
+backend/AGENTS.md
+  s_bee3bfd42b6e45::t_d5a50e3eeacc92 309
+backend/app/gateway/routers/threads.py
+  s_bee3bfd42b6e45::t_3ef9a80fcdf086 15,17,19,34,48-50,60-181,313-330,517-598
+backend/tests/test_threads_router.py
+  s_d9632237f155ca::t_4c767e93dcbb01 1,10-11,71-96,571-730
+frontend/AGENTS.md
+  s_bee3bfd42b6e45::t_5acc4d5623fe0d 85
+frontend/src/app/workspace/chats/[thread_id]/page.tsx
+  s_bee3bfd42b6e45::t_51d30a3c2f78e6 5,41,73,181-206,278-286
+frontend/src/components/workspace/messages/message-list.tsx
+  s_bee3bfd42b6e45::t_b22ec3cc4597ef 5,211,213,231-234,236,259-261,441,444,448,455-484,486,495,498,504,513,524-525,527,530
+frontend/src/core/i18n/locales/en-US.ts
+  s_bee3bfd42b6e45::t_1c8cba61938d04 54,416-417
+frontend/src/core/i18n/locales/types.ts
+  s_bee3bfd42b6e45::t_e6e2a3eab319bd 43,327-328
+frontend/src/core/i18n/locales/zh-CN.ts
+  s_bee3bfd42b6e45::t_24b02fbef37616 54,400-401
+frontend/src/core/threads/api.ts
+  s_bee3bfd42b6e45::t_9de4d7a75b1104 6-34,54-81
+frontend/src/core/threads/hooks.ts
+  s_bee3bfd42b6e45::t_cf880d2644c4d4 30,1998-2026
+frontend/tests/e2e/branch-thread.spec.ts
+  s_bee3bfd42b6e45::t_48a4512b77af69 1-66
+frontend/tests/e2e/utils/mock-api.ts
+  s_bee3bfd42b6e45::t_6a17c33d7b7305 140-158,699-754
+frontend/tests/unit/core/threads/api.test.ts
+  s_bee3bfd42b6e45::t_6646aa24ed1117 56-114
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "cb531023060cf3bd06acde1ff70f31881c6f5dcc",
+  "prompts": {},
+  "sessions": {
+    "s_bee3bfd42b6e45": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f1285-1d86-7c81-bbf5-f5fafead2492",
+        "model": "unknown"
+      },
+      "human_author": "ryker <2279549769@qq.com>"
+    },
+    "s_d9632237f155ca": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3095-324f-7b22-92cd-3d8a060650ec",
+        "model": "unknown"
+      },
+      "human_author": "ryker <2279549769@qq.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
