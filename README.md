@@ -630,6 +630,8 @@ Gateway-generated follow-up suggestions now normalize both plain-string model ou
 
 Interrupted first-turn runs still persist a fallback conversation title, so stopping a streaming response does not leave the thread as "Untitled" after refresh.
 
+In the Web UI, completed assistant turns can be branched into a new main conversation. The new thread starts from that turn's checkpoint and gets a best-effort copy of the current thread workspace files.
+
 ```
 # Paths inside the sandbox container
 /mnt/skills/public
