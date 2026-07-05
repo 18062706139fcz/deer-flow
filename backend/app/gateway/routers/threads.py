@@ -130,6 +130,33 @@ async def _find_branch_checkpoint(checkpointer: Any, thread_id: str, target_mess
     raise HTTPException(status_code=409, detail="This turn can no longer be branched from.")
 
 
+async def _branch_targets_latest_turn(checkpointer: Any, thread_id: str, target_message_ids: set[str]) -> bool:
+    """Return True when the target turn is the final visible turn in the current state.
+
+    ``alist`` yields newest-first; we take the newest checkpoint that actually holds
+    messages (thread creation writes an empty checkpoint that must be skipped) and
+    reuse ``_matches_branch_target`` to check the target turn is its tail. Used to
+    decide whether cloning the (uncheckpointed) workspace onto a branch is safe: only
+    a branch from the latest turn shares the current workspace timeline. On any lookup
+    failure we fail closed (treat as historical) so a branch from an older turn never
+    inherits a later timeline's workspace files.
+    """
+    config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
+    try:
+        async for checkpoint_tuple in checkpointer.alist(config, limit=_BRANCH_HISTORY_SCAN_LIMIT):
+            messages = _checkpoint_messages(checkpoint_tuple)
+            if not messages:
+                continue
+            return _matches_branch_target(messages, target_message_ids)
+    except Exception:
+        logger.warning(
+            "Failed to resolve latest turn for thread %s; treating branch as historical",
+            sanitize_log_param(thread_id),
+            exc_info=True,
+        )
+    return False
+
+
 def _ignore_branch_user_data(directory: str, names: list[str]) -> set[str]:
     ignored: set[str] = set()
     base = Path(directory)
@@ -537,6 +564,13 @@ async def branch_thread(thread_id: str, body: ThreadBranchRequest, request: Requ
     if not parent_checkpoint_id:
         raise HTTPException(status_code=409, detail="This turn can no longer be branched from.")
 
+    # Workspace files are not checkpointed, so they only reflect the *current* thread
+    # state. Cloning them onto a branch from an older turn would leak files created
+    # after that turn (message history rolls back, workspace would not). Restrict the
+    # best-effort clone to branches taken from the latest turn so history and workspace
+    # stay consistent.
+    branch_from_latest_turn = await _branch_targets_latest_turn(checkpointer, thread_id, target_message_ids)
+
     new_thread_id = str(uuid.uuid4())
     now = now_iso()
     branch_metadata = {
@@ -586,7 +620,10 @@ async def branch_thread(thread_id: str, body: ThreadBranchRequest, request: Requ
         logger.exception("Failed to write branch thread_meta for %s", sanitize_log_param(new_thread_id))
         raise HTTPException(status_code=500, detail="Failed to create branch") from None
 
-    workspace_clone_mode = await _copy_branch_user_data(thread_id, new_thread_id)
+    if branch_from_latest_turn:
+        workspace_clone_mode = await _copy_branch_user_data(thread_id, new_thread_id)
+    else:
+        workspace_clone_mode = "skipped_historical_turn"
     return ThreadBranchResponse(
         thread_id=new_thread_id,
         parent_thread_id=thread_id,

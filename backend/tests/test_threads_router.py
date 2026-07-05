@@ -622,7 +622,7 @@ def test_branch_thread_from_older_assistant_turn_creates_truncated_thread() -> N
     assert body["parent_thread_id"] == source_thread_id
     assert body["parent_checkpoint_id"] == "0002"
     assert body["branched_from_message_id"] == "ai-2"
-    assert body["workspace_clone_mode"] in {"current_thread_best_effort", "not_found"}
+    assert body["workspace_clone_mode"] == "skipped_historical_turn"
 
     assert state_response.status_code == 200, state_response.text
     messages = state_response.json()["values"]["messages"]
@@ -726,6 +726,56 @@ def test_branch_thread_best_effort_copies_current_workspace(tmp_path) -> None:
     assert (target_user_data / "outputs" / "result.txt").read_text(encoding="utf-8") == "answer"
     assert not (target_user_data / "uploads" / ".upload-stale.part").exists()
     assert source_user_data.exists()
+
+
+def test_branch_thread_from_historical_turn_skips_workspace_clone(tmp_path) -> None:
+    """Branching from a non-latest turn must not clone the current workspace.
+
+    Workspace files are not checkpointed, so cloning them onto a branch rooted at
+    an older turn would leak files created after that turn (regression for the
+    historical-turn workspace-leak review on PR #3950).
+    """
+    paths = Paths(tmp_path)
+    app, _store, checkpointer = _build_thread_app()
+    source_thread_id = "source-historical"
+    user_id = "branch-user"
+
+    source_outputs = paths.sandbox_outputs_dir(source_thread_id, user_id=user_id)
+    source_outputs.mkdir(parents=True, exist_ok=True)
+    # ``future.txt`` only exists in the current (latest) workspace timeline.
+    (source_outputs / "future.txt").write_text("future", encoding="utf-8")
+
+    human_1 = HumanMessage(id="human-1", content="First question")
+    ai_1 = AIMessage(id="ai-1", content="First answer")
+    human_2 = HumanMessage(id="human-2", content="Second question")
+    ai_2 = AIMessage(id="ai-2", content="Second answer")
+
+    async def _seed() -> None:
+        await _write_checkpoint(checkpointer, source_thread_id, "0001", [human_1, ai_1], step=1)
+        await _write_checkpoint(checkpointer, source_thread_id, "0002", [human_1, ai_1, human_2, ai_2], step=2)
+
+    asyncio.run(_seed())
+
+    with (
+        patch("app.gateway.routers.threads.get_paths", return_value=paths),
+        patch("app.gateway.routers.threads.get_effective_user_id", return_value=user_id),
+        TestClient(app) as client,
+    ):
+        created = client.post("/api/threads", json={"thread_id": source_thread_id, "metadata": {}})
+        assert created.status_code == 200, created.text
+
+        response = client.post(
+            f"/api/threads/{source_thread_id}/branches",
+            json={"message_id": "ai-1", "message_ids": ["ai-1"]},
+        )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["parent_checkpoint_id"] == "0001"
+    assert body["workspace_clone_mode"] == "skipped_historical_turn"
+
+    target_user_data = paths.sandbox_user_data_dir(body["thread_id"], user_id=user_id)
+    assert not target_user_data.exists()
 
 
 # ── Metadata filter validation at API boundary ────────────────────────────────
