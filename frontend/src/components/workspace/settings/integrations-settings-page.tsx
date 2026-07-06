@@ -28,6 +28,7 @@ import {
   LarkIntegrationRequestError,
   type LarkAuthStartResponse,
   type LarkConfigStartResponse,
+  type LarkIntegrationStatus,
   useCompleteLarkAuthorization,
   useCompleteLarkConfiguration,
   useInstallLarkIntegration,
@@ -36,6 +37,7 @@ import {
   useStartLarkConfiguration,
 } from "@/core/integrations/lark";
 import { env } from "@/env";
+import { cn } from "@/lib/utils";
 
 import { SettingsSection } from "./settings-section";
 
@@ -67,9 +69,12 @@ function LarkIntegrationCard() {
   const startAuth = useStartLarkAuthorization();
   const completeAuth = useCompleteLarkAuthorization();
   const [pendingFlow, setPendingFlow] = useState<PendingLarkFlow | null>(null);
+  const [isCheckingConnection, setIsCheckingConnection] = useState(false);
   const browserWindowRef = useRef<Window | null>(null);
   const connectBusy =
     startConfig.isPending || completeConfig.isPending || startAuth.isPending;
+  const connectActionBusy = connectBusy || isCheckingConnection;
+  const isConnected = data?.auth.status === "authenticated";
 
   const handleInstall = () => {
     install.mutate(undefined, {
@@ -157,9 +162,11 @@ function LarkIntegrationCard() {
     );
   };
 
-  const handleConnect = () => {
-    const browserWindow = openPendingBrowserWindow();
-    if (!data?.app_configured) {
+  const startConnectionFlow = (
+    status: LarkIntegrationStatus,
+    browserWindow: Window | null,
+  ) => {
+    if (!status.app_configured) {
       startConfig.mutate(
         { brand: "feishu" },
         {
@@ -177,6 +184,28 @@ function LarkIntegrationCard() {
       return;
     }
     startUserAuth(browserWindow);
+  };
+
+  const handleConnect = async () => {
+    if (!data) return;
+    const browserWindow =
+      data.auth.status === "authenticated" ? null : openPendingBrowserWindow();
+    setIsCheckingConnection(true);
+    try {
+      const refreshed = await refetch();
+      const latestStatus = refreshed.data ?? data;
+      if (latestStatus.auth.status === "authenticated") {
+        closePendingBrowserWindow(browserWindow);
+        toast.info(t.settings.integrations.lark.alreadyConnected);
+        return;
+      }
+      startConnectionFlow(latestStatus, browserWindow);
+    } catch (err) {
+      closePendingBrowserWindow(browserWindow);
+      toast.error(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsCheckingConnection(false);
+    }
   };
 
   const handleCompleteAuth = () => {
@@ -216,7 +245,15 @@ function LarkIntegrationCard() {
     env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY === "true" ||
     !data?.installed ||
     !data?.cli.available ||
-    connectBusy;
+    connectActionBusy;
+
+  const connectButtonLabel = isCheckingConnection
+    ? t.settings.integrations.lark.checkingConnection
+    : connectBusy
+      ? t.settings.integrations.lark.authStarting
+      : isConnected
+        ? t.settings.integrations.lark.connectedAction
+        : t.settings.integrations.lark.connect;
 
   return (
     <Card>
@@ -239,7 +276,9 @@ function LarkIntegrationCard() {
             onClick={() => void refetch()}
             disabled={isFetching}
           >
-            <RefreshCwIcon className="size-4" />
+            <RefreshCwIcon
+              className={cn("size-4", isFetching && "animate-spin")}
+            />
             {t.settings.integrations.refresh}
           </Button>
         </CardAction>
@@ -294,9 +333,13 @@ function LarkIntegrationCard() {
             <IntegrationNextStep
               installed={data.installed}
               cliReady={data.cli.available}
+              connected={isConnected}
             />
             <div className="flex flex-wrap items-center gap-2">
               <Button onClick={handleInstall} disabled={installDisabled}>
+                {install.isPending ? (
+                  <RefreshCwIcon className="size-4 animate-spin" />
+                ) : null}
                 {install.isPending
                   ? t.settings.integrations.installing
                   : data.installed
@@ -305,12 +348,13 @@ function LarkIntegrationCard() {
               </Button>
               <Button
                 variant="outline"
-                onClick={handleConnect}
+                onClick={() => void handleConnect()}
                 disabled={authDisabled}
               >
-                {connectBusy
-                  ? t.settings.integrations.lark.authStarting
-                  : t.settings.integrations.lark.connect}
+                {connectActionBusy ? (
+                  <RefreshCwIcon className="size-4 animate-spin" />
+                ) : null}
+                {connectButtonLabel}
               </Button>
               {!isAdmin && (
                 <span className="text-muted-foreground text-sm">
@@ -318,6 +362,17 @@ function LarkIntegrationCard() {
                 </span>
               )}
             </div>
+            {install.isPending && (
+              <Alert>
+                <RefreshCwIcon className="size-4 animate-spin" />
+                <AlertTitle>
+                  {t.settings.integrations.lark.installingTitle}
+                </AlertTitle>
+                <AlertDescription>
+                  {t.settings.integrations.lark.installingDescription}
+                </AlertDescription>
+              </Alert>
+            )}
             {pendingFlow && (
               <Alert>
                 <ExternalLinkIcon />
@@ -433,9 +488,11 @@ function StatusItem({
 function IntegrationNextStep({
   installed,
   cliReady,
+  connected,
 }: {
   installed: boolean;
   cliReady: boolean;
+  connected: boolean;
 }) {
   const { t } = useI18n();
   if (!installed) {
@@ -454,6 +511,17 @@ function IntegrationNextStep({
         <AlertTitle>{t.settings.integrations.lark.cliNextTitle}</AlertTitle>
         <AlertDescription>
           {t.settings.integrations.lark.cliNextDescription}
+        </AlertDescription>
+      </Alert>
+    );
+  }
+  if (connected) {
+    return (
+      <Alert>
+        <CheckCircle2Icon />
+        <AlertTitle>{t.settings.integrations.lark.connectedTitle}</AlertTitle>
+        <AlertDescription>
+          {t.settings.integrations.lark.connectedDescription}
         </AlertDescription>
       </Alert>
     );

@@ -61,5 +61,12 @@ test.describe("Integrations settings", () => {
     await expect(
       page.getByText("Lark/Feishu authorization completed."),
     ).toBeVisible();
+    await expect(dialog.getByText("Lark is connected")).toBeVisible();
+
+    await dialog.getByRole("button", { name: "Connected" }).click();
+    await expect(page.getByText(/Lark is already connected/)).toBeVisible();
+    await expect(
+      dialog.getByText("https://open.feishu.cn/auth/mock-device"),
+    ).toHaveCount(0);
   });
 });

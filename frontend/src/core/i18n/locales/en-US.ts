@@ -767,12 +767,16 @@ export const enUS: Translations = {
         authNotConfigured: "Not connected",
         connect: "Connect Lark",
         authStarting: "Opening connection link...",
+        checkingConnection: "Checking connection...",
+        connectedAction: "Connected",
+        alreadyConnected:
+          "Lark is already connected. If authorization expires, refresh the status and reconnect.",
         connectionStarted: "Connection link opened",
         connectionReady: "Connection is ready. Opening authorization...",
         authStarted: "Authorization link generated",
         openConnectionLinkTitle: "Continue connecting Lark",
         openConnectionLinkDescription:
-          "The first connection needs one browser confirmation from Lark. Open the link below and finish the prompt; DeerFlow will wait for confirmation and continue to user authorization automatically.",
+          "The first connection needs one browser confirmation from Lark. Open the link below and finish the prompt, then return here to continue authorization.",
         openAuthLinkTitle: "Authorize Lark in your browser",
         openAuthLinkDescription:
           'Open the link below to authorize. After approval, return here and click "I completed authorization".',
@@ -784,15 +788,21 @@ export const enUS: Translations = {
         completingAuth: "Checking...",
         authExpiresIn: (seconds) =>
           `This link expires in about ${seconds} seconds.`,
+        installingTitle: "Installing official skill pack",
+        installingDescription:
+          "This usually finishes within 30 seconds; slower networks may take about 1 minute. The status refreshes automatically when installation completes.",
         installNextTitle: "Install the official skill pack first",
         installNextDescription:
           "After installation, /lark-doc, /lark-im, /lark-sheets and related skills appear in the skill index.",
         cliNextTitle: "Rebuild the runtime image",
         cliNextDescription:
           "The skill pack is installed, but the Gateway cannot find lark-cli. Use an image that includes @larksuite/cli, then retry.",
+        connectedTitle: "Lark is connected",
+        connectedDescription:
+          "The current user is authorized. If authorization expires later, refreshing the status will allow reconnection.",
         authNextTitle: "Complete browser authorization next",
         authNextDescription:
-          "Click “Connect Lark”; DeerFlow will handle the first-time connection setup and open browser authorization. After approval, return here to confirm.",
+          "Click “Connect Lark”; DeerFlow checks the current status first and opens browser authorization only when disconnected or expired.",
       },
     },
     skills: {

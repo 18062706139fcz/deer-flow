@@ -650,6 +650,9 @@ export interface Translations {
         authNotConfigured: string;
         connect: string;
         authStarting: string;
+        checkingConnection: string;
+        connectedAction: string;
+        alreadyConnected: string;
         connectionStarted: string;
         connectionReady: string;
         authStarted: string;
@@ -664,10 +667,14 @@ export interface Translations {
         preparingAuthorization: string;
         completingAuth: string;
         authExpiresIn: (seconds: number) => string;
+        installingTitle: string;
+        installingDescription: string;
         installNextTitle: string;
         installNextDescription: string;
         cliNextTitle: string;
         cliNextDescription: string;
+        connectedTitle: string;
+        connectedDescription: string;
         authNextTitle: string;
         authNextDescription: string;
       };

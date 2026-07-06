@@ -742,12 +742,16 @@ export const zhCN: Translations = {
         authNotConfigured: "尚未连接",
         connect: "连接飞书",
         authStarting: "正在打开连接链接...",
+        checkingConnection: "正在检查连接状态...",
+        connectedAction: "已连接",
+        alreadyConnected:
+          "飞书已连接，无需重复授权。如果授权已过期，刷新状态后可重新连接。",
         connectionStarted: "连接链接已打开",
         connectionReady: "连接准备已完成，正在打开授权链接",
         authStarted: "授权链接已生成",
         openConnectionLinkTitle: "继续完成飞书连接",
         openConnectionLinkDescription:
-          "首次连接需要在浏览器里完成一次飞书确认。打开下面的链接按提示完成；DeerFlow 会自动等待确认并继续拉起用户授权。",
+          "首次连接需要在浏览器里完成一次飞书确认。打开下面的链接按提示完成；完成后回到这里继续授权。",
         openAuthLinkTitle: "在浏览器中完成飞书授权",
         openAuthLinkDescription:
           "打开下面的链接完成授权。授权完成后回到这里点击“我已完成授权”。",
@@ -758,15 +762,21 @@ export const zhCN: Translations = {
         preparingAuthorization: "正在准备授权...",
         completingAuth: "确认中...",
         authExpiresIn: (seconds) => `链接将在约 ${seconds} 秒后过期。`,
+        installingTitle: "正在安装官方技能包",
+        installingDescription:
+          "通常 30 秒内完成，网络较慢时可能需要约 1 分钟。安装完成后会自动刷新状态。",
         installNextTitle: "先安装官方技能包",
         installNextDescription:
           "安装后，/lark-doc、/lark-im、/lark-sheets 等技能会出现在技能索引中。",
         cliNextTitle: "需要重建运行镜像",
         cliNextDescription:
           "技能包已安装，但 Gateway 找不到 lark-cli。请使用包含 @larksuite/cli 的镜像后再重试。",
+        connectedTitle: "飞书已连接",
+        connectedDescription:
+          "当前用户已完成授权。如果后续授权过期，刷新状态后会重新允许连接。",
         authNextTitle: "下一步完成浏览器授权",
         authNextDescription:
-          "点击“连接飞书”后，DeerFlow 会自动完成首次连接准备并拉起浏览器授权；授权完成后回到这里确认即可。",
+          "点击“连接飞书”后，DeerFlow 会先检查当前状态；未连接或授权过期时会拉起浏览器授权。",
       },
     },
     skills: {
