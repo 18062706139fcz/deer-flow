@@ -162,6 +162,7 @@ def _extract_skill_name_from_skills_path(path: str) -> str | None:
     /mnt/skills/public/bootstrap/SKILL.md → "bootstrap"
     /mnt/skills/custom/my-skill/SKILL.md → "my-skill"
     /mnt/skills/legacy/my-skill/references/... → "my-skill"
+    /mnt/skills/integrations/lark-cli/lark-doc/SKILL.md → "lark-doc"
     /mnt/skills/public/bootstrap/ → "bootstrap"
     Returns None if the path doesn't contain a recognizable skill name pattern.
     """
@@ -172,13 +173,19 @@ def _extract_skill_name_from_skills_path(path: str) -> str | None:
     relative = path[len(skills_prefix) :].lstrip("/")
     if not relative:
         return None
-    # Expected patterns: "public/<name>/...", "custom/<name>/...", "legacy/<name>/..."
+    # Expected patterns: "public/<name>/...", "custom/<name>/...",
+    # "legacy/<name>/...", "integrations/<provider>/<name>/..."
     # or "<name>/..." (direct skill access)
     parts = relative.split("/")
     if len(parts) >= 2 and parts[0] in ("public", "custom", "legacy"):
         return parts[1]
-    if len(parts) == 1 and parts[0] in ("public", "custom", "legacy"):
+    if len(parts) >= 3 and parts[0] == "integrations":
+        return parts[2]
+    if len(parts) == 1 and parts[0] in ("public", "custom", "legacy", "integrations"):
         # Category root like /mnt/skills/custom — not a skill path.
+        return None
+    if len(parts) == 2 and parts[0] == "integrations":
+        # Provider root like /mnt/skills/integrations/lark-cli.
         return None
     if len(parts) >= 1:
         # Direct path like /mnt/skills/my-skill/SKILL.md
@@ -212,6 +219,8 @@ def _is_disabled_skill_path(path: str, *, user_id: str | None = None) -> bool:
             category = "custom"
         elif relative.startswith("legacy/"):
             category = "legacy"
+        elif relative.startswith("integrations/"):
+            category = "integrations"
         else:
             # Try to infer from storage
             effective_uid = user_id or get_effective_user_id()
@@ -271,7 +280,8 @@ def _resolve_skills_path(path: str) -> str:
 
     relative = path[len(skills_container) :].lstrip("/")
 
-    # Per-user custom skills: resolve to user-specific directory.
+    # Per-user custom and managed integration skills: resolve to user-specific
+    # directories.
     # ``skill_manage_tool`` writes custom skills to the per-user directory,
     # and ``LocalSandboxProvider._build_thread_path_mappings`` mounts
     # ``/mnt/skills/custom`` to that same per-user dir.  Without this
@@ -290,6 +300,18 @@ def _resolve_skills_path(path: str) -> str:
         if custom_relative:
             return str(user_custom_dir / custom_relative)
         return str(user_custom_dir)
+
+    if relative == "integrations" or relative.startswith("integrations/"):
+        from deerflow.config.paths import get_paths
+        from deerflow.runtime.user_context import get_effective_user_id
+
+        user_id = get_effective_user_id()
+        paths = get_paths()
+        user_integrations_dir = paths.user_integration_skills_dir(user_id)
+        integrations_relative = relative[len("integrations") :].lstrip("/")
+        if integrations_relative:
+            return str(user_integrations_dir / integrations_relative)
+        return str(user_integrations_dir)
 
     return _join_path_preserving_style(skills_host, relative)
 
@@ -713,11 +735,11 @@ def mask_local_paths_in_output(output: str, thread_data: ThreadDataState | None)
     """Mask host absolute paths from local sandbox output using virtual paths.
 
     Handles user-data paths (per-thread), skills paths (global + per-user
-    custom), and ACP workspace paths (per-thread).
+    custom + managed integrations), and ACP workspace paths (per-thread).
     """
     # Build the ordered (host_base, virtual_base) source list. Order is
     # preserved from the original implementation: skills, then per-user
-    # custom skills, then ACP workspace, then user-data mappings (longest
+    # custom/integration skills, then ACP workspace, then user-data mappings (longest
     # host path first). Custom mount host paths are masked by
     # LocalSandbox._reverse_resolve_paths_in_output().
     sources: list[tuple[str, str]] = []
@@ -737,9 +759,13 @@ def mask_local_paths_in_output(output: str, thread_data: ThreadDataState | None)
 
         user_id = get_effective_user_id()
         user_custom_dir = get_paths().user_custom_skills_dir(user_id)
+        user_integrations_dir = get_paths().user_integration_skills_dir(user_id)
         if user_custom_dir.exists():
             skills_container = _get_skills_container_path()
             sources.append((str(user_custom_dir), f"{skills_container}/custom"))
+        if user_integrations_dir.exists():
+            skills_container = _get_skills_container_path()
+            sources.append((str(user_integrations_dir), f"{skills_container}/integrations"))
     except Exception:
         pass
 

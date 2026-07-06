@@ -624,6 +624,16 @@ Users can explicitly activate an enabled skill for a single turn by starting the
 
 When you install `.skill` archives through the Gateway, DeerFlow accepts standard optional frontmatter metadata such as `version`, `author`, and `compatibility` instead of rejecting otherwise valid external skills.
 
+Managed integrations can install read-only skill packs for a user without mixing
+them into custom skills. The Lark/Feishu CLI integration is available under
+`Settings → Integrations → Lark / Feishu CLI`; it installs the official
+`lark-*` skills into the user's managed integration directory and checks whether
+`lark-cli` is available in the Gateway runtime. After installation, users can
+click **Connect Lark** to open a browser authorization link; no terminal
+authorization is required. If an agent hits missing Lark authorization during a
+conversation, the managed `lark-shared` guidance points the user back to the same
+settings entry with `?settings=integrations`.
+
 Tools follow the same philosophy. DeerFlow comes with a core toolset — web search, web fetch, rendered web capture, file operations, bash execution — and supports custom tools via MCP servers and Python functions. Swap anything. Add anything.
 
 Gateway-generated follow-up suggestions now normalize both plain-string model output and block/list-style rich content before parsing the JSON array response, so provider-specific content wrappers do not silently drop suggestions.
@@ -643,6 +653,9 @@ In the Web UI, completed assistant turns can be branched into a new main convers
 
 /mnt/skills/custom
 └── your-custom-skill/SKILL.md      ← yours
+
+/mnt/skills/integrations
+└── lark-cli/lark-doc/SKILL.md      ← managed, read-only
 ```
 
 #### Claude Code Integration

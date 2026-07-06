@@ -627,6 +627,7 @@ export const enUS: Translations = {
       account: "Account",
       appearance: "Appearance",
       channels: "Channels",
+      integrations: "Integrations",
       memory: "Memory",
       tools: "Tools",
       skills: "Skills",
@@ -737,6 +738,62 @@ export const enUS: Translations = {
         "Connect IM accounts that can send messages to DeerFlow from outside the browser.",
       disabled:
         "Channel connections are not enabled on this server. Ask an administrator to enable channel_connections.",
+    },
+    integrations: {
+      title: "Integrations",
+      description:
+        "Connect third-party tools and work platforms so agents can use them directly.",
+      refresh: "Refresh",
+      install: "Install",
+      reinstall: "Reinstall",
+      installing: "Installing...",
+      ready: "Ready",
+      pending: "Pending",
+      available: "Available",
+      unavailable: "Unavailable",
+      connected: "Connected",
+      loadFailed: "Failed to load integration status",
+      adminRequired: "Admin privileges are required to install integrations.",
+      lark: {
+        title: "Lark / Feishu CLI",
+        description:
+          "Install the official Lark/Feishu agent skills and let agents use Lark after authorization.",
+        skillPack: "Skill pack",
+        gatewayCli: "Gateway CLI",
+        auth: "Auth",
+        notInstalled: "Not installed",
+        skillsInstalled: (installed, expected) =>
+          `${installed}/${expected} skills installed`,
+        authNotConfigured: "Not connected",
+        connect: "Connect Lark",
+        authStarting: "Opening connection link...",
+        connectionStarted: "Connection link opened",
+        connectionReady: "Connection is ready. Opening authorization...",
+        authStarted: "Authorization link generated",
+        openConnectionLinkTitle: "Continue connecting Lark",
+        openConnectionLinkDescription:
+          "The first connection needs one browser confirmation from Lark. Open the link below and finish the prompt; DeerFlow will wait for confirmation and continue to user authorization automatically.",
+        openAuthLinkTitle: "Authorize Lark in your browser",
+        openAuthLinkDescription:
+          'Open the link below to authorize. After approval, return here and click "I completed authorization".',
+        openAuthLink: "Open link",
+        copyAuthLink: "Copy link",
+        completeAuth: "I completed authorization",
+        continueAuth: "I completed browser confirmation, continue",
+        preparingAuthorization: "Preparing authorization...",
+        completingAuth: "Checking...",
+        authExpiresIn: (seconds) =>
+          `This link expires in about ${seconds} seconds.`,
+        installNextTitle: "Install the official skill pack first",
+        installNextDescription:
+          "After installation, /lark-doc, /lark-im, /lark-sheets and related skills appear in the skill index.",
+        cliNextTitle: "Rebuild the runtime image",
+        cliNextDescription:
+          "The skill pack is installed, but the Gateway cannot find lark-cli. Use an image that includes @larksuite/cli, then retry.",
+        authNextTitle: "Complete browser authorization next",
+        authNextDescription:
+          "Click “Connect Lark”; DeerFlow will handle the first-time connection setup and open browser authorization. After approval, return here to confirm.",
+      },
     },
     skills: {
       title: "Agent Skills",

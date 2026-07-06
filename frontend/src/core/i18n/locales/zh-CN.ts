@@ -607,6 +607,7 @@ export const zhCN: Translations = {
       account: "账号",
       appearance: "外观",
       channels: "渠道",
+      integrations: "集成",
       memory: "记忆",
       tools: "工具",
       skills: "技能",
@@ -713,6 +714,60 @@ export const zhCN: Translations = {
       description: "连接可在浏览器外向 DeerFlow 发送消息的即时通讯账号。",
       disabled:
         "当前服务器未启用渠道连接。请联系管理员开启 channel_connections。",
+    },
+    integrations: {
+      title: "集成",
+      description: "连接第三方工具和办公生态，让 Agent 能直接使用对应能力。",
+      refresh: "刷新",
+      install: "安装",
+      reinstall: "重新安装",
+      installing: "安装中...",
+      ready: "就绪",
+      pending: "待处理",
+      available: "可用",
+      unavailable: "不可用",
+      connected: "已连接",
+      loadFailed: "加载集成状态失败",
+      adminRequired: "需要管理员权限才能安装集成。",
+      lark: {
+        title: "Lark / 飞书 CLI",
+        description:
+          "安装官方 Lark/Feishu Agent Skills，并在授权后让 Agent 直接使用飞书能力。",
+        skillPack: "技能包",
+        gatewayCli: "Gateway CLI",
+        auth: "授权",
+        notInstalled: "尚未安装",
+        skillsInstalled: (installed, expected) =>
+          `已安装 ${installed}/${expected} 个技能`,
+        authNotConfigured: "尚未连接",
+        connect: "连接飞书",
+        authStarting: "正在打开连接链接...",
+        connectionStarted: "连接链接已打开",
+        connectionReady: "连接准备已完成，正在打开授权链接",
+        authStarted: "授权链接已生成",
+        openConnectionLinkTitle: "继续完成飞书连接",
+        openConnectionLinkDescription:
+          "首次连接需要在浏览器里完成一次飞书确认。打开下面的链接按提示完成；DeerFlow 会自动等待确认并继续拉起用户授权。",
+        openAuthLinkTitle: "在浏览器中完成飞书授权",
+        openAuthLinkDescription:
+          "打开下面的链接完成授权。授权完成后回到这里点击“我已完成授权”。",
+        openAuthLink: "打开链接",
+        copyAuthLink: "复制链接",
+        completeAuth: "我已完成授权",
+        continueAuth: "我已完成浏览器确认，继续授权",
+        preparingAuthorization: "正在准备授权...",
+        completingAuth: "确认中...",
+        authExpiresIn: (seconds) => `链接将在约 ${seconds} 秒后过期。`,
+        installNextTitle: "先安装官方技能包",
+        installNextDescription:
+          "安装后，/lark-doc、/lark-im、/lark-sheets 等技能会出现在技能索引中。",
+        cliNextTitle: "需要重建运行镜像",
+        cliNextDescription:
+          "技能包已安装，但 Gateway 找不到 lark-cli。请使用包含 @larksuite/cli 的镜像后再重试。",
+        authNextTitle: "下一步完成浏览器授权",
+        authNextDescription:
+          "点击“连接飞书”后，DeerFlow 会自动完成首次连接准备并拉起浏览器授权；授权完成后回到这里确认即可。",
+      },
     },
     skills: {
       title: "技能",

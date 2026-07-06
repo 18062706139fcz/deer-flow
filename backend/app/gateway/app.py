@@ -22,6 +22,7 @@ from app.gateway.routers import (
     features,
     feedback,
     github_webhooks,
+    integrations,
     mcp,
     memory,
     models,
@@ -426,6 +427,9 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
 
     # Skills API is mounted at /api/skills
     app.include_router(skills.router)
+
+    # First-party integrations API is mounted at /api/integrations
+    app.include_router(integrations.router)
 
     # Artifacts API is mounted at /api/threads/{thread_id}/artifacts
     app.include_router(artifacts.router)

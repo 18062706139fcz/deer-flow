@@ -313,6 +313,11 @@ class AioSandboxProvider(WarmPoolLifecycleMixin[SandboxInfo], SandboxProvider):
             mounts.append(skills_mount)
             logger.info(f"Adding skills mount: {skills_mount}")
 
+        user_skill_mounts = self._get_user_skill_mounts(user_id=user_id)
+        if user_skill_mounts:
+            mounts.extend(user_skill_mounts)
+            logger.info(f"Adding user skill mounts: {user_skill_mounts}")
+
         return mounts
 
     @staticmethod
@@ -355,6 +360,29 @@ class AioSandboxProvider(WarmPoolLifecycleMixin[SandboxInfo], SandboxProvider):
         except Exception as e:
             logger.warning(f"Could not setup skills mount: {e}")
         return None
+
+    @staticmethod
+    def _get_user_skill_mounts(*, user_id: str | None = None) -> list[tuple[str, str, bool]]:
+        """Mount per-user custom and managed integration skills into AIO sandboxes.
+
+        The global skills mount only exposes ``skills/public`` and legacy global
+        custom content. User-scoped skills live under ``DEER_FLOW_HOME/users`` and
+        need their own submounts so sandbox paths match the skill registry.
+        """
+        try:
+            config = get_app_config()
+            paths = get_paths()
+            effective_user_id = AioSandboxProvider._effective_acquire_user_id(user_id)
+            skills_container_path = config.skills.container_path
+            paths.user_custom_skills_dir(effective_user_id).mkdir(parents=True, exist_ok=True)
+            paths.user_integration_skills_dir(effective_user_id).mkdir(parents=True, exist_ok=True)
+            return [
+                (paths.host_user_custom_skills_dir(effective_user_id), f"{skills_container_path}/custom", True),
+                (paths.host_user_integration_skills_dir(effective_user_id), f"{skills_container_path}/integrations", True),
+            ]
+        except Exception as e:
+            logger.warning(f"Could not setup user skill mounts: {e}")
+            return []
 
     # ── Idle timeout management ──────────────────────────────────────────
 

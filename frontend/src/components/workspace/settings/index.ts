@@ -1,1 +1,1 @@
-export { SettingsDialog } from "./settings-dialog";
+export { SettingsDialog, type SettingsSection } from "./settings-dialog";

@@ -10,6 +10,7 @@ from deerflow.sandbox.tools import (
     VIRTUAL_PATH_PREFIX,
     _apply_cwd_prefix,
     _compiled_mask_patterns,
+    _extract_skill_name_from_skills_path,
     _get_custom_mount_for_path,
     _get_custom_mounts,
     _is_acp_workspace_path,
@@ -149,6 +150,26 @@ def test_mask_local_paths_no_thread_data_still_masks_skills() -> None:
         assert "/mnt/skills/a/b.md" in masked
 
 
+def test_mask_local_paths_hides_user_integration_skill_paths(tmp_path: Path) -> None:
+    from deerflow.config.paths import Paths
+
+    paths = Paths(base_dir=tmp_path)
+    integration_dir = paths.user_integration_skills_dir("alice") / "lark-cli" / "lark-doc"
+    integration_dir.mkdir(parents=True)
+    output = f"Reading: {integration_dir / 'SKILL.md'}"
+
+    with (
+        patch("deerflow.sandbox.tools._get_skills_container_path", return_value="/mnt/skills"),
+        patch("deerflow.sandbox.tools._get_skills_host_path", return_value="/home/user/deer-flow/skills"),
+        patch("deerflow.config.paths.get_paths", return_value=paths),
+        patch("deerflow.runtime.user_context.get_effective_user_id", return_value="alice"),
+    ):
+        masked = mask_local_paths_in_output(output, _THREAD_DATA)
+
+    assert str(integration_dir) not in masked
+    assert "/mnt/skills/integrations/lark-cli/lark-doc/SKILL.md" in masked
+
+
 # ---------- _reject_path_traversal ----------
 
 
@@ -261,6 +282,28 @@ def test_resolve_skills_path_resolves_root() -> None:
     ):
         resolved = _resolve_skills_path("/mnt/skills")
         assert resolved == "/home/user/deer-flow/skills"
+
+
+def test_extract_skill_name_from_integration_skill_path() -> None:
+    with patch("deerflow.sandbox.tools._get_skills_container_path", return_value="/mnt/skills"):
+        assert _extract_skill_name_from_skills_path("/mnt/skills/integrations/lark-cli/lark-doc/SKILL.md") == "lark-doc"
+        assert _extract_skill_name_from_skills_path("/mnt/skills/integrations/lark-cli") is None
+
+
+def test_resolve_skills_path_resolves_user_integration_skills(tmp_path: Path) -> None:
+    from deerflow.config.paths import Paths
+
+    paths = Paths(base_dir=tmp_path)
+    expected = paths.user_integration_skills_dir("alice") / "lark-cli" / "lark-doc" / "SKILL.md"
+    with (
+        patch("deerflow.sandbox.tools._get_skills_container_path", return_value="/mnt/skills"),
+        patch("deerflow.sandbox.tools._get_skills_host_path", return_value="/home/user/deer-flow/skills"),
+        patch("deerflow.config.paths.get_paths", return_value=paths),
+        patch("deerflow.runtime.user_context.get_effective_user_id", return_value="alice"),
+    ):
+        resolved = _resolve_skills_path("/mnt/skills/integrations/lark-cli/lark-doc/SKILL.md")
+
+    assert resolved == str(expected)
 
 
 def test_resolve_skills_path_raises_when_not_configured() -> None:

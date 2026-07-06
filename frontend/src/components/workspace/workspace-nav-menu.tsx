@@ -28,7 +28,7 @@ import {
 import { useI18n } from "@/core/i18n/hooks";
 
 import { GithubIcon } from "./github-icon";
-import { SettingsDialog } from "./settings";
+import { SettingsDialog, type SettingsSection } from "./settings";
 
 function NavMenuButtonContent({
   isSidebarOpen,
@@ -52,9 +52,8 @@ function NavMenuButtonContent({
 
 export function WorkspaceNavMenu() {
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsDefaultSection, setSettingsDefaultSection] = useState<
-    "appearance" | "memory" | "tools" | "skills" | "notification" | "about"
-  >("appearance");
+  const [settingsDefaultSection, setSettingsDefaultSection] =
+    useState<SettingsSection>("appearance");
   const [mounted, setMounted] = useState(false);
   const { open: isSidebarOpen } = useSidebar();
   const { t } = useI18n();

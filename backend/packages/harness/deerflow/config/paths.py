@@ -236,6 +236,15 @@ class Paths:
         """
         return self.user_skills_dir(user_id) / "custom"
 
+    def user_integration_skills_dir(self, user_id: str) -> Path:
+        """Per-user managed integration skills directory.
+
+        Layout: `{base_dir}/users/{user_id}/skills/integrations/{provider}/{skill}/`.
+        These skills are installed by first-party integration flows and are read-only
+        to users and agents.
+        """
+        return self.user_skills_dir(user_id) / "integrations"
+
     def thread_dir(self, thread_id: str, *, user_id: str | None = None) -> Path:
         """
         Host path for a thread's data.
@@ -324,6 +333,14 @@ class Paths:
     def host_acp_workspace_dir(self, thread_id: str, *, user_id: str | None = None) -> str:
         """Host path for the ACP workspace mount source."""
         return _join_host_path(self.host_thread_dir(thread_id, user_id=user_id), "acp-workspace")
+
+    def host_user_custom_skills_dir(self, user_id: str) -> str:
+        """Host path for a user's custom skills directory, preserving Windows path syntax."""
+        return _join_host_path(self._host_base_dir_str(), "users", _validate_user_id(user_id), "skills", "custom")
+
+    def host_user_integration_skills_dir(self, user_id: str) -> str:
+        """Host path for a user's managed integration skills directory."""
+        return _join_host_path(self._host_base_dir_str(), "users", _validate_user_id(user_id), "skills", "integrations")
 
     def ensure_thread_dirs(self, thread_id: str, *, user_id: str | None = None) -> None:
         """Create all standard sandbox directories for a thread.
