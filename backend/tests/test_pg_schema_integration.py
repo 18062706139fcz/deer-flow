@@ -14,7 +14,7 @@ from deerflow.persistence.engine import close_engine, get_engine, init_engine_fr
 from deerflow.runtime.checkpointer.async_provider import make_checkpointer
 from deerflow.runtime.checkpointer.provider import _sync_checkpointer_from_database
 from deerflow.runtime.store.async_provider import make_store
-from deerflow.runtime.store.provider import _sync_store_from_database
+from deerflow.runtime.store.provider import _resolve_store_config, _sync_store_cm
 
 POSTGRES_URL = os.getenv("DEERFLOW_TEST_POSTGRES_URL")
 
@@ -82,11 +82,12 @@ def test_sync_postgres_schema_places_checkpointer_and_store_tables_together():
         postgres_url=POSTGRES_URL or "",
         postgres_schema=schema,
     )
+    store_config = _resolve_store_config(SimpleNamespace(checkpointer=None, database=db_config))
 
     try:
         with _sync_checkpointer_from_database(db_config) as checkpointer:
             assert checkpointer is not None
-        with _sync_store_from_database(db_config) as store:
+        with _sync_store_cm(store_config) as store:
             assert store is not None
 
         with psycopg.connect(POSTGRES_URL or "", autocommit=True) as conn:
