@@ -82,7 +82,11 @@ async def run_migrations_online() -> None:
     # the schema (``CREATE SCHEMA IF NOT EXISTS``) before bootstrap runs.
     pg_schema = config.get_main_option("deerflow_pg_schema")
     connect_args: dict = {}
-    if pg_schema and url and url.startswith("postgresql"):
+    # Accept both the canonical ``postgresql`` scheme and libpq's ``postgres``
+    # short scheme (with or without a SQLAlchemy ``+driver`` suffix) so a
+    # ``postgres://`` DSN still gets its search_path pinned instead of silently
+    # writing ``alembic_version`` + migration DDL to the default schema.
+    if pg_schema and url and url.split("+", 1)[0].split(":", 1)[0] in {"postgresql", "postgres"}:
         from deerflow.persistence.postgres_schema import build_asyncpg_connect_args
 
         connect_args = build_asyncpg_connect_args(pg_schema)

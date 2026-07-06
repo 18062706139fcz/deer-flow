@@ -71,7 +71,29 @@ class TestDatabaseConfig:
         c = DatabaseConfig(backend="postgres", postgres_url="postgresql://u:p@h:5432/db", postgres_schema=schema)
         assert c.postgres_schema == schema
 
-    @pytest.mark.parametrize("schema", ["1abc", "a b", "a;b", "a-b", "a" * 64, 'a"b', "MySchema", "Orders", "Public"])
+    @pytest.mark.parametrize(
+        "schema",
+        [
+            "1abc",
+            "a b",
+            "a;b",
+            "a-b",
+            "a" * 64,
+            'a"b',
+            "MySchema",
+            "Orders",
+            "Public",
+            # Trailing/leading whitespace must be rejected: a ``$``-anchored
+            # ``re.match`` accepts a single trailing ``\n``, which would create a
+            # quoted schema literally named ``deerflow\n`` while the unquoted
+            # search_path folds to ``deerflow`` and misses it (tables land in
+            # ``public``). ``re.fullmatch`` on an unanchored pattern rejects it.
+            "deerflow\n",
+            "deerflow\t",
+            "\ndeerflow",
+            "deerflow ",
+        ],
+    )
     def test_postgres_schema_rejects_invalid_identifier(self, schema):
         from pydantic import ValidationError
 

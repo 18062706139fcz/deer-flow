@@ -13,8 +13,8 @@ uses expect different mechanisms:
 
 Schema names are validated upstream by
 :class:`deerflow.config.database_config.DatabaseConfig` to be plain
-identifiers, so these helpers do not re-validate; they only assemble the
-driver payloads.
+identifiers. SQL-emitting helpers re-validate at the boundary as
+defense-in-depth; connection-argument helpers only assemble driver payloads.
 """
 
 from __future__ import annotations
@@ -80,11 +80,16 @@ def _split_libpq_options(options: str) -> list[str]:
 def _join_libpq_options(tokens: list[str]) -> str:
     """Join tokens into a libpq ``options`` string.
 
-    Spaces and backslashes inside a token are backslash-escaped so libpq
+    Whitespace and backslashes inside a token are backslash-escaped so libpq
     keeps each token intact. ``shlex.join`` cannot be used: it emits POSIX
     shell quoting (single quotes), which libpq treats as literal characters.
+
+    All whitespace bytes are escaped, not just spaces: ``_split_libpq_options``
+    preserves a backslash-escaped TAB/CR/LF as part of one token, so re-joining
+    with a bare whitespace byte would let libpq re-tokenize on it and corrupt a
+    caller's pre-existing ``options`` value.
     """
-    escaped = [re.sub(r"([\\ ])", r"\\\1", token) for token in tokens]
+    escaped = [re.sub(r"([\\\s])", r"\\\1", token) for token in tokens]
     return " ".join(escaped)
 
 
@@ -122,9 +127,19 @@ def _merge_search_path_option(existing_options: str, schema: str) -> str:
 
 
 def create_schema_sql(schema: str) -> str | None:
-    """Return a safe CREATE SCHEMA statement for a validated plain identifier."""
+    """Return a safe CREATE SCHEMA statement for a validated plain identifier.
+
+    Defense-in-depth: the identifier is re-validated here rather than trusting
+    the distant pydantic validator. ``create_schema_sql`` is publicly exported
+    and psycopg accepts multiple ``;``-separated statements, so a future caller
+    that bypasses ``DatabaseConfig``/``CheckpointerConfig`` (e.g. a test helper)
+    must not be able to inject SQL through this f-string boundary.
+    """
     if not schema:
         return None
+    from deerflow.config.postgres_schema import validate_postgres_schema
+
+    validate_postgres_schema(schema)
     return f'CREATE SCHEMA IF NOT EXISTS "{schema}"'
 
 
@@ -214,8 +229,15 @@ def ensure_postgres_schema(conn_string: str, schema: str, *, install_hint: str) 
     except ImportError as exc:
         raise ImportError(install_hint) from exc
 
-    with psycopg.connect(normalize_libpq_dsn(conn_string), autocommit=True) as conn:
+    # psycopg 3's ``Connection.__exit__`` only commits/rolls back -- it does NOT
+    # close the connection (a documented psycopg2->3 change). Use try/finally so
+    # the libpq connection is released deterministically, mirroring the async
+    # counterpart, instead of leaking it until GC.
+    conn = psycopg.connect(normalize_libpq_dsn(conn_string), autocommit=True)
+    try:
         conn.execute(statement)
+    finally:
+        conn.close()
 
 
 async def ensure_postgres_schema_async(conn_string: str, schema: str, *, install_hint: str) -> None:

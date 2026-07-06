@@ -486,7 +486,13 @@ def test_get_app_config_keeps_persistence_runtime_singletons_when_checkpointer_u
         _reset_config_singletons()
 
 
-def test_get_app_config_resets_persistence_singletons_when_database_changes(tmp_path, monkeypatch):
+def test_get_app_config_does_not_reset_persistence_singletons_when_database_changes(tmp_path, monkeypatch):
+    # ``database`` is a restart-required field: the ORM engine is built once at
+    # startup and never rebuilt on a config.yaml edit. Resetting only the sync
+    # checkpointer/store singletons on a live ``postgres_schema`` change would
+    # half-migrate the deployment (new checkpoint/store tables in the new schema,
+    # ORM rows still in the old one). So a ``database`` change must NOT trigger a
+    # partial reset -- the operator must restart.
     config_path = tmp_path / "config.yaml"
     extensions_path = tmp_path / "extensions_config.json"
     _write_extensions_config(extensions_path)
@@ -525,7 +531,7 @@ def test_get_app_config_resets_persistence_singletons_when_database_changes(tmp_
         get_app_config()
 
         assert get_checkpointer_config() is None
-        assert reset_calls == {"checkpointer": 1, "store": 1}
+        assert reset_calls == {"checkpointer": 0, "store": 0}
     finally:
         _reset_config_singletons()
 

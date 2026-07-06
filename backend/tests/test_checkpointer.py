@@ -421,11 +421,8 @@ class TestGetCheckpointer:
         mock_pg_module.PostgresSaver = mock_saver_cls
 
         mock_conn = MagicMock()
-        mock_connect_cm = MagicMock()
-        mock_connect_cm.__enter__.return_value = mock_conn
-        mock_connect_cm.__exit__.return_value = False
         mock_psycopg = MagicMock()
-        mock_psycopg.connect.return_value = mock_connect_cm
+        mock_psycopg.connect.return_value = mock_conn
 
         with (
             patch.dict(sys.modules, {"langgraph.checkpoint.postgres": mock_pg_module}),
@@ -437,6 +434,8 @@ class TestGetCheckpointer:
         assert cp is mock_saver_instance
         mock_psycopg.connect.assert_called_once_with("postgresql://localhost/db", autocommit=True)
         mock_conn.execute.assert_called_once_with('CREATE SCHEMA IF NOT EXISTS "deerflow"')
+        # psycopg 3 __exit__ does not close(); the sync path must close explicitly.
+        mock_conn.close.assert_called_once_with()
         called_dsn = mock_saver_cls.from_conn_string.call_args.args[0]
         assert "options=-c%20search_path%3Ddeerflow" in called_dsn
         mock_saver_instance.setup.assert_called_once()
@@ -457,11 +456,8 @@ class TestGetCheckpointer:
         mock_pg_module.PostgresStore = mock_store_cls
 
         mock_conn = MagicMock()
-        mock_connect_cm = MagicMock()
-        mock_connect_cm.__enter__.return_value = mock_conn
-        mock_connect_cm.__exit__.return_value = False
         mock_psycopg = MagicMock()
-        mock_psycopg.connect.return_value = mock_connect_cm
+        mock_psycopg.connect.return_value = mock_conn
 
         with (
             patch.dict(sys.modules, {"langgraph.store.postgres": mock_pg_module}),
@@ -473,6 +469,8 @@ class TestGetCheckpointer:
         assert store is mock_store_instance
         mock_psycopg.connect.assert_called_once_with("postgresql://localhost/db", autocommit=True)
         mock_conn.execute.assert_called_once_with('CREATE SCHEMA IF NOT EXISTS "deerflow"')
+        # psycopg 3 __exit__ does not close(); the sync path must close explicitly.
+        mock_conn.close.assert_called_once_with()
         called_dsn = mock_store_cls.from_conn_string.call_args.args[0]
         assert "options=-c%20search_path%3Ddeerflow" in called_dsn
         mock_store_instance.setup.assert_called_once()

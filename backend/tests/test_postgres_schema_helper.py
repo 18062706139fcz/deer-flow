@@ -36,6 +36,13 @@ class TestCreateSchemaSql:
     def test_empty_schema_returns_none(self):
         assert create_schema_sql("") is None
 
+    @pytest.mark.parametrize("schema", ['a"; DROP SCHEMA public; --', "MySchema", "a b", "deerflow\n"])
+    def test_rejects_non_plain_identifier(self, schema):
+        # Defense-in-depth: the SQL-emitting boundary re-validates so a caller
+        # that bypasses the pydantic config validator cannot inject.
+        with pytest.raises(ValueError):
+            create_schema_sql(schema)
+
 
 class TestDsnWithSearchPath:
     def test_empty_schema_returns_dsn_unchanged(self):
@@ -135,6 +142,22 @@ class TestDsnWithSearchPath:
         merged = _merge_search_path_option(r"-c application_name=My\ App", "deerflow")
         assert "'" not in merged
         assert r"application_name=My\ App" in merged
+        assert merged.endswith("-c search_path=deerflow")
+
+    def test_preserves_option_value_containing_tab(self):
+        # Non-space whitespace (TAB/CR/LF) inside an existing escaped token must
+        # also be re-escaped on re-join, otherwise libpq re-tokenizes on the bare
+        # whitespace byte and the round-trip is lossy.
+        from deerflow.persistence.postgres_schema import (
+            _merge_search_path_option,
+            _split_libpq_options,
+        )
+
+        merged = _merge_search_path_option("-c application_name=My\\\tApp", "deerflow")
+        assert "'" not in merged
+        # The tab-bearing value must round-trip back to a single token.
+        tokens = _split_libpq_options(merged)
+        assert "application_name=My\tApp" in tokens
         assert merged.endswith("-c search_path=deerflow")
 
 
