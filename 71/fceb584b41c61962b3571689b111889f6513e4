@@ -1,0 +1,106 @@
+backend/packages/harness/deerflow/persistence/postgres_schema.py
+  s_bb8825fa40b9be::t_188875a3aaab36 16-17 gitai:{"mixed_line_ranges":[],"operations":[{"operation_id":"6a4b5ffd37b7f43d01f3e447","tool_type":"agent","tool_id":"apply_patch","line_ranges":[{"Range":[16,17]}]}]}
+backend/packages/harness/deerflow/config/postgres_schema.py
+  s_bb8825fa40b9be::t_2f5741fcc13f10 12-13 gitai:{"mixed_line_ranges":[],"operations":[{"operation_id":"6a4b600e37b7f43d01f3e463","tool_type":"agent","tool_id":"apply_patch","line_ranges":[{"Range":[12,13]}]}]}
+  s_bb8825fa40b9be::t_27f6e753e64d7a 11
+  s_bb8825fa40b9be::t_ae9464162bb597 14-16
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "71fceb584b41c61962b3571689b111889f6513e4",
+  "prompts": {},
+  "sessions": {
+    "s_bb8825fa40b9be": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a4b59f737b7f43d01f3e2d3",
+        "model": "gpt-5.5__max"
+      },
+      "human_author": "ryker <2279549769@qq.com>"
+    }
+  },
+  "attestation_metadata": {
+    "backend/packages/harness/deerflow/config/postgres_schema.py": [
+      {
+        "hash": "s_bb8825fa40b9be::t_2f5741fcc13f10",
+        "line_ranges": [
+          {
+            "Range": [
+              12,
+              13
+            ]
+          }
+        ],
+        "mixed_line_ranges": [],
+        "operations": [
+          {
+            "operation_id": "6a4b600e37b7f43d01f3e463",
+            "tool_type": "agent",
+            "tool_id": "apply_patch",
+            "line_ranges": [
+              {
+                "Range": [
+                  12,
+                  13
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "backend/packages/harness/deerflow/persistence/postgres_schema.py": [
+      {
+        "hash": "s_bb8825fa40b9be::t_188875a3aaab36",
+        "line_ranges": [
+          {
+            "Range": [
+              16,
+              17
+            ]
+          }
+        ],
+        "mixed_line_ranges": [],
+        "operations": [
+          {
+            "operation_id": "6a4b5ffd37b7f43d01f3e447",
+            "tool_type": "agent",
+            "tool_id": "apply_patch",
+            "line_ranges": [
+              {
+                "Range": [
+                  16,
+                  17
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "remote_transcripts": {
+    "s_bb8825fa40b9be": {
+      "tool": "trae",
+      "conversation_id": "6a4b59f737b7f43d01f3e2d3",
+      "session_id": "6a4b59f737b7f43d01f3e2d3",
+      "status": "remote_only",
+      "message": "Remote transcript resolution is not implemented yet for TRAE prompts."
+    },
+    "s_bb8825fa40b9be::t_188875a3aaab36": {
+      "tool": "trae",
+      "conversation_id": "6a4b59f737b7f43d01f3e2d3",
+      "session_id": "6a4b59f737b7f43d01f3e2d3",
+      "status": "remote_only",
+      "message": "Remote transcript resolution is not implemented yet for TRAE prompts."
+    },
+    "s_bb8825fa40b9be::t_2f5741fcc13f10": {
+      "tool": "trae",
+      "conversation_id": "6a4b59f737b7f43d01f3e2d3",
+      "session_id": "6a4b59f737b7f43d01f3e2d3",
+      "status": "remote_only",
+      "message": "Remote transcript resolution is not implemented yet for TRAE prompts."
+    }
+  }
+}
