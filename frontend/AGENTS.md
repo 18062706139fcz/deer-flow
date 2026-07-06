@@ -85,6 +85,7 @@ The frontend is a stateful chat application. Users create **threads** (conversat
 - `src/app/workspace/chats/[thread_id]/page.tsx` owns branch-from-turn submission and navigation; sidecar `MessageList` instances do not receive the branch action.
 - `src/app/workspace/chats/[thread_id]/page.tsx` and `src/app/workspace/agents/[agent_name]/chats/[thread_id]/page.tsx` own active-goal display state for their composer overlays.
 - `src/core/threads/hooks.ts` owns pre-submit upload state and thread submission.
+- The text-selection toolbar in `src/components/workspace/messages/message-list.tsx` adapts to its surface via the `sidecarSurface` prop. On the main list it offers "Add to conversation" (→ `sidecar.addContextToConversation`, main composer quotes) and "Ask in side chat" (→ `sidecar.openContext`). Inside the sidecar's own `MessageList` (`sidecarSurface`), the "Ask in side chat" action is hidden and "Add to conversation" routes to `sidecar.openContext` so the snippet attaches to the side chat's own composer rather than the main composer.
 
 ## Code Style
 
