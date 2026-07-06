@@ -71,6 +71,7 @@ def test_install_lark_integration_installs_readonly_user_scoped_skills(monkeypat
     shared_content = (root / "lark-shared" / "SKILL.md").read_text(encoding="utf-8")
     assert "?settings=integrations" in shared_content
     assert "不要要求用户在终端执行" in shared_content
+    assert "Exact OAuth scope" in shared_content
 
     storage = UserScopedSkillStorage("alice", host_path=str(skills_root), app_config=config)
     skills = storage.load_skills(enabled_only=False)

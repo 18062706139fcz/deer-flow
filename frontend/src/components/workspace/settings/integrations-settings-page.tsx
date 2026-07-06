@@ -22,10 +22,12 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { useAuth } from "@/core/auth/AuthProvider";
 import { useI18n } from "@/core/i18n/hooks";
 import {
   LarkIntegrationRequestError,
+  type LarkAuthStartRequest,
   type LarkAuthStartResponse,
   type LarkConfigStartResponse,
   type LarkIntegrationStatus,
@@ -44,6 +46,8 @@ import { SettingsSection } from "./settings-section";
 type PendingLarkFlow =
   | ({ kind: "config" } & LarkConfigStartResponse)
   | ({ kind: "auth" } & LarkAuthStartResponse);
+
+type LarkAuthDomain = "calendar" | "docs" | "drive" | "all";
 
 export function IntegrationsSettingsPage() {
   const { t } = useI18n();
@@ -70,11 +74,19 @@ function LarkIntegrationCard() {
   const completeAuth = useCompleteLarkAuthorization();
   const [pendingFlow, setPendingFlow] = useState<PendingLarkFlow | null>(null);
   const [isCheckingConnection, setIsCheckingConnection] = useState(false);
+  const [selectedAuthDomains, setSelectedAuthDomains] = useState<
+    LarkAuthDomain[]
+  >([]);
+  const [customAuthScope, setCustomAuthScope] = useState("");
   const browserWindowRef = useRef<Window | null>(null);
+  const authRequestRef = useRef<LarkAuthStartRequest>({ recommend: true });
   const connectBusy =
     startConfig.isPending || completeConfig.isPending || startAuth.isPending;
   const connectActionBusy = connectBusy || isCheckingConnection;
   const isConnected = data?.auth.status === "authenticated";
+  const trimmedCustomAuthScope = customAuthScope.trim();
+  const hasAdditionalPermissionRequest =
+    selectedAuthDomains.length > 0 || trimmedCustomAuthScope.length > 0;
 
   const handleInstall = () => {
     install.mutate(undefined, {
@@ -122,21 +134,21 @@ function LarkIntegrationCard() {
     );
   };
 
-  const startUserAuth = (browserWindow = browserWindowRef.current) => {
-    startAuth.mutate(
-      { recommend: true },
-      {
-        onSuccess: (result) => {
-          setPendingFlow({ kind: "auth", ...result });
-          openAuthorizationUrl(result.verification_url, browserWindow);
-          toast.success(t.settings.integrations.lark.authStarted);
-        },
-        onError: (err) => {
-          closePendingBrowserWindow(browserWindow);
-          toast.error(err instanceof Error ? err.message : String(err));
-        },
+  const startUserAuth = (
+    browserWindow = browserWindowRef.current,
+    request = authRequestRef.current,
+  ) => {
+    startAuth.mutate(request, {
+      onSuccess: (result) => {
+        setPendingFlow({ kind: "auth", ...result });
+        openAuthorizationUrl(result.verification_url, browserWindow);
+        toast.success(t.settings.integrations.lark.authStarted);
       },
-    );
+      onError: (err) => {
+        closePendingBrowserWindow(browserWindow);
+        toast.error(err instanceof Error ? err.message : String(err));
+      },
+    });
   };
 
   const handleContinueConnection = () => {
@@ -186,15 +198,40 @@ function LarkIntegrationCard() {
     startUserAuth(browserWindow);
   };
 
+  const buildAuthRequest = (): LarkAuthStartRequest => ({
+    recommend: true,
+    domains: selectedAuthDomains,
+    scope: trimmedCustomAuthScope.length > 0 ? trimmedCustomAuthScope : null,
+  });
+
+  const toggleAuthDomain = (domain: LarkAuthDomain) => {
+    setSelectedAuthDomains((current) => {
+      if (domain === "all") {
+        return current.includes("all") ? [] : ["all"];
+      }
+      const withoutAll = current.filter((item) => item !== "all");
+      if (withoutAll.includes(domain)) {
+        return withoutAll.filter((item) => item !== domain);
+      }
+      return [...withoutAll, domain];
+    });
+  };
+
   const handleConnect = async () => {
     if (!data) return;
+    authRequestRef.current = buildAuthRequest();
     const browserWindow =
-      data.auth.status === "authenticated" ? null : openPendingBrowserWindow();
+      data.auth.status === "authenticated" && !hasAdditionalPermissionRequest
+        ? null
+        : openPendingBrowserWindow();
     setIsCheckingConnection(true);
     try {
       const refreshed = await refetch();
       const latestStatus = refreshed.data ?? data;
-      if (latestStatus.auth.status === "authenticated") {
+      if (
+        latestStatus.auth.status === "authenticated" &&
+        !hasAdditionalPermissionRequest
+      ) {
         closePendingBrowserWindow(browserWindow);
         toast.info(t.settings.integrations.lark.alreadyConnected);
         return;
@@ -251,9 +288,38 @@ function LarkIntegrationCard() {
     ? t.settings.integrations.lark.checkingConnection
     : connectBusy
       ? t.settings.integrations.lark.authStarting
-      : isConnected
-        ? t.settings.integrations.lark.connectedAction
-        : t.settings.integrations.lark.connect;
+      : isConnected && hasAdditionalPermissionRequest
+        ? t.settings.integrations.lark.requestPermissions
+        : isConnected
+          ? t.settings.integrations.lark.connectedAction
+          : t.settings.integrations.lark.connect;
+
+  const permissionDomains = [
+    {
+      id: "calendar",
+      label: t.settings.integrations.lark.authDomainCalendar,
+      description: t.settings.integrations.lark.authDomainCalendarDescription,
+    },
+    {
+      id: "docs",
+      label: t.settings.integrations.lark.authDomainDocs,
+      description: t.settings.integrations.lark.authDomainDocsDescription,
+    },
+    {
+      id: "drive",
+      label: t.settings.integrations.lark.authDomainDrive,
+      description: t.settings.integrations.lark.authDomainDriveDescription,
+    },
+    {
+      id: "all",
+      label: t.settings.integrations.lark.authDomainAll,
+      description: t.settings.integrations.lark.authDomainAllDescription,
+    },
+  ] satisfies Array<{
+    id: LarkAuthDomain;
+    label: string;
+    description: string;
+  }>;
 
   return (
     <Card>
@@ -335,6 +401,52 @@ function LarkIntegrationCard() {
               cliReady={data.cli.available}
               connected={isConnected}
             />
+            {data.installed && data.cli.available && (
+              <div className="rounded-lg border p-3">
+                <div className="space-y-1">
+                  <div className="text-sm font-medium">
+                    {t.settings.integrations.lark.permissionTitle}
+                  </div>
+                  <p className="text-muted-foreground text-sm">
+                    {t.settings.integrations.lark.permissionDescription}
+                  </p>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {permissionDomains.map((domain) => {
+                    const selected = selectedAuthDomains.includes(domain.id);
+                    return (
+                      <Button
+                        key={domain.id}
+                        type="button"
+                        size="sm"
+                        variant={selected ? "default" : "outline"}
+                        onClick={() => toggleAuthDomain(domain.id)}
+                        disabled={connectActionBusy}
+                        title={domain.description}
+                      >
+                        {domain.label}
+                      </Button>
+                    );
+                  })}
+                </div>
+                <div className="mt-3 space-y-1">
+                  <Input
+                    value={customAuthScope}
+                    onChange={(event) =>
+                      setCustomAuthScope(event.currentTarget.value)
+                    }
+                    disabled={connectActionBusy}
+                    placeholder={
+                      t.settings.integrations.lark.customScopePlaceholder
+                    }
+                    aria-label={t.settings.integrations.lark.customScopeLabel}
+                  />
+                  <p className="text-muted-foreground text-xs">
+                    {t.settings.integrations.lark.customScopeDescription}
+                  </p>
+                </div>
+              </div>
+            )}
             <div className="flex flex-wrap items-center gap-2">
               <Button onClick={handleInstall} disabled={installDisabled}>
                 {install.isPending ? (

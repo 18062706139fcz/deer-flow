@@ -131,7 +131,13 @@ describe("lark integration api", () => {
       }),
     );
 
-    await expect(startLarkAuthorization({ recommend: true })).resolves.toEqual({
+    await expect(
+      startLarkAuthorization({
+        recommend: true,
+        domains: ["calendar"],
+        scope: "calendar:calendar:readonly",
+      }),
+    ).resolves.toEqual({
       verification_url: "https://open.feishu.cn/auth/mock",
       device_code: "device-code",
       expires_in: 600,
@@ -143,7 +149,11 @@ describe("lark integration api", () => {
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ recommend: true }),
+        body: JSON.stringify({
+          recommend: true,
+          domains: ["calendar"],
+          scope: "calendar:calendar:readonly",
+        }),
       },
     );
   });

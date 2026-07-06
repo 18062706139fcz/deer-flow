@@ -19,6 +19,21 @@ test.describe("Integrations settings", () => {
     page,
   }) => {
     mockLangGraphAPI(page);
+    let authStartRequest: unknown;
+    await page.route("**/api/integrations/lark/auth/start", async (route) => {
+      authStartRequest = route.request().postDataJSON();
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          verification_url: "https://open.feishu.cn/auth/mock-device",
+          device_code: "mock-device-code",
+          expires_in: 600,
+          user_code: null,
+          hint: null,
+        }),
+      });
+    });
 
     await page.goto("/workspace/chats/new");
 
@@ -40,6 +55,10 @@ test.describe("Integrations settings", () => {
       page.getByText("Installed 3 Lark/Feishu skills."),
     ).toBeVisible();
 
+    await dialog.getByRole("button", { name: "Calendar" }).click();
+    await dialog
+      .getByLabel("Exact OAuth scope")
+      .fill("calendar:calendar:readonly");
     await dialog.getByRole("button", { name: "Connect Lark" }).click();
     await expect(
       dialog.getByText("https://open.feishu.cn/page/cli?user_code=config"),
@@ -54,6 +73,11 @@ test.describe("Integrations settings", () => {
     await expect(
       dialog.getByText("https://open.feishu.cn/auth/mock-device"),
     ).toBeVisible();
+    expect(authStartRequest).toMatchObject({
+      recommend: true,
+      domains: ["calendar"],
+      scope: "calendar:calendar:readonly",
+    });
 
     await dialog
       .getByRole("button", { name: "I completed authorization" })
@@ -63,6 +87,8 @@ test.describe("Integrations settings", () => {
     ).toBeVisible();
     await expect(dialog.getByText("Lark is connected")).toBeVisible();
 
+    await dialog.getByRole("button", { name: "Calendar" }).click();
+    await dialog.getByLabel("Exact OAuth scope").fill("");
     await dialog.getByRole("button", { name: "Connected" }).click();
     await expect(page.getByText(/Lark is already connected/)).toBeVisible();
     await expect(

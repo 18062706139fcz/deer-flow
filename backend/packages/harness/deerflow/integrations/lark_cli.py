@@ -40,7 +40,8 @@ LARK_CONFIG_POLL_TIMEOUT_SECONDS = 45
 LARK_CLI_MAX_ARCHIVE_BYTES = 128 * 1024 * 1024
 LARK_CLI_MAX_EXTRACTED_BYTES = 256 * 1024 * 1024
 LARK_CLI_MANIFEST_FILE = ".deerflow-lark-cli-manifest.json"
-_DEERFLOW_LARK_SHARED_GUIDANCE_MARKER = "<!-- deerflow-lark-cli-auth-guidance-v1 -->"
+_DEERFLOW_LARK_SHARED_GUIDANCE_MARKER = "<!-- deerflow-lark-cli-auth-guidance-v2 -->"
+_DEERFLOW_LARK_SHARED_GUIDANCE_LEGACY_MARKERS = ("<!-- deerflow-lark-cli-auth-guidance-v1 -->",)
 _LARK_APP_REGISTRATION_PATH = "/oauth/v1/app/registration"
 
 LARK_SKILL_NAMES: tuple[str, ...] = (
@@ -823,6 +824,10 @@ def _append_deerflow_lark_shared_guidance(root: Path) -> None:
     content = skill_file.read_text(encoding="utf-8")
     if _DEERFLOW_LARK_SHARED_GUIDANCE_MARKER in content:
         return
+    for legacy_marker in _DEERFLOW_LARK_SHARED_GUIDANCE_LEGACY_MARKERS:
+        if legacy_marker in content:
+            content = content.split(legacy_marker, maxsplit=1)[0].rstrip()
+            break
     guidance = f"""
 
 {_DEERFLOW_LARK_SHARED_GUIDANCE_MARKER}
@@ -834,6 +839,7 @@ def _append_deerflow_lark_shared_guidance(root: Path) -> None:
 1. 不要要求用户在终端执行 `lark-cli config init`、`lark-cli auth login` 或 `lark-cli auth login --device-code`。
 2. 回复用户这个可点击链接：[打开飞书授权设置](?settings=integrations)。
 3. 告诉用户在 **Settings → Integrations → Lark / Feishu CLI** 点击“连接飞书”，在浏览器里完成授权后再回来继续当前任务。
+4. 如果错误中包含缺失的 `scope`、`permission_violations` 或建议的 `--domain`，告诉用户在该设置页选择对应权限域（例如日历选择 Calendar），或把具体 scope 填入“Exact OAuth scope / 具体 OAuth scope”后重新授权。
 
 只有在用户明确说明已经完成授权后，才继续调用具体的 `lark-cli` 业务命令。
 """

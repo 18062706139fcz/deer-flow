@@ -769,11 +769,31 @@ export const enUS: Translations = {
         authStarting: "Opening connection link...",
         checkingConnection: "Checking connection...",
         connectedAction: "Connected",
+        requestPermissions: "Request permissions",
         alreadyConnected:
           "Lark is already connected. If authorization expires, refresh the status and reconnect.",
         connectionStarted: "Connection link opened",
         connectionReady: "Connection is ready. Opening authorization...",
         authStarted: "Authorization link generated",
+        permissionTitle: "Authorization scope",
+        permissionDescription:
+          "DeerFlow requests the official recommended scopes by default. Add domains here when you need calendar, document, or Drive access; connected users can re-authorize to add permissions.",
+        authDomainCalendar: "Calendar",
+        authDomainCalendarDescription:
+          "Read and manage the current user's events, free/busy data, and meeting room flows.",
+        authDomainDocs: "Docs",
+        authDomainDocsDescription:
+          "Read and edit docs, sheets, Base, and related document content.",
+        authDomainDrive: "Drive",
+        authDomainDriveDescription:
+          "Access the current user's Drive files, folders, and attachments.",
+        authDomainAll: "All",
+        authDomainAllDescription:
+          "Request every business domain supported by lark-cli. Use this only when the missing permission is unclear.",
+        customScopeLabel: "Exact OAuth scope",
+        customScopePlaceholder: "For example calendar:calendar:readonly",
+        customScopeDescription:
+          "Advanced: if an error reports a missing scope, paste it here. It will be requested together with selected domains.",
         openConnectionLinkTitle: "Continue connecting Lark",
         openConnectionLinkDescription:
           "The first connection needs one browser confirmation from Lark. Open the link below and finish the prompt, then return here to continue authorization.",

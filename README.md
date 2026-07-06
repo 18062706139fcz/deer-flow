@@ -630,9 +630,11 @@ them into custom skills. The Lark/Feishu CLI integration is available under
 `lark-*` skills into the user's managed integration directory and checks whether
 `lark-cli` is available in the Gateway runtime. After installation, users can
 click **Connect Lark** to open a browser authorization link; no terminal
-authorization is required. If an agent hits missing Lark authorization during a
-conversation, the managed `lark-shared` guidance points the user back to the same
-settings entry with `?settings=integrations`.
+authorization is required. The same UI can request additional permission domains
+such as Calendar, Docs, or Drive, or a specific OAuth scope reported by
+`lark-cli`. If an agent hits missing Lark authorization during a conversation,
+the managed `lark-shared` guidance points the user back to the same settings
+entry with `?settings=integrations`.
 
 Tools follow the same philosophy. DeerFlow comes with a core toolset — web search, web fetch, rendered web capture, file operations, bash execution — and supports custom tools via MCP servers and Python functions. Swap anything. Add anything.
 

@@ -744,11 +744,30 @@ export const zhCN: Translations = {
         authStarting: "正在打开连接链接...",
         checkingConnection: "正在检查连接状态...",
         connectedAction: "已连接",
+        requestPermissions: "申请新权限",
         alreadyConnected:
           "飞书已连接，无需重复授权。如果授权已过期，刷新状态后可重新连接。",
         connectionStarted: "连接链接已打开",
         connectionReady: "连接准备已完成，正在打开授权链接",
         authStarted: "授权链接已生成",
+        permissionTitle: "授权范围",
+        permissionDescription:
+          "默认会申请官方推荐权限。需要读日历、云文档或云空间时，可在这里追加权限域；已连接用户也可以重新授权追加权限。",
+        authDomainCalendar: "日历",
+        authDomainCalendarDescription:
+          "读取和管理当前用户的日程、忙闲与会议室相关能力。",
+        authDomainDocs: "文档",
+        authDomainDocsDescription:
+          "读取和编辑飞书文档、电子表格、多维表格等内容。",
+        authDomainDrive: "云空间",
+        authDomainDriveDescription: "访问当前用户云空间文件、文件夹和附件。",
+        authDomainAll: "全部",
+        authDomainAllDescription:
+          "申请 lark-cli 支持的全部业务域权限。仅在不确定缺哪个权限时使用。",
+        customScopeLabel: "具体 OAuth scope",
+        customScopePlaceholder: "例如 calendar:calendar:readonly",
+        customScopeDescription:
+          "高级用法：如果错误里给出了缺失 scope，可直接填在这里；会和上方选择的权限域一起申请。",
         openConnectionLinkTitle: "继续完成飞书连接",
         openConnectionLinkDescription:
           "首次连接需要在浏览器里完成一次飞书确认。打开下面的链接按提示完成；完成后回到这里继续授权。",
