@@ -1347,6 +1347,112 @@ test.describe("Side chat", () => {
     });
   });
 
+  test("keeps the delete dialog open while the delete is in flight", async ({
+    page,
+  }) => {
+    mockLangGraphAPI(page, {
+      threads: [
+        {
+          thread_id: MOCK_THREAD_ID,
+          title: "Main conversation",
+          messages: [
+            {
+              type: "human",
+              id: "parent-human-1",
+              content: [{ type: "text", text: "Plan the feature." }],
+            },
+            {
+              type: "ai",
+              id: "parent-ai-1",
+              content: "Build it as a side conversation.",
+            },
+          ],
+        },
+        {
+          thread_id: MOCK_SIDECAR_THREAD_ID,
+          title: "Restored side chat",
+          updated_at: "2025-01-01T00:00:01Z",
+          metadata: {
+            deerflow_sidecar: true,
+            parent_thread_id: MOCK_THREAD_ID,
+            sidecar_context_type: "referenced_message",
+            sidecar_context_label: "Selected assistant text #2",
+            sidecar_context_count: 1,
+            referenced_message_id: "parent-ai-1",
+            referenced_message_ids: ["parent-ai-1"],
+            referenced_message_role: "assistant",
+            referenced_message_roles: ["assistant"],
+          },
+          messages: [
+            {
+              type: "ai",
+              id: "side-ai-1",
+              content: "Restored side answer.",
+            },
+          ],
+        },
+      ],
+    });
+
+    // Hold the local-delete step open so the mutation stays pending while we
+    // probe every dismissal path Radix would otherwise honor.
+    let releaseDelete: (() => void) | undefined;
+    const deleteGate = new Promise<void>((resolve) => {
+      releaseDelete = resolve;
+    });
+    await page.route(/\/api\/threads\/[^/]+$/, async (route) => {
+      if (route.request().method() !== "DELETE") {
+        return route.fallback();
+      }
+      await deleteGate;
+      return route.fallback();
+    });
+
+    await page.goto(`/workspace/chats/${MOCK_THREAD_ID}`);
+    await expect(
+      page.getByText("Build it as a side conversation."),
+    ).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId("sidecar-header-trigger")).toBeVisible({
+      timeout: 10_000,
+    });
+
+    await page.getByTestId("sidecar-header-trigger").click();
+    await expect(page.getByTestId("sidecar-panel")).toBeVisible();
+
+    await page.getByTestId("sidecar-delete-button").click();
+    const dialogTitle = page.getByRole("heading", { name: "Delete side chat" });
+    await expect(dialogTitle).toBeVisible();
+    // The built-in Radix close (X) is present before the delete starts.
+    await expect(
+      page.locator('[data-slot="dialog-content"] [data-slot="dialog-close"]'),
+    ).toHaveCount(1);
+
+    await page.getByTestId("sidecar-delete-confirm-button").click();
+
+    // Delete is in flight: confirm shows the loading label and Cancel disables.
+    await expect(
+      page.getByTestId("sidecar-delete-confirm-button"),
+    ).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Cancel" })).toBeDisabled();
+    // The built-in close (X) is removed so it can't imply a cancel.
+    await expect(
+      page.locator('[data-slot="dialog-content"] [data-slot="dialog-close"]'),
+    ).toHaveCount(0);
+
+    // Esc and overlay clicks must not dismiss the dialog mid-delete.
+    await page.keyboard.press("Escape");
+    await expect(dialogTitle).toBeVisible();
+    await page
+      .locator('[data-slot="dialog-overlay"]')
+      .click({ position: { x: 5, y: 5 } });
+    await expect(dialogTitle).toBeVisible();
+
+    // Once the delete resolves the dialog closes and the panel goes away.
+    releaseDelete?.();
+    await expect(dialogTitle).toBeHidden({ timeout: 10_000 });
+    await expect(page.getByTestId("sidecar-panel")).toBeHidden();
+  });
+
   test("closes the draft side chat without deleting when no conversation exists", async ({
     page,
   }) => {

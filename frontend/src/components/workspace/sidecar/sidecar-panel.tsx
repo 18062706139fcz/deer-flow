@@ -623,8 +623,31 @@ export function SidecarPanel({ className }: { className?: string }) {
         </PromptInputProvider>
       </div>
 
-      <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
-        <DialogContent>
+      <Dialog
+        open={deleteDialogOpen}
+        onOpenChange={(open) => {
+          // While the delete is in flight the only way out is the (disabled)
+          // Cancel button, so ignore overlay/Esc/close-button dismissals that
+          // would otherwise hide the dialog and imply the delete was cancelled.
+          if (!open && isDeleting) {
+            return;
+          }
+          setDeleteDialogOpen(open);
+        }}
+      >
+        <DialogContent
+          showCloseButton={!isDeleting}
+          onEscapeKeyDown={(event) => {
+            if (isDeleting) {
+              event.preventDefault();
+            }
+          }}
+          onInteractOutside={(event) => {
+            if (isDeleting) {
+              event.preventDefault();
+            }
+          }}
+        >
           <DialogHeader>
             <DialogTitle>{t.sidecar.delete}</DialogTitle>
             <DialogDescription>{t.sidecar.deleteConfirm}</DialogDescription>
