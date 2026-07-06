@@ -31,6 +31,16 @@ class SummarizationEvent:
     runtime: Runtime
 
 
+@dataclass(frozen=True)
+class ContextCompactionResult:
+    """Result of summarizing old context and retaining the active tail."""
+
+    summary_text: str
+    messages_to_summarize: tuple[AnyMessage, ...]
+    preserved_messages: tuple[AnyMessage, ...]
+    total_tokens: int
+
+
 @runtime_checkable
 class BeforeSummarizationHook(Protocol):
     """Hook invoked before summarization removes messages from state."""
@@ -249,14 +259,19 @@ class DeerFlowSummarizationMiddleware(SummarizationMiddleware):
     async def abefore_model(self, state: AgentState, runtime: Runtime) -> dict | None:
         return await self._amaybe_summarize(state, runtime)
 
-    def _maybe_summarize(self, state: AgentState, runtime: Runtime) -> dict | None:
+    def _prepare_compaction(
+        self,
+        state: AgentState,
+        *,
+        force: bool = False,
+    ) -> tuple[list[AnyMessage], list[AnyMessage], str | None, int] | None:
         messages = state["messages"]
         self._ensure_message_ids(messages)
 
         previous_summary = state.get("summary_text") if isinstance(state.get("summary_text"), str) else None
         trigger_messages = self._messages_for_trigger_count(messages, previous_summary)
         total_tokens = self.token_counter(trigger_messages)
-        if not self._should_summarize(trigger_messages, total_tokens):
+        if not force and not self._should_summarize(trigger_messages, total_tokens):
             return None
 
         cutoff_index = self._determine_cutoff_index(messages)
@@ -267,46 +282,74 @@ class DeerFlowSummarizationMiddleware(SummarizationMiddleware):
         messages_to_summarize, preserved_messages = self._preserve_dynamic_context_reminders(messages_to_summarize, preserved_messages)
         if not messages_to_summarize:
             return None
+        return messages_to_summarize, preserved_messages, previous_summary, total_tokens
+
+    def compact_state(
+        self,
+        state: AgentState,
+        runtime: Runtime,
+        *,
+        force: bool = False,
+    ) -> ContextCompactionResult | None:
+        prepared = self._prepare_compaction(state, force=force)
+        if prepared is None:
+            return None
+        messages_to_summarize, preserved_messages, previous_summary, total_tokens = prepared
         self._fire_hooks(messages_to_summarize, preserved_messages, runtime)
         summary = self._summarize_with(messages_to_summarize, previous_summary=previous_summary)
         if summary is None:
             return None
-        return {
-            "messages": [
-                RemoveMessage(id=REMOVE_ALL_MESSAGES),
-                *preserved_messages,
-            ],
-            "summary_text": summary,
-        }
+        return ContextCompactionResult(
+            summary_text=summary,
+            messages_to_summarize=tuple(messages_to_summarize),
+            preserved_messages=tuple(preserved_messages),
+            total_tokens=total_tokens,
+        )
 
-    async def _amaybe_summarize(self, state: AgentState, runtime: Runtime) -> dict | None:
-        messages = state["messages"]
-        self._ensure_message_ids(messages)
-
-        previous_summary = state.get("summary_text") if isinstance(state.get("summary_text"), str) else None
-        trigger_messages = self._messages_for_trigger_count(messages, previous_summary)
-        total_tokens = self.token_counter(trigger_messages)
-        if not self._should_summarize(trigger_messages, total_tokens):
+    async def acompact_state(
+        self,
+        state: AgentState,
+        runtime: Runtime,
+        *,
+        force: bool = False,
+    ) -> ContextCompactionResult | None:
+        prepared = self._prepare_compaction(state, force=force)
+        if prepared is None:
             return None
-
-        cutoff_index = self._determine_cutoff_index(messages)
-        if cutoff_index <= 0:
-            return None
-
-        messages_to_summarize, preserved_messages = self._partition_messages(messages, cutoff_index)
-        messages_to_summarize, preserved_messages = self._preserve_dynamic_context_reminders(messages_to_summarize, preserved_messages)
-        if not messages_to_summarize:
-            return None
+        messages_to_summarize, preserved_messages, previous_summary, total_tokens = prepared
         self._fire_hooks(messages_to_summarize, preserved_messages, runtime)
         summary = await self._asummarize_with(messages_to_summarize, previous_summary=previous_summary)
         if summary is None:
             return None
+        return ContextCompactionResult(
+            summary_text=summary,
+            messages_to_summarize=tuple(messages_to_summarize),
+            preserved_messages=tuple(preserved_messages),
+            total_tokens=total_tokens,
+        )
+
+    def _maybe_summarize(self, state: AgentState, runtime: Runtime) -> dict | None:
+        result = self.compact_state(state, runtime, force=False)
+        if result is None:
+            return None
         return {
             "messages": [
                 RemoveMessage(id=REMOVE_ALL_MESSAGES),
-                *preserved_messages,
+                *result.preserved_messages,
             ],
-            "summary_text": summary,
+            "summary_text": result.summary_text,
+        }
+
+    async def _amaybe_summarize(self, state: AgentState, runtime: Runtime) -> dict | None:
+        result = await self.acompact_state(state, runtime, force=False)
+        if result is None:
+            return None
+        return {
+            "messages": [
+                RemoveMessage(id=REMOVE_ALL_MESSAGES),
+                *result.preserved_messages,
+            ],
+            "summary_text": result.summary_text,
         }
 
     def _preserve_dynamic_context_reminders(

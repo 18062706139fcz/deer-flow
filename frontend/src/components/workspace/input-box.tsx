@@ -1,6 +1,7 @@
 "use client";
 
 import type { Message } from "@langchain/langgraph-sdk";
+import { useQueryClient } from "@tanstack/react-query";
 import type { ChatStatus } from "ai";
 import {
   CheckIcon,
@@ -72,6 +73,8 @@ import {
 import { useSkills } from "@/core/skills/hooks";
 import { useSuggestionsConfig } from "@/core/suggestions/hooks";
 import type { AgentThreadContext, GoalState } from "@/core/threads";
+import { compactThreadContext } from "@/core/threads/api";
+import { threadTokenUsageQueryKey } from "@/core/threads/token-usage";
 import { textOfMessage } from "@/core/threads/utils";
 import {
   formatUploadSize,
@@ -251,6 +254,7 @@ export function InputBox({
   onStop?: () => void;
 }) {
   const { t } = useI18n();
+  const queryClient = useQueryClient();
   const searchParams = useSearchParams();
   const [modelDialogOpen, setModelDialogOpen] = useState(false);
   const { models } = useModels();
@@ -292,8 +296,13 @@ export function InputBox({
         description: t.inputBox.goalCommandDescription,
         kind: "builtin",
       },
+      {
+        name: "compact",
+        description: t.inputBox.compactCommandDescription,
+        kind: "builtin",
+      },
     ],
-    [t.inputBox.goalCommandDescription],
+    [t.inputBox.compactCommandDescription, t.inputBox.goalCommandDescription],
   );
 
   const reportUploadLimitViolations = useCallback(
@@ -601,6 +610,46 @@ export function InputBox({
     ],
   );
 
+  const handleCompactCommand = useCallback(async (): Promise<void> => {
+    if (isWelcomeMode) {
+      textInput.setInput("");
+      toast.info(t.inputBox.compactSkipped);
+      return;
+    }
+    try {
+      const result = await compactThreadContext(threadId);
+      textInput.setInput("");
+      promptHistoryIndexRef.current = null;
+      promptHistoryDraftRef.current = "";
+      setFollowups([]);
+      setFollowupsHidden(false);
+      setFollowupsLoading(false);
+
+      void queryClient.invalidateQueries({ queryKey: ["thread", threadId] });
+      void queryClient.invalidateQueries({
+        queryKey: threadTokenUsageQueryKey(threadId),
+      });
+
+      if (result.compacted) {
+        toast.success(t.inputBox.compactSuccess);
+      } else {
+        toast.info(t.inputBox.compactSkipped);
+      }
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : t.inputBox.compactFailed,
+      );
+    }
+  }, [
+    queryClient,
+    t.inputBox.compactFailed,
+    t.inputBox.compactSkipped,
+    t.inputBox.compactSuccess,
+    isWelcomeMode,
+    textInput,
+    threadId,
+  ]);
+
   const submitThreadMessage = useCallback(
     (message: PromptInputMessage) => {
       const files = message.files.flatMap((file) =>
@@ -713,6 +762,9 @@ export function InputBox({
         }
         return;
       }
+      if (submitAction.kind === "compact") {
+        return handleCompactCommand();
+      }
       if (submitAction.kind === "stop") {
         onStop?.();
         return;
@@ -723,6 +775,7 @@ export function InputBox({
       return submitThreadMessage(message);
     },
     [
+      handleCompactCommand,
       handleGoalCommand,
       onStop,
       status,

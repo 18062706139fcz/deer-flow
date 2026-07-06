@@ -3,6 +3,17 @@ import { getBackendBaseURL } from "@/core/config";
 
 import type { ThreadTokenUsageResponse } from "./types";
 
+export type ThreadCompactResponse = {
+  thread_id: string;
+  compacted: boolean;
+  reason?: string | null;
+  removed_message_count: number;
+  preserved_message_count: number;
+  summary_updated: boolean;
+  checkpoint_id?: string | null;
+  total_tokens: number;
+};
+
 export type ThreadBranchResponse = {
   thread_id: string;
   parent_thread_id: string;
@@ -78,4 +89,27 @@ export async function branchThreadFromTurn(
   }
 
   return (await response.json()) as ThreadBranchResponse;
+}
+
+export async function compactThreadContext(
+  threadId: string,
+): Promise<ThreadCompactResponse> {
+  const response = await fetchWithAuth(
+    `${getBackendBaseURL()}/api/threads/${encodeURIComponent(threadId)}/compact`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ force: true }),
+    },
+  );
+
+  if (!response.ok) {
+    throw new Error(
+      await readThreadAPIError(response, "Failed to compact context."),
+    );
+  }
+
+  return (await response.json()) as ThreadCompactResponse;
 }
