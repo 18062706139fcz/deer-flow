@@ -657,6 +657,7 @@ export interface Translations {
         connectionStarted: string;
         connectionReady: string;
         authStarted: string;
+        authorizationStillPending: string;
         permissionTitle: string;
         permissionDescription: string;
         authDomainCalendar: string;
@@ -674,6 +675,8 @@ export interface Translations {
         openConnectionLinkDescription: string;
         openAuthLinkTitle: string;
         openAuthLinkDescription: string;
+        waitingAuthTitle: string;
+        waitingAuthDescription: string;
         openAuthLink: string;
         copyAuthLink: string;
         completeAuth: string;

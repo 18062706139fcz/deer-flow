@@ -774,7 +774,9 @@ export const enUS: Translations = {
           "Lark is already connected. If authorization expires, refresh the status and reconnect.",
         connectionStarted: "Connection link opened",
         connectionReady: "Connection is ready. Opening authorization...",
-        authStarted: "Authorization link generated",
+        authStarted: "Authorization page opened. Waiting for completion...",
+        authorizationStillPending:
+          'Authorization is not complete yet. Finish it in the browser, then return here and click "I completed authorization".',
         permissionTitle: "Authorization scope",
         permissionDescription:
           "DeerFlow requests the official recommended scopes by default. Add domains here when you need calendar, document, or Drive access; connected users can re-authorize to add permissions.",
@@ -799,7 +801,10 @@ export const enUS: Translations = {
           "The first connection needs one browser confirmation from Lark. Open the link below and finish the prompt, then return here to continue authorization.",
         openAuthLinkTitle: "Authorize Lark in your browser",
         openAuthLinkDescription:
-          'Open the link below to authorize. After approval, return here and click "I completed authorization".',
+          'Open the link below to authorize. DeerFlow detects completion automatically; if it does not finish, return here and click "I completed authorization".',
+        waitingAuthTitle: "Waiting for Lark authorization",
+        waitingAuthDescription:
+          "Finish authorization in the browser page that just opened. This panel updates automatically after approval.",
         openAuthLink: "Open link",
         copyAuthLink: "Copy link",
         completeAuth: "I completed authorization",

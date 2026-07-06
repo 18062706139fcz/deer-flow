@@ -70,22 +70,21 @@ test.describe("Integrations settings", () => {
         name: "I completed browser confirmation, continue",
       })
       .click();
-    await expect(
-      dialog.getByText("https://open.feishu.cn/auth/mock-device"),
-    ).toBeVisible();
-    expect(authStartRequest).toMatchObject({
-      recommend: true,
-      domains: ["calendar"],
-      scope: "calendar:calendar:readonly",
-    });
+    await expect
+      .poll(() => authStartRequest)
+      .toMatchObject({
+        recommend: true,
+        domains: ["calendar"],
+        scope: "calendar:calendar:readonly",
+      });
 
-    await dialog
-      .getByRole("button", { name: "I completed authorization" })
-      .click();
     await expect(
       page.getByText("Lark/Feishu authorization completed."),
     ).toBeVisible();
     await expect(dialog.getByText("Lark is connected")).toBeVisible();
+    await expect(
+      page.getByText("Authorization page opened. Waiting for completion..."),
+    ).toHaveCount(0);
 
     await dialog.getByRole("button", { name: "Calendar" }).click();
     await dialog.getByLabel("Exact OAuth scope").fill("");

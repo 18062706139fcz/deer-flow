@@ -749,7 +749,9 @@ export const zhCN: Translations = {
           "飞书已连接，无需重复授权。如果授权已过期，刷新状态后可重新连接。",
         connectionStarted: "连接链接已打开",
         connectionReady: "连接准备已完成，正在打开授权链接",
-        authStarted: "授权链接已生成",
+        authStarted: "授权页已打开，正在等待完成",
+        authorizationStillPending:
+          "还没有检测到授权完成。请在浏览器完成授权后，回到这里点击“我已完成授权”。",
         permissionTitle: "授权范围",
         permissionDescription:
           "默认会申请官方推荐权限。需要读日历、云文档或云空间时，可在这里追加权限域；已连接用户也可以重新授权追加权限。",
@@ -773,7 +775,10 @@ export const zhCN: Translations = {
           "首次连接需要在浏览器里完成一次飞书确认。打开下面的链接按提示完成；完成后回到这里继续授权。",
         openAuthLinkTitle: "在浏览器中完成飞书授权",
         openAuthLinkDescription:
-          "打开下面的链接完成授权。授权完成后回到这里点击“我已完成授权”。",
+          "打开下面的链接完成授权。DeerFlow 会自动检测授权结果；如果没有自动完成，可回到这里点击“我已完成授权”。",
+        waitingAuthTitle: "等待飞书授权完成",
+        waitingAuthDescription:
+          "请在刚打开的浏览器页面完成授权。授权成功后这里会自动更新为已连接。",
         openAuthLink: "打开链接",
         copyAuthLink: "复制链接",
         completeAuth: "我已完成授权",

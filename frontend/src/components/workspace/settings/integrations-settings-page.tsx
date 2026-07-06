@@ -80,6 +80,7 @@ function LarkIntegrationCard() {
   const [customAuthScope, setCustomAuthScope] = useState("");
   const browserWindowRef = useRef<Window | null>(null);
   const authRequestRef = useRef<LarkAuthStartRequest>({ recommend: true });
+  const authToastIdRef = useRef<string | number | null>(null);
   const connectBusy =
     startConfig.isPending || completeConfig.isPending || startAuth.isPending;
   const connectActionBusy = connectBusy || isCheckingConnection;
@@ -142,7 +143,10 @@ function LarkIntegrationCard() {
       onSuccess: (result) => {
         setPendingFlow({ kind: "auth", ...result });
         openAuthorizationUrl(result.verification_url, browserWindow);
-        toast.success(t.settings.integrations.lark.authStarted);
+        authToastIdRef.current = toast.info(
+          t.settings.integrations.lark.authStarted,
+        );
+        completeAuthorization(result.device_code, { automatic: true });
       },
       onError: (err) => {
         closePendingBrowserWindow(browserWindow);
@@ -245,23 +249,59 @@ function LarkIntegrationCard() {
     }
   };
 
+  const completeAuthorization = (
+    deviceCode: string,
+    { automatic }: { automatic: boolean },
+  ) => {
+    const toastOptions =
+      authToastIdRef.current == null
+        ? undefined
+        : { id: authToastIdRef.current };
+    completeAuth.mutate(
+      { device_code: deviceCode },
+      {
+        onSuccess: (result) => {
+          if (result.success) {
+            toast.success(result.message, toastOptions);
+            authToastIdRef.current = null;
+            setPendingFlow(null);
+            browserWindowRef.current = null;
+            return;
+          }
+          toast.info(
+            result.message ||
+              t.settings.integrations.lark.authorizationStillPending,
+            toastOptions,
+          );
+        },
+        onError: (err) => {
+          if (
+            automatic &&
+            err instanceof LarkIntegrationRequestError &&
+            err.status === 504
+          ) {
+            toast.info(
+              t.settings.integrations.lark.authorizationStillPending,
+              toastOptions,
+            );
+            return;
+          }
+          toast.error(
+            err instanceof Error ? err.message : String(err),
+            toastOptions,
+          );
+          authToastIdRef.current = null;
+        },
+      },
+    );
+  };
+
   const handleCompleteAuth = () => {
     if (!pendingFlow) return;
     if (pendingFlow.kind !== "auth") {
       return;
     }
-    completeAuth.mutate(
-      { device_code: pendingFlow.device_code },
-      {
-        onSuccess: (result) => {
-          toast.success(result.message);
-          setPendingFlow(null);
-          browserWindowRef.current = null;
-        },
-        onError: (err) =>
-          toast.error(err instanceof Error ? err.message : String(err)),
-      },
-    );
+    completeAuthorization(pendingFlow.device_code, { automatic: false });
   };
 
   const handleCopyAuthLink = async () => {
@@ -491,7 +531,9 @@ function LarkIntegrationCard() {
                 <AlertTitle>
                   {pendingFlow.kind === "config"
                     ? t.settings.integrations.lark.openConnectionLinkTitle
-                    : t.settings.integrations.lark.openAuthLinkTitle}
+                    : completeAuth.isPending
+                      ? t.settings.integrations.lark.waitingAuthTitle
+                      : t.settings.integrations.lark.openAuthLinkTitle}
                 </AlertTitle>
                 <AlertDescription>
                   <div className="space-y-3">
@@ -499,7 +541,10 @@ function LarkIntegrationCard() {
                       {pendingFlow.kind === "config"
                         ? t.settings.integrations.lark
                             .openConnectionLinkDescription
-                        : t.settings.integrations.lark.openAuthLinkDescription}
+                        : completeAuth.isPending
+                          ? t.settings.integrations.lark.waitingAuthDescription
+                          : t.settings.integrations.lark
+                              .openAuthLinkDescription}
                     </p>
                     <div className="bg-muted text-foreground rounded-md px-3 py-2 text-xs break-all">
                       {pendingFlow.verification_url}
