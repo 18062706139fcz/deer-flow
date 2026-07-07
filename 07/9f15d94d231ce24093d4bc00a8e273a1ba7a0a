@@ -1,0 +1,66 @@
+frontend/src/components/workspace/input-box-helpers.ts
+  s_2239bf7886f03d::t_28a4cbf04a24b1 193-195 gitai:{"mixed_line_ranges":[],"operations":[{"operation_id":"6a4d0ad437b7f43d01f45550","tool_type":"agent","tool_id":"apply_patch","line_ranges":[{"Range":[193,195]}]}]}
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "079f15d94d231ce24093d4bc00a8e273a1ba7a0a",
+  "prompts": {},
+  "sessions": {
+    "s_2239bf7886f03d": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a4b8bbe37b7f43d01f3f076",
+        "model": "gpt-5.5__max"
+      },
+      "human_author": "ryker <2279549769@qq.com>"
+    }
+  },
+  "attestation_metadata": {
+    "frontend/src/components/workspace/input-box-helpers.ts": [
+      {
+        "hash": "s_2239bf7886f03d::t_28a4cbf04a24b1",
+        "line_ranges": [
+          {
+            "Range": [
+              193,
+              195
+            ]
+          }
+        ],
+        "mixed_line_ranges": [],
+        "operations": [
+          {
+            "operation_id": "6a4d0ad437b7f43d01f45550",
+            "tool_type": "agent",
+            "tool_id": "apply_patch",
+            "line_ranges": [
+              {
+                "Range": [
+                  193,
+                  195
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "remote_transcripts": {
+    "s_2239bf7886f03d": {
+      "tool": "trae",
+      "conversation_id": "6a4b8bbe37b7f43d01f3f076",
+      "session_id": "6a4b8bbe37b7f43d01f3f076",
+      "status": "remote_only",
+      "message": "Remote transcript resolution is not implemented yet for TRAE prompts."
+    },
+    "s_2239bf7886f03d::t_28a4cbf04a24b1": {
+      "tool": "trae",
+      "conversation_id": "6a4b8bbe37b7f43d01f3f076",
+      "session_id": "6a4b8bbe37b7f43d01f3f076",
+      "status": "remote_only",
+      "message": "Remote transcript resolution is not implemented yet for TRAE prompts."
+    }
+  }
+}
