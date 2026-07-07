@@ -190,7 +190,9 @@ export function canPolishInput(value: string): boolean {
   if (!trimmed) {
     return false;
   }
-  return !/^\/(?:goal|help)(?:\s+|$)/i.test(trimmed) && !parseCompactCommand(trimmed);
+  return (
+    !/^\/(?:goal|help)(?:\s+|$)/i.test(trimmed) && !parseCompactCommand(trimmed)
+  );
 }
 
 export function parseCompactCommand(value: string): boolean {
