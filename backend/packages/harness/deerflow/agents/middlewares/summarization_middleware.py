@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Protocol, override, runtime_checkable
+from typing import Protocol, override, runtime_checkable
 
 from langchain.agents import AgentState
 from langchain.agents.middleware import SummarizationMiddleware
@@ -15,8 +15,6 @@ from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.runtime import Runtime
 
 from deerflow.agents.middlewares.dynamic_context_middleware import is_dynamic_context_reminder
-from deerflow.config.app_config import get_app_config
-from deerflow.models import create_chat_model
 
 logger = logging.getLogger(__name__)
 _SUMMARY_TRIGGER_MESSAGE_NAME = "summary"
@@ -31,16 +29,6 @@ class SummarizationEvent:
     thread_id: str | None
     agent_name: str | None
     runtime: Runtime
-
-
-@dataclass(frozen=True)
-class ContextCompactionResult:
-    """Result of summarizing old context and retaining the active tail."""
-
-    summary_text: str
-    messages_to_summarize: tuple[AnyMessage, ...]
-    preserved_messages: tuple[AnyMessage, ...]
-    total_tokens: int
 
 
 @runtime_checkable
@@ -261,19 +249,14 @@ class DeerFlowSummarizationMiddleware(SummarizationMiddleware):
     async def abefore_model(self, state: AgentState, runtime: Runtime) -> dict | None:
         return await self._amaybe_summarize(state, runtime)
 
-    def _prepare_compaction(
-        self,
-        state: AgentState,
-        *,
-        force: bool = False,
-    ) -> tuple[list[AnyMessage], list[AnyMessage], str | None, int] | None:
+    def _maybe_summarize(self, state: AgentState, runtime: Runtime) -> dict | None:
         messages = state["messages"]
         self._ensure_message_ids(messages)
 
         previous_summary = state.get("summary_text") if isinstance(state.get("summary_text"), str) else None
         trigger_messages = self._messages_for_trigger_count(messages, previous_summary)
         total_tokens = self.token_counter(trigger_messages)
-        if not force and not self._should_summarize(trigger_messages, total_tokens):
+        if not self._should_summarize(trigger_messages, total_tokens):
             return None
 
         cutoff_index = self._determine_cutoff_index(messages)
@@ -284,74 +267,46 @@ class DeerFlowSummarizationMiddleware(SummarizationMiddleware):
         messages_to_summarize, preserved_messages = self._preserve_dynamic_context_reminders(messages_to_summarize, preserved_messages)
         if not messages_to_summarize:
             return None
-        return messages_to_summarize, preserved_messages, previous_summary, total_tokens
-
-    def compact_state(
-        self,
-        state: AgentState,
-        runtime: Runtime,
-        *,
-        force: bool = False,
-    ) -> ContextCompactionResult | None:
-        prepared = self._prepare_compaction(state, force=force)
-        if prepared is None:
-            return None
-        messages_to_summarize, preserved_messages, previous_summary, total_tokens = prepared
         self._fire_hooks(messages_to_summarize, preserved_messages, runtime)
         summary = self._summarize_with(messages_to_summarize, previous_summary=previous_summary)
         if summary is None:
             return None
-        return ContextCompactionResult(
-            summary_text=summary,
-            messages_to_summarize=tuple(messages_to_summarize),
-            preserved_messages=tuple(preserved_messages),
-            total_tokens=total_tokens,
-        )
+        return {
+            "messages": [
+                RemoveMessage(id=REMOVE_ALL_MESSAGES),
+                *preserved_messages,
+            ],
+            "summary_text": summary,
+        }
 
-    async def acompact_state(
-        self,
-        state: AgentState,
-        runtime: Runtime,
-        *,
-        force: bool = False,
-    ) -> ContextCompactionResult | None:
-        prepared = self._prepare_compaction(state, force=force)
-        if prepared is None:
+    async def _amaybe_summarize(self, state: AgentState, runtime: Runtime) -> dict | None:
+        messages = state["messages"]
+        self._ensure_message_ids(messages)
+
+        previous_summary = state.get("summary_text") if isinstance(state.get("summary_text"), str) else None
+        trigger_messages = self._messages_for_trigger_count(messages, previous_summary)
+        total_tokens = self.token_counter(trigger_messages)
+        if not self._should_summarize(trigger_messages, total_tokens):
             return None
-        messages_to_summarize, preserved_messages, previous_summary, total_tokens = prepared
+
+        cutoff_index = self._determine_cutoff_index(messages)
+        if cutoff_index <= 0:
+            return None
+
+        messages_to_summarize, preserved_messages = self._partition_messages(messages, cutoff_index)
+        messages_to_summarize, preserved_messages = self._preserve_dynamic_context_reminders(messages_to_summarize, preserved_messages)
+        if not messages_to_summarize:
+            return None
         self._fire_hooks(messages_to_summarize, preserved_messages, runtime)
         summary = await self._asummarize_with(messages_to_summarize, previous_summary=previous_summary)
         if summary is None:
             return None
-        return ContextCompactionResult(
-            summary_text=summary,
-            messages_to_summarize=tuple(messages_to_summarize),
-            preserved_messages=tuple(preserved_messages),
-            total_tokens=total_tokens,
-        )
-
-    def _maybe_summarize(self, state: AgentState, runtime: Runtime) -> dict | None:
-        result = self.compact_state(state, runtime, force=False)
-        if result is None:
-            return None
         return {
             "messages": [
                 RemoveMessage(id=REMOVE_ALL_MESSAGES),
-                *result.preserved_messages,
+                *preserved_messages,
             ],
-            "summary_text": result.summary_text,
-        }
-
-    async def _amaybe_summarize(self, state: AgentState, runtime: Runtime) -> dict | None:
-        result = await self.acompact_state(state, runtime, force=False)
-        if result is None:
-            return None
-        return {
-            "messages": [
-                RemoveMessage(id=REMOVE_ALL_MESSAGES),
-                *result.preserved_messages,
-            ],
-            "summary_text": result.summary_text,
+            "summary_text": summary,
         }
 
     def _preserve_dynamic_context_reminders(
@@ -431,64 +386,3 @@ class DeerFlowSummarizationMiddleware(SummarizationMiddleware):
             except Exception:
                 hook_name = getattr(hook, "__name__", None) or type(hook).__name__
                 logger.exception("before_summarization hook %s failed", hook_name)
-
-
-def create_summarization_middleware(
-    *,
-    app_config: Any | None = None,
-    keep: tuple[str, int | float] | None = None,
-) -> DeerFlowSummarizationMiddleware | None:
-    """Create the configured summarization middleware.
-
-    Both the lead-agent automatic path and the manual context-compaction path
-    use this factory so model resolution, hooks, prompt config, and retention
-    defaults cannot drift.
-    """
-    from deerflow.agents.memory.summarization_hook import memory_flush_hook
-
-    resolved_app_config = app_config or get_app_config()
-    config = resolved_app_config.summarization
-
-    if not config.enabled:
-        return None
-
-    trigger = None
-    if config.trigger is not None:
-        if isinstance(config.trigger, list):
-            trigger = [item.to_tuple() for item in config.trigger]
-        else:
-            trigger = config.trigger.to_tuple()
-
-    if config.model_name:
-        model = create_chat_model(
-            name=config.model_name,
-            thinking_enabled=False,
-            app_config=resolved_app_config,
-            attach_tracing=False,
-        )
-    else:
-        model = create_chat_model(
-            thinking_enabled=False,
-            app_config=resolved_app_config,
-            attach_tracing=False,
-        )
-    model = model.with_config(tags=["middleware:summarize"])
-
-    kwargs: dict[str, Any] = {
-        "model": model,
-        "trigger": trigger,
-        "keep": keep or config.keep.to_tuple(),
-    }
-    if config.trim_tokens_to_summarize is not None:
-        kwargs["trim_tokens_to_summarize"] = config.trim_tokens_to_summarize
-    if config.summary_prompt is not None:
-        kwargs["summary_prompt"] = config.summary_prompt
-
-    hooks: list[BeforeSummarizationHook] = []
-    if resolved_app_config.memory.enabled:
-        hooks.append(memory_flush_hook)
-
-    return DeerFlowSummarizationMiddleware(
-        **kwargs,
-        before_summarization=hooks,
-    )

@@ -19,7 +19,6 @@ export type GoalCommand =
 
 export type InputSubmitAction =
   | { kind: "goal"; command: GoalCommand }
-  | { kind: "compact" }
   | { kind: "stop" }
   | { kind: "empty" }
   | { kind: "message" };
@@ -191,9 +190,6 @@ export function canPolishInput(value: string): boolean {
     return false;
   }
   return !/^\/(?:goal|help)(?:\s+|$)/i.test(trimmed);
-  
-export function parseCompactCommand(value: string): boolean {
-  return /^\/(?:compact|context\s+compact)\s*$/i.test(value.trim());
 }
 
 export function getInputSubmitAction({
@@ -208,9 +204,6 @@ export function getInputSubmitAction({
   const goalCommand = parseGoalCommand(text);
   if (goalCommand && fileCount === 0) {
     return { kind: "goal", command: goalCommand };
-  }
-  if (parseCompactCommand(text) && fileCount === 0) {
-    return { kind: "compact" };
   }
   if (status === "streaming") {
     return { kind: "stop" };
