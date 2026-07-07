@@ -142,6 +142,9 @@ Blocking-IO runtime gate (`tests/blocking_io/`):
   SQLite path resolution plus `ensure_sqlite_parent_dir`, fix for #1912);
   `test_jsonl_run_event_store.py` (locks `JsonlRunEventStore`'s async
   API offloading its file IO via `asyncio.to_thread`);
+  `test_integrations_router.py` (locks Lark integration install and auth
+  completion route handlers offloading archive filesystem work and `lark-cli`
+  subprocesses);
   `test_uploads_middleware.py` (locks `UploadsMiddleware.abefore_agent`
   offloading the uploads-directory scan off the event loop); and
   `test_uploads_router.py` (locks Gateway upload/list/delete endpoints

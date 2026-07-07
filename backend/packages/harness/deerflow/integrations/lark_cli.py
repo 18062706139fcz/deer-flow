@@ -8,6 +8,7 @@ versioned first-party integration package, not user-authored mutable content.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import posixpath
@@ -32,7 +33,9 @@ from deerflow.skills.types import SKILL_MD_FILE, SkillCategory
 
 INTEGRATION_ID = "lark-cli"
 DEFAULT_LARK_CLI_VERSION = "v1.0.65"
+LARK_CLI_NPM_VERSION = DEFAULT_LARK_CLI_VERSION.removeprefix("v")
 DEFAULT_LARK_CLI_ARCHIVE_URL = f"https://github.com/larksuite/cli/archive/refs/tags/{DEFAULT_LARK_CLI_VERSION}.zip"
+EXPECTED_LARK_CLI_ARCHIVE_SHA256 = "1c7eacc7881107513b2c07998fc4dc8958848fba2b435d43760fc9c545598fd6"
 LARK_CLI_SOURCE_ARCHIVE_ENV = "DEER_FLOW_LARK_CLI_SKILLS_ARCHIVE"
 LARK_CLI_DOWNLOAD_TIMEOUT_SECONDS = 60
 LARK_HTTP_TIMEOUT_SECONDS = 20
@@ -313,6 +316,7 @@ def install_lark_integration(
     created_temp_archive = source_archive is None and not os.getenv(LARK_CLI_SOURCE_ARCHIVE_ENV)
 
     try:
+        _verify_lark_archive_integrity(archive_path)
         installed_skills = _install_lark_skills_from_archive(user_id, archive_path)
     finally:
         if created_temp_archive:
@@ -370,6 +374,10 @@ def complete_lark_config(
         expires_in=expires_in or 300,
     )
     if not result.get("client_secret") and _tenant_brand(result) == "lark":
+        # Lark CLI starts polling on the Feishu accounts host for both brands.
+        # For Lark tenants that response can include user_info.tenant_brand and
+        # client_id but omit client_secret; polling the Lark accounts host with
+        # the same device_code returns the complete app credentials.
         result = _poll_lark_app_registration(
             device_code=device_code,
             brand="lark",
@@ -706,6 +714,28 @@ def _resolve_or_download_archive() -> Path:
         archive_path.unlink(missing_ok=True)
         raise
     return archive_path
+
+
+def _verify_lark_archive_integrity(archive_path: Path) -> None:
+    actual = _sha256_file(archive_path)
+    expected = EXPECTED_LARK_CLI_ARCHIVE_SHA256.lower()
+    if actual != expected:
+        raise ValueError(f"Lark CLI source archive SHA-256 mismatch: expected {expected}, got {actual}.")
+
+
+def _sha256_file(path: Path) -> str:
+    if not path.is_file():
+        raise FileNotFoundError(f"Lark CLI skills archive not found: {path}")
+
+    digest = hashlib.sha256()
+    total = 0
+    with path.open("rb") as f:
+        while chunk := f.read(1024 * 1024):
+            total += len(chunk)
+            if total > LARK_CLI_MAX_ARCHIVE_BYTES:
+                raise ValueError("Lark CLI source archive is too large.")
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _install_lark_skills_from_archive(user_id: str, archive_path: Path) -> tuple[str, ...]:

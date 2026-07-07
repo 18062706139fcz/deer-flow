@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import re
+import stat
 import subprocess
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
 from _router_auth_helpers import make_authed_test_app
 from fastapi.testclient import TestClient
 
@@ -25,13 +29,33 @@ def _skill_content(name: str) -> str:
     return f"---\nname: {name}\ndescription: {name} integration skill\n---\n\n# {name}\n"
 
 
-def _make_lark_cli_source_zip(tmp_path: Path) -> Path:
+def _make_lark_cli_source_zip(tmp_path: Path, *, omit_skill: str | None = None, renamed_skill: str | None = None) -> Path:
     archive = tmp_path / "lark-cli.zip"
     with zipfile.ZipFile(archive, "w") as zf:
         for skill_name in lark_cli.LARK_SKILL_NAMES:
-            zf.writestr(f"cli-1.0.65/skills/{skill_name}/SKILL.md", _skill_content(skill_name))
+            if skill_name == omit_skill:
+                continue
+            declared_name = f"{skill_name}-renamed" if skill_name == renamed_skill else skill_name
+            zf.writestr(f"cli-1.0.65/skills/{skill_name}/SKILL.md", _skill_content(declared_name))
             zf.writestr(f"cli-1.0.65/skills/{skill_name}/references/readme.md", f"# {skill_name}\n")
     return archive
+
+
+def _archive_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as f:
+        while chunk := f.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _allow_archive_hash(monkeypatch, archive: Path) -> None:
+    monkeypatch.setattr(lark_cli, "EXPECTED_LARK_CLI_ARCHIVE_SHA256", _archive_sha256(archive))
+
+
+def _assert_lark_root_missing(user_id: str) -> None:
+    root = lark_cli.lark_integration_root(user_id)
+    assert not root.exists()
 
 
 def _config(skills_root: Path):
@@ -57,6 +81,7 @@ def test_install_lark_integration_installs_readonly_user_scoped_skills(monkeypat
     config = _config(skills_root)
     archive = _make_lark_cli_source_zip(tmp_path)
 
+    _allow_archive_hash(monkeypatch, archive)
     monkeypatch.setattr(lark_cli, "probe_lark_cli", lambda: lark_cli.LarkCliProbe(available=True, path="/usr/bin/lark-cli", version="v1.0.65"))
     monkeypatch.setattr(lark_cli, "probe_lark_auth", lambda _user_id: lark_cli.LarkAuthProbe(status="not_configured", message="not configured"))
 
@@ -80,6 +105,108 @@ def test_install_lark_integration_installs_readonly_user_scoped_skills(monkeypat
     assert lark_doc.get_container_file_path("/mnt/skills") == "/mnt/skills/integrations/lark-cli/lark-doc/SKILL.md"
     assert lark_doc.enabled is True
     reset_skill_storage()
+
+
+def test_install_lark_integration_rejects_archive_hash_mismatch(monkeypatch, tmp_path):
+    _patch_paths(monkeypatch, tmp_path / "home")
+    config = _config(tmp_path / "skills")
+    archive = _make_lark_cli_source_zip(tmp_path)
+    monkeypatch.setattr(lark_cli, "EXPECTED_LARK_CLI_ARCHIVE_SHA256", "0" * 64)
+
+    with pytest.raises(ValueError, match="SHA-256 mismatch"):
+        lark_cli.install_lark_integration("alice", config, source_archive=archive)
+
+    _assert_lark_root_missing("alice")
+
+
+def test_install_lark_integration_rejects_zip_slip_member(monkeypatch, tmp_path):
+    _patch_paths(monkeypatch, tmp_path / "home")
+    config = _config(tmp_path / "skills")
+    archive = _make_lark_cli_source_zip(tmp_path)
+    with zipfile.ZipFile(archive, "a") as zf:
+        zf.writestr("../evil.txt", "escape")
+    _allow_archive_hash(monkeypatch, archive)
+
+    with pytest.raises(ValueError, match="Unsafe Lark CLI archive member"):
+        lark_cli.install_lark_integration("alice", config, source_archive=archive)
+
+    _assert_lark_root_missing("alice")
+
+
+def test_install_lark_integration_rejects_symlink_member(monkeypatch, tmp_path):
+    _patch_paths(monkeypatch, tmp_path / "home")
+    config = _config(tmp_path / "skills")
+    archive = _make_lark_cli_source_zip(tmp_path)
+    link_info = zipfile.ZipInfo("cli-1.0.65/skills/lark-doc/references/link")
+    link_info.external_attr = (stat.S_IFLNK | 0o777) << 16
+    with zipfile.ZipFile(archive, "a") as zf:
+        zf.writestr(link_info, "target")
+    _allow_archive_hash(monkeypatch, archive)
+
+    with pytest.raises(ValueError, match="Unsafe Lark CLI archive member"):
+        lark_cli.install_lark_integration("alice", config, source_archive=archive)
+
+    _assert_lark_root_missing("alice")
+
+
+def test_install_lark_integration_rejects_executable_binary_member(monkeypatch, tmp_path):
+    _patch_paths(monkeypatch, tmp_path / "home")
+    config = _config(tmp_path / "skills")
+    archive = _make_lark_cli_source_zip(tmp_path)
+    with zipfile.ZipFile(archive, "a") as zf:
+        zf.writestr("cli-1.0.65/skills/lark-doc/bin/tool", b"\x7fELFbinary")
+    _allow_archive_hash(monkeypatch, archive)
+
+    with pytest.raises(ValueError, match="executable binary member"):
+        lark_cli.install_lark_integration("alice", config, source_archive=archive)
+
+    _assert_lark_root_missing("alice")
+
+
+def test_install_lark_integration_rejects_oversized_extraction(monkeypatch, tmp_path):
+    _patch_paths(monkeypatch, tmp_path / "home")
+    config = _config(tmp_path / "skills")
+    archive = _make_lark_cli_source_zip(tmp_path)
+    _allow_archive_hash(monkeypatch, archive)
+    monkeypatch.setattr(lark_cli, "LARK_CLI_MAX_EXTRACTED_BYTES", 128)
+
+    with pytest.raises(ValueError, match="expands to too much data"):
+        lark_cli.install_lark_integration("alice", config, source_archive=archive)
+
+    _assert_lark_root_missing("alice")
+
+
+def test_install_lark_integration_rejects_missing_required_skill(monkeypatch, tmp_path):
+    _patch_paths(monkeypatch, tmp_path / "home")
+    config = _config(tmp_path / "skills")
+    archive = _make_lark_cli_source_zip(tmp_path, omit_skill="lark-doc")
+    _allow_archive_hash(monkeypatch, archive)
+
+    with pytest.raises(ValueError, match="missing required skills: lark-doc"):
+        lark_cli.install_lark_integration("alice", config, source_archive=archive)
+
+    _assert_lark_root_missing("alice")
+
+
+def test_install_lark_integration_rejects_renamed_skill_metadata(monkeypatch, tmp_path):
+    _patch_paths(monkeypatch, tmp_path / "home")
+    config = _config(tmp_path / "skills")
+    archive = _make_lark_cli_source_zip(tmp_path, renamed_skill="lark-doc")
+    _allow_archive_hash(monkeypatch, archive)
+
+    with pytest.raises(ValueError, match="declares name 'lark-doc-renamed'"):
+        lark_cli.install_lark_integration("alice", config, source_archive=archive)
+
+    _assert_lark_root_missing("alice")
+
+
+def test_python_and_docker_lark_cli_versions_match():
+    dockerfile = Path(__file__).resolve().parents[1] / "Dockerfile"
+    match = re.search(r"^ARG LARK_CLI_NPM_VERSION=(?P<version>\S+)$", dockerfile.read_text(encoding="utf-8"), re.MULTILINE)
+
+    assert match is not None
+    assert lark_cli.LARK_CLI_NPM_VERSION == match.group("version")
+    assert lark_cli.DEFAULT_LARK_CLI_VERSION == f"v{lark_cli.LARK_CLI_NPM_VERSION}"
 
 
 def test_start_lark_auth_returns_browser_url(monkeypatch, tmp_path):
@@ -248,6 +375,66 @@ def test_complete_lark_config_saves_app_credentials_and_returns_status(monkeypat
         "app_id": "cli_mock",
         "app_secret": "secret",
         "brand": "feishu",
+    }
+
+
+def test_complete_lark_config_repolls_lark_tenant_for_client_secret(monkeypatch, tmp_path):
+    _patch_paths(monkeypatch, tmp_path / "home")
+    skills_root = tmp_path / "skills"
+    (skills_root / "public").mkdir(parents=True)
+    (skills_root / "custom").mkdir()
+    config = _config(skills_root)
+    poll_calls: list[dict[str, object]] = []
+    captured: dict[str, object] = {}
+
+    def _poll_lark_app_registration(**kwargs):
+        poll_calls.append(kwargs)
+        if kwargs["brand"] == "feishu":
+            return {
+                "client_id": "cli_mock",
+                "user_info": {"tenant_brand": "lark"},
+            }
+        return {
+            "client_id": "cli_mock",
+            "client_secret": "secret",
+            "user_info": {"tenant_brand": "lark"},
+        }
+
+    monkeypatch.setattr(lark_cli, "_poll_lark_app_registration", _poll_lark_app_registration)
+    monkeypatch.setattr(
+        lark_cli,
+        "_save_lark_app_config_with_cli",
+        lambda user_id, **kwargs: captured.update({"user_id": user_id, **kwargs}),
+    )
+    monkeypatch.setattr(
+        lark_cli,
+        "get_lark_integration_status",
+        lambda _user_id, _config: lark_cli.LarkIntegrationStatus(
+            installed=True,
+            version="v1.0.65",
+            manifest_version="v1.0.65",
+            app_configured=True,
+            app_id="cli_mock",
+            app_brand="lark",
+            skills_expected=27,
+            skills_installed=27,
+            installed_skills=("lark-doc",),
+            enabled_skills=("lark-doc",),
+            install_path="/tmp/lark",
+            cli=lark_cli.LarkCliProbe(available=True),
+            auth=lark_cli.LarkAuthProbe(status="not_authorized", user=None),
+        ),
+    )
+
+    result = lark_cli.complete_lark_config("alice", config, device_code="config-device-code", brand="feishu")
+
+    assert result.success is True
+    assert [call["brand"] for call in poll_calls] == ["feishu", "lark"]
+    assert captured == {
+        "user_id": "alice",
+        "app_id": "cli_mock",
+        "app_secret": "secret",
+        "brand": "lark",
     }
 
 
