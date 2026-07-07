@@ -12,6 +12,7 @@ import {
   getMatchingSkillSuggestions,
   isAbortError,
   isCurrentGoalRequest,
+  parseCompactCommand,
   parseGoalCommand,
   readGoalResponseError,
   type SlashSuggestion,
@@ -63,6 +64,20 @@ describe("parseGoalCommand", () => {
   });
 });
 
+describe("parseCompactCommand", () => {
+  it("matches compact commands", () => {
+    expect(parseCompactCommand("/compact")).toBe(true);
+    expect(parseCompactCommand(" /context compact ")).toBe(true);
+    expect(parseCompactCommand("/CONTEXT   COMPACT")).toBe(true);
+  });
+
+  it("rejects non-compact commands", () => {
+    expect(parseCompactCommand("/compact now")).toBe(false);
+    expect(parseCompactCommand("/context")).toBe(false);
+    expect(parseCompactCommand("compact")).toBe(false);
+  });
+});
+
 describe("getInputSubmitAction", () => {
   it("handles /goal commands before the streaming stop shortcut", () => {
     expect(
@@ -107,6 +122,33 @@ describe("getInputSubmitAction", () => {
     ).toEqual({ kind: "message" });
   });
 
+  it("handles compact commands", () => {
+    expect(
+      getInputSubmitAction({
+        text: "/compact",
+        fileCount: 0,
+        status: "ready",
+      }),
+    ).toEqual({ kind: "compact" });
+    expect(
+      getInputSubmitAction({
+        text: "/context compact",
+        fileCount: 0,
+        status: "ready",
+      }),
+    ).toEqual({ kind: "compact" });
+  });
+
+  it("does not treat compact commands with attachments as compact", () => {
+    expect(
+      getInputSubmitAction({
+        text: "/compact",
+        fileCount: 1,
+        status: "ready",
+      }),
+    ).toEqual({ kind: "message" });
+  });
+
   it("ignores empty ready submits", () => {
     expect(
       getInputSubmitAction({
@@ -136,6 +178,8 @@ describe("canPolishInput", () => {
     expect(canPolishInput("/goal ship this feature")).toBe(false);
     expect(canPolishInput("/help")).toBe(false);
     expect(canPolishInput("/help me")).toBe(false);
+    expect(canPolishInput("/compact")).toBe(false);
+    expect(canPolishInput("/context compact")).toBe(false);
   });
 });
 
@@ -264,6 +308,21 @@ describe("goal request lifecycle", () => {
       isAbortError(Object.assign(new Error("aborted"), { name: "AbortError" })),
     ).toBe(true);
     expect(isAbortError(new Error("other"))).toBe(false);
+  });
+
+  it("supports compact request staleness guards with the same lifecycle", () => {
+    const state = createGoalRequestState();
+    const compact = beginGoalRequest(state, "thread-1");
+
+    const replacement = beginGoalRequest(state, "thread-1");
+
+    expect(compact.controller.signal.aborted).toBe(true);
+    expect(isCurrentGoalRequest(state, compact, "thread-1")).toBe(false);
+    expect(isCurrentGoalRequest(state, replacement, "thread-1")).toBe(true);
+
+    finishGoalRequest(state, replacement);
+
+    expect(isCurrentGoalRequest(state, replacement, "thread-1")).toBe(false);
   });
 });
 
