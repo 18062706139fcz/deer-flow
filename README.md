@@ -636,6 +636,19 @@ such as Calendar, Docs, or Drive, or a specific OAuth scope reported by
 the managed `lark-shared` guidance points the user back to the same settings
 entry with `?settings=integrations`.
 
+Installing the Lark skill pack resolves the latest official `larksuite/cli`
+release from GitHub and downloads that version's skills at install time, so the
+Gateway needs outbound internet access for that step (it falls back to a
+bottom-line pinned version if the release lookup fails). The settings page shows
+the installed version and, when available, the newest published version so an
+admin can reinstall to upgrade. Air-gapped deployments can pre-stage the archive
+and point `DEER_FLOW_LARK_CLI_SKILLS_ARCHIVE` at the local file. Integrity does
+not depend on a pinned archive byte hash (GitHub does not guarantee stable
+source-archive bytes); instead the download is restricted to the official GitHub
+host, every archive member passes structural safety guards, and a content hash
+of the installed skills is recorded so content changes are auditable across
+reinstalls.
+
 Tools follow the same philosophy. DeerFlow comes with a core toolset — web search, web fetch, rendered web capture, file operations, bash execution — and supports custom tools via MCP servers and Python functions. Swap anything. Add anything.
 
 Gateway-generated follow-up suggestions now normalize both plain-string model output and block/list-style rich content before parsing the JSON array response, so provider-specific content wrappers do not silently drop suggestions.

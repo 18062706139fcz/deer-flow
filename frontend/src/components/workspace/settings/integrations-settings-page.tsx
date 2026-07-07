@@ -8,7 +8,7 @@ import {
   RefreshCwIcon,
   XCircleIcon,
 } from "lucide-react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -47,7 +47,66 @@ type PendingLarkFlow =
   | ({ kind: "config" } & LarkConfigStartResponse)
   | ({ kind: "auth" } & LarkAuthStartResponse);
 
-type LarkAuthDomain = "calendar" | "docs" | "drive" | "all";
+type LarkAuthDomain =
+  | "approval"
+  | "apps"
+  | "attendance"
+  | "base"
+  | "calendar"
+  | "contact"
+  | "docs"
+  | "drive"
+  | "event"
+  | "im"
+  | "mail"
+  | "markdown"
+  | "mindnotes"
+  | "minutes"
+  | "note"
+  | "okr"
+  | "sheets"
+  | "slides"
+  | "task"
+  | "vc"
+  | "wiki"
+  | "all";
+
+// Mirrors `lark-cli auth login --domain` (available business domains + all).
+const LARK_AUTH_DOMAINS: LarkAuthDomain[] = [
+  "calendar",
+  "im",
+  "docs",
+  "drive",
+  "sheets",
+  "base",
+  "wiki",
+  "task",
+  "mail",
+  "vc",
+  "minutes",
+  "note",
+  "slides",
+  "markdown",
+  "mindnotes",
+  "contact",
+  "approval",
+  "attendance",
+  "okr",
+  "event",
+  "apps",
+  "all",
+];
+
+function splitScopes(value: string) {
+  return value
+    .split(/[\s,]+/)
+    .map((scope) => scope.trim())
+    .filter(Boolean);
+}
+
+function uniqueScopes(scopes: string[]) {
+  return Array.from(new Set(scopes));
+}
 
 export function IntegrationsSettingsPage() {
   const { t } = useI18n();
@@ -79,8 +138,13 @@ function LarkIntegrationCard() {
   >([]);
   const [customAuthScope, setCustomAuthScope] = useState("");
   const browserWindowRef = useRef<Window | null>(null);
-  const authRequestRef = useRef<LarkAuthStartRequest>({ recommend: true });
+  const authRequestRef = useRef<LarkAuthStartRequest>({ recommend: false });
   const authToastIdRef = useRef<string | number | null>(null);
+  const authRetryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const authAttemptIdRef = useRef(0);
+  const authDeadlineRef = useRef(0);
   const connectBusy =
     startConfig.isPending || completeConfig.isPending || startAuth.isPending;
   const connectActionBusy = connectBusy || isCheckingConnection;
@@ -101,6 +165,22 @@ function LarkIntegrationCard() {
       },
     });
   };
+
+  const clearAuthRetryTimer = () => {
+    if (authRetryTimeoutRef.current != null) {
+      clearTimeout(authRetryTimeoutRef.current);
+      authRetryTimeoutRef.current = null;
+    }
+  };
+
+  useEffect(
+    () => () => {
+      if (authRetryTimeoutRef.current != null) {
+        clearTimeout(authRetryTimeoutRef.current);
+      }
+    },
+    [],
+  );
 
   const openPendingBrowserWindow = () => {
     const browserWindow = window.open("about:blank", "_blank");
@@ -146,7 +226,7 @@ function LarkIntegrationCard() {
         authToastIdRef.current = toast.info(
           t.settings.integrations.lark.authStarted,
         );
-        completeAuthorization(result.device_code, { automatic: true });
+        startAutomaticAuthorizationCheck(result);
       },
       onError: (err) => {
         closePendingBrowserWindow(browserWindow);
@@ -202,11 +282,17 @@ function LarkIntegrationCard() {
     startUserAuth(browserWindow);
   };
 
-  const buildAuthRequest = (): LarkAuthStartRequest => ({
-    recommend: true,
-    domains: selectedAuthDomains,
-    scope: trimmedCustomAuthScope.length > 0 ? trimmedCustomAuthScope : null,
-  });
+  const buildAuthRequest = (): LarkAuthStartRequest => {
+    const domains = selectedAuthDomains.includes("all")
+      ? ["all"]
+      : uniqueScopes(selectedAuthDomains);
+    const scopes = uniqueScopes(splitScopes(trimmedCustomAuthScope));
+    return {
+      recommend: false,
+      domains,
+      scope: scopes.length > 0 ? scopes.join(" ") : null,
+    };
+  };
 
   const toggleAuthDomain = (domain: LarkAuthDomain) => {
     setSelectedAuthDomains((current) => {
@@ -251,7 +337,7 @@ function LarkIntegrationCard() {
 
   const completeAuthorization = (
     deviceCode: string,
-    { automatic }: { automatic: boolean },
+    { automatic, attemptId }: { automatic: boolean; attemptId?: number },
   ) => {
     const toastOptions =
       authToastIdRef.current == null
@@ -261,11 +347,16 @@ function LarkIntegrationCard() {
       { device_code: deviceCode },
       {
         onSuccess: (result) => {
+          if (automatic && attemptId !== authAttemptIdRef.current) {
+            return;
+          }
           if (result.success) {
+            clearAuthRetryTimer();
             toast.success(result.message, toastOptions);
             authToastIdRef.current = null;
             setPendingFlow(null);
             browserWindowRef.current = null;
+            void refetch();
             return;
           }
           toast.info(
@@ -273,8 +364,14 @@ function LarkIntegrationCard() {
               t.settings.integrations.lark.authorizationStillPending,
             toastOptions,
           );
+          if (automatic && attemptId != null) {
+            scheduleAuthorizationRetry(deviceCode, attemptId);
+          }
         },
         onError: (err) => {
+          if (automatic && attemptId !== authAttemptIdRef.current) {
+            return;
+          }
           if (
             automatic &&
             err instanceof LarkIntegrationRequestError &&
@@ -284,6 +381,9 @@ function LarkIntegrationCard() {
               t.settings.integrations.lark.authorizationStillPending,
               toastOptions,
             );
+            if (attemptId != null) {
+              scheduleAuthorizationRetry(deviceCode, attemptId);
+            }
             return;
           }
           toast.error(
@@ -296,11 +396,36 @@ function LarkIntegrationCard() {
     );
   };
 
+  const scheduleAuthorizationRetry = (
+    deviceCode: string,
+    attemptId: number,
+  ) => {
+    clearAuthRetryTimer();
+    if (Date.now() >= authDeadlineRef.current) {
+      toast.info(t.settings.integrations.lark.authorizationStillPending);
+      return;
+    }
+    authRetryTimeoutRef.current = setTimeout(() => {
+      completeAuthorization(deviceCode, { automatic: true, attemptId });
+    }, 1500);
+  };
+
+  const startAutomaticAuthorizationCheck = (result: LarkAuthStartResponse) => {
+    clearAuthRetryTimer();
+    const attemptId = authAttemptIdRef.current + 1;
+    authAttemptIdRef.current = attemptId;
+    authDeadlineRef.current =
+      Date.now() + Math.max(result.expires_in ?? 300, 30) * 1000;
+    completeAuthorization(result.device_code, { automatic: true, attemptId });
+  };
+
   const handleCompleteAuth = () => {
     if (!pendingFlow) return;
     if (pendingFlow.kind !== "auth") {
       return;
     }
+    clearAuthRetryTimer();
+    authAttemptIdRef.current += 1;
     completeAuthorization(pendingFlow.device_code, { automatic: false });
   };
 
@@ -334,32 +459,11 @@ function LarkIntegrationCard() {
           ? t.settings.integrations.lark.connectedAction
           : t.settings.integrations.lark.connect;
 
-  const permissionDomains = [
-    {
-      id: "calendar",
-      label: t.settings.integrations.lark.authDomainCalendar,
-      description: t.settings.integrations.lark.authDomainCalendarDescription,
-    },
-    {
-      id: "docs",
-      label: t.settings.integrations.lark.authDomainDocs,
-      description: t.settings.integrations.lark.authDomainDocsDescription,
-    },
-    {
-      id: "drive",
-      label: t.settings.integrations.lark.authDomainDrive,
-      description: t.settings.integrations.lark.authDomainDriveDescription,
-    },
-    {
-      id: "all",
-      label: t.settings.integrations.lark.authDomainAll,
-      description: t.settings.integrations.lark.authDomainAllDescription,
-    },
-  ] satisfies Array<{
-    id: LarkAuthDomain;
-    label: string;
-    description: string;
-  }>;
+  const permissionDomains = LARK_AUTH_DOMAINS.map((id) => ({
+    id,
+    label: t.settings.integrations.lark.authDomains[id].label,
+    description: t.settings.integrations.lark.authDomains[id].description,
+  }));
 
   return (
     <Card>
@@ -436,6 +540,29 @@ function LarkIntegrationCard() {
                 }
               />
             </div>
+            {data.installed && (
+              <div className="text-muted-foreground flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+                <span>
+                  {t.settings.integrations.lark.installedVersion(
+                    data.manifest_version ?? data.version,
+                  )}
+                </span>
+                {data.latest_available_version &&
+                  data.latest_available_version !==
+                    (data.manifest_version ?? data.version) && (
+                    <span className="text-amber-600 dark:text-amber-500">
+                      {t.settings.integrations.lark.updateAvailable(
+                        data.latest_available_version,
+                      )}
+                    </span>
+                  )}
+                {data.runtime_version_mismatch && (
+                  <span className="text-amber-600 dark:text-amber-500">
+                    {t.settings.integrations.lark.runtimeVersionMismatch}
+                  </span>
+                )}
+              </div>
+            )}
             <IntegrationNextStep
               installed={data.installed}
               cliReady={data.cli.available}
@@ -586,7 +713,7 @@ function LarkIntegrationCard() {
                       ) : (
                         <Button
                           size="sm"
-                          variant="outline"
+                          variant="default"
                           onClick={handleCompleteAuth}
                           disabled={completeAuth.isPending}
                         >

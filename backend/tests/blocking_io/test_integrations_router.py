@@ -10,7 +10,6 @@ Blockbuster gate raises ``BlockingError`` and these anchors fail.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import os
 import zipfile
 from pathlib import Path
@@ -29,18 +28,12 @@ def _skill_content(name: str) -> str:
     return f"---\nname: {name}\ndescription: {name} integration skill\n---\n\n# {name}\n"
 
 
-def _build_lark_archive(archive: Path) -> str:
+def _build_lark_archive(archive: Path) -> None:
     archive.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(archive, "w") as zf:
         for skill_name in lark_cli.LARK_SKILL_NAMES:
             zf.writestr(f"cli-1.0.65/skills/{skill_name}/SKILL.md", _skill_content(skill_name))
             zf.writestr(f"cli-1.0.65/skills/{skill_name}/references/readme.md", f"# {skill_name}\n")
-
-    digest = hashlib.sha256()
-    with archive.open("rb") as f:
-        while chunk := f.read(1024 * 1024):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _write_stub_lark_cli(path: Path) -> None:
@@ -92,7 +85,7 @@ async def test_lark_install_route_does_not_block_event_loop(tmp_path: Path, monk
     _reset_paths(tmp_path, monkeypatch)
     config = await _config(tmp_path)
     archive = tmp_path / "fixtures" / "lark-cli.zip"
-    archive_sha256 = await asyncio.to_thread(_build_lark_archive, archive)
+    await asyncio.to_thread(_build_lark_archive, archive)
 
     async def _allow_admin(*_args, **_kwargs) -> None:
         return None
@@ -101,9 +94,8 @@ async def test_lark_install_route_does_not_block_event_loop(tmp_path: Path, monk
         return None
 
     monkeypatch.setenv(lark_cli.LARK_CLI_SOURCE_ARCHIVE_ENV, str(archive))
-    monkeypatch.setattr(lark_cli, "EXPECTED_LARK_CLI_ARCHIVE_SHA256", archive_sha256)
     monkeypatch.setattr(lark_cli, "probe_lark_cli", lambda: lark_cli.LarkCliProbe(available=True, path="/usr/bin/lark-cli", version="v1.0.65"))
-    monkeypatch.setattr(lark_cli, "probe_lark_auth", lambda _user_id: lark_cli.LarkAuthProbe(status="not_configured", message="not configured"))
+    monkeypatch.setattr(lark_cli, "probe_lark_auth", lambda _user_id, **_kwargs: lark_cli.LarkAuthProbe(status="not_configured", message="not configured"))
     monkeypatch.setattr(integrations, "get_effective_user_id", lambda: "loop-user")
     monkeypatch.setattr(integrations, "require_admin_user", _allow_admin)
     monkeypatch.setattr(integrations, "refresh_user_skills_system_prompt_cache_async", _refresh_cache)

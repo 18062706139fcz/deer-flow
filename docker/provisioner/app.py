@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import logging
 import os
+import posixpath
 import re
 import time
 from contextlib import asynccontextmanager
@@ -60,22 +61,27 @@ SANDBOX_IMAGE = os.environ.get(
 )
 SKILLS_HOST_PATH = os.environ.get("SKILLS_HOST_PATH", "/skills")
 THREADS_HOST_PATH = os.environ.get("THREADS_HOST_PATH", "/.deer-flow/threads")
+DEER_FLOW_HOST_BASE_DIR = os.environ.get("DEER_FLOW_HOST_BASE_DIR", "")
 SKILLS_PVC_NAME = os.environ.get("SKILLS_PVC_NAME", "")
 USERDATA_PVC_NAME = os.environ.get("USERDATA_PVC_NAME", "")
 SANDBOX_CONTAINER_PORT_RAW = os.environ.get("SANDBOX_CONTAINER_PORT", "8080")
 try:
     SANDBOX_CONTAINER_PORT = int(SANDBOX_CONTAINER_PORT_RAW)
 except ValueError as exc:
-    raise RuntimeError(
-        f"Invalid SANDBOX_CONTAINER_PORT={SANDBOX_CONTAINER_PORT_RAW!r}; expected an integer TCP port"
-    ) from exc
+    raise RuntimeError(f"Invalid SANDBOX_CONTAINER_PORT={SANDBOX_CONTAINER_PORT_RAW!r}; expected an integer TCP port") from exc
 if not (1 <= SANDBOX_CONTAINER_PORT <= 65535):
-    raise RuntimeError(
-        f"Invalid SANDBOX_CONTAINER_PORT={SANDBOX_CONTAINER_PORT}; expected a value in [1, 65535]"
-    )
+    raise RuntimeError(f"Invalid SANDBOX_CONTAINER_PORT={SANDBOX_CONTAINER_PORT}; expected a value in [1, 65535]")
 SAFE_THREAD_ID_PATTERN = r"^[A-Za-z0-9_\-]+$"
 SAFE_USER_ID_PATTERN = r"^[A-Za-z0-9_\-]+$"
 DEFAULT_USER_ID = "default"
+MAX_EXTRA_MOUNTS = 8
+ALLOWED_EXTRA_MOUNT_PATHS = {
+    "/mnt/acp-workspace",
+    "/mnt/skills/custom",
+    "/mnt/skills/integrations",
+    "/mnt/integrations/lark-cli/config",
+    "/mnt/integrations/lark-cli/data",
+}
 
 # Path to the kubeconfig *inside* the provisioner container.
 # Typically the host's ~/.kube/config is mounted here.
@@ -108,6 +114,84 @@ def join_host_path(base: str, *parts: str) -> str:
     return str(result)
 
 
+def _host_base_dir_for_extra_mounts() -> str:
+    """Return the host-visible DeerFlow state root used for controlled mounts."""
+    if DEER_FLOW_HOST_BASE_DIR:
+        return os.path.normpath(DEER_FLOW_HOST_BASE_DIR)
+
+    normalized_threads = os.path.normpath(THREADS_HOST_PATH)
+    if os.path.basename(normalized_threads) == "threads":
+        return os.path.dirname(normalized_threads)
+    return ""
+
+
+def _is_path_under_base(path: str, base: str) -> bool:
+    """Return whether *path* is inside *base* after normalization."""
+    if not base:
+        return False
+    try:
+        return os.path.commonpath([os.path.normpath(path), os.path.normpath(base)]) == os.path.normpath(base)
+    except ValueError:
+        return False
+
+
+def _normalize_extra_mount_container_path(container_path: str) -> str:
+    normalized = posixpath.normpath(container_path)
+    if not normalized.startswith("/"):
+        raise HTTPException(status_code=400, detail=f"Extra mount path must be absolute: {container_path}")
+    if normalized not in ALLOWED_EXTRA_MOUNT_PATHS:
+        raise HTTPException(status_code=400, detail=f"Unsupported extra mount path: {container_path}")
+    return normalized
+
+
+def _validated_extra_mounts(extra_mounts: list["ExtraMount"] | None) -> list["ExtraMount"]:
+    """Validate extra mounts before converting them into K8s hostPath/PVC mounts."""
+    if not extra_mounts:
+        return []
+    if len(extra_mounts) > MAX_EXTRA_MOUNTS:
+        raise HTTPException(status_code=400, detail=f"Too many extra mounts; max is {MAX_EXTRA_MOUNTS}")
+
+    host_base_dir = _host_base_dir_for_extra_mounts()
+    seen_container_paths: set[str] = set()
+    validated: list[ExtraMount] = []
+    for mount in extra_mounts:
+        host_path = os.path.normpath(mount.host_path)
+        if not os.path.isabs(host_path):
+            raise HTTPException(status_code=400, detail=f"Extra mount host path must be absolute: {mount.host_path}")
+        if not _is_path_under_base(host_path, host_base_dir):
+            raise HTTPException(status_code=400, detail=f"Extra mount host path is outside DeerFlow state: {mount.host_path}")
+
+        container_path = _normalize_extra_mount_container_path(mount.container_path)
+        if container_path in seen_container_paths:
+            raise HTTPException(status_code=400, detail=f"Duplicate extra mount path: {container_path}")
+        seen_container_paths.add(container_path)
+
+        validated.append(
+            ExtraMount(
+                host_path=host_path,
+                container_path=container_path,
+                read_only=mount.read_only,
+            )
+        )
+    return validated
+
+
+def _extra_mount_volume_name(index: int) -> str:
+    return f"extra-{index}"
+
+
+def _extra_mount_pvc_sub_path(host_path: str) -> str:
+    host_base_dir = _host_base_dir_for_extra_mounts()
+    if not _is_path_under_base(host_path, host_base_dir):
+        raise HTTPException(status_code=400, detail=f"Extra mount host path is outside DeerFlow state: {host_path}")
+
+    rel_path = os.path.relpath(os.path.normpath(host_path), host_base_dir)
+    rel_parts = [part for part in rel_path.replace(os.sep, "/").split("/") if part and part != "."]
+    if not rel_parts or any(part == ".." for part in rel_parts):
+        raise HTTPException(status_code=400, detail=f"Invalid extra mount host path: {host_path}")
+    return posixpath.join("deer-flow", *rel_parts)
+
+
 # ── K8s client setup ────────────────────────────────────────────────────
 
 core_v1: k8s_client.CoreV1Api | None = None
@@ -121,27 +205,18 @@ def _init_k8s_client() -> k8s_client.CoreV1Api:
     """
     if os.path.exists(KUBECONFIG_PATH):
         if os.path.isdir(KUBECONFIG_PATH):
-            raise RuntimeError(
-                f"KUBECONFIG_PATH points to a directory, expected a file: {KUBECONFIG_PATH}"
-            )
+            raise RuntimeError(f"KUBECONFIG_PATH points to a directory, expected a file: {KUBECONFIG_PATH}")
         try:
             k8s_config.load_kube_config(config_file=KUBECONFIG_PATH)
             logger.info(f"Loaded kubeconfig from {KUBECONFIG_PATH}")
         except Exception as exc:
-            raise RuntimeError(
-                f"Failed to load kubeconfig from {KUBECONFIG_PATH}: {exc}"
-            ) from exc
+            raise RuntimeError(f"Failed to load kubeconfig from {KUBECONFIG_PATH}: {exc}") from exc
     else:
-        logger.warning(
-            f"Kubeconfig not found at {KUBECONFIG_PATH}; trying in-cluster config"
-        )
+        logger.warning(f"Kubeconfig not found at {KUBECONFIG_PATH}; trying in-cluster config")
         try:
             k8s_config.load_incluster_config()
         except Exception as exc:
-            raise RuntimeError(
-                "Failed to initialize Kubernetes client. "
-                f"No kubeconfig at {KUBECONFIG_PATH}, and in-cluster config is unavailable: {exc}"
-            ) from exc
+            raise RuntimeError(f"Failed to initialize Kubernetes client. No kubeconfig at {KUBECONFIG_PATH}, and in-cluster config is unavailable: {exc}") from exc
 
     # When connecting from inside Docker to the host's K8s API, the
     # kubeconfig may reference ``localhost`` or ``127.0.0.1``.  We
@@ -167,19 +242,11 @@ def _wait_for_kubeconfig(timeout: int = 30) -> None:
                 logger.info(f"Found kubeconfig file at {KUBECONFIG_PATH}")
                 return
             if os.path.isdir(KUBECONFIG_PATH):
-                raise RuntimeError(
-                    "Kubeconfig path is a directory. "
-                    f"Please mount a kubeconfig file at {KUBECONFIG_PATH}."
-                )
-            raise RuntimeError(
-                f"Kubeconfig path exists but is not a regular file: {KUBECONFIG_PATH}"
-            )
+                raise RuntimeError(f"Kubeconfig path is a directory. Please mount a kubeconfig file at {KUBECONFIG_PATH}.")
+            raise RuntimeError(f"Kubeconfig path exists but is not a regular file: {KUBECONFIG_PATH}")
         logger.info(f"Waiting for kubeconfig at {KUBECONFIG_PATH} …")
         time.sleep(2)
-    logger.warning(
-        f"Kubeconfig not found at {KUBECONFIG_PATH} after {timeout}s; "
-        "will attempt in-cluster Kubernetes config"
-    )
+    logger.warning(f"Kubeconfig not found at {KUBECONFIG_PATH} after {timeout}s; will attempt in-cluster Kubernetes config")
 
 
 def _ensure_namespace() -> None:
@@ -223,10 +290,17 @@ app = FastAPI(title="DeerFlow Sandbox Provisioner", lifespan=lifespan)
 # ── Request / Response models ───────────────────────────────────────────
 
 
+class ExtraMount(BaseModel):
+    host_path: str
+    container_path: str
+    read_only: bool = False
+
+
 class CreateSandboxRequest(BaseModel):
     sandbox_id: str
-    thread_id: str = Field(pattern=SAFE_THREAD_ID_PATTERN)
+    thread_id: str | None = Field(default=None, pattern=SAFE_THREAD_ID_PATTERN)
     user_id: str = Field(default=DEFAULT_USER_ID, pattern=SAFE_USER_ID_PATTERN)
+    extra_mounts: list[ExtraMount] = Field(default_factory=list)
 
 
 class SandboxResponse(BaseModel):
@@ -251,7 +325,47 @@ def _sandbox_url(node_port: int) -> str:
     return f"http://{NODE_HOST}:{node_port}"
 
 
-def _build_volumes(thread_id: str) -> list[k8s_client.V1Volume]:
+def _build_extra_volumes(extra_mounts: list[ExtraMount] | None = None) -> list[k8s_client.V1Volume]:
+    volumes: list[k8s_client.V1Volume] = []
+    for index, mount in enumerate(_validated_extra_mounts(extra_mounts)):
+        if USERDATA_PVC_NAME:
+            volumes.append(
+                k8s_client.V1Volume(
+                    name=_extra_mount_volume_name(index),
+                    persistent_volume_claim=k8s_client.V1PersistentVolumeClaimVolumeSource(
+                        claim_name=USERDATA_PVC_NAME,
+                    ),
+                )
+            )
+            continue
+
+        volumes.append(
+            k8s_client.V1Volume(
+                name=_extra_mount_volume_name(index),
+                host_path=k8s_client.V1HostPathVolumeSource(
+                    path=mount.host_path,
+                    type="Directory" if mount.read_only else "DirectoryOrCreate",
+                ),
+            )
+        )
+    return volumes
+
+
+def _build_extra_volume_mounts(extra_mounts: list[ExtraMount] | None = None) -> list[k8s_client.V1VolumeMount]:
+    mounts: list[k8s_client.V1VolumeMount] = []
+    for index, mount in enumerate(_validated_extra_mounts(extra_mounts)):
+        volume_mount = k8s_client.V1VolumeMount(
+            name=_extra_mount_volume_name(index),
+            mount_path=mount.container_path,
+            read_only=mount.read_only,
+        )
+        if USERDATA_PVC_NAME:
+            volume_mount.sub_path = _extra_mount_pvc_sub_path(mount.host_path)
+        mounts.append(volume_mount)
+    return mounts
+
+
+def _build_volumes(thread_id: str, extra_mounts: list[ExtraMount] | None = None) -> list[k8s_client.V1Volume]:
     """Build volume list: PVC when configured, otherwise hostPath."""
     if SKILLS_PVC_NAME:
         skills_vol = k8s_client.V1Volume(
@@ -286,11 +400,13 @@ def _build_volumes(thread_id: str) -> list[k8s_client.V1Volume]:
             ),
         )
 
-    return [skills_vol, userdata_vol]
+    return [skills_vol, userdata_vol, *_build_extra_volumes(extra_mounts)]
 
 
 def _build_volume_mounts(
-    thread_id: str, user_id: str = DEFAULT_USER_ID
+    thread_id: str,
+    user_id: str = DEFAULT_USER_ID,
+    extra_mounts: list[ExtraMount] | None = None,
 ) -> list[k8s_client.V1VolumeMount]:
     """Build volume mount list, using subPath for PVC user-data."""
     userdata_mount = k8s_client.V1VolumeMount(
@@ -299,9 +415,7 @@ def _build_volume_mounts(
         read_only=False,
     )
     if USERDATA_PVC_NAME:
-        userdata_mount.sub_path = (
-            f"deer-flow/users/{user_id}/threads/{thread_id}/user-data"
-        )
+        userdata_mount.sub_path = f"deer-flow/users/{user_id}/threads/{thread_id}/user-data"
 
     return [
         k8s_client.V1VolumeMount(
@@ -310,11 +424,15 @@ def _build_volume_mounts(
             read_only=True,
         ),
         userdata_mount,
+        *_build_extra_volume_mounts(extra_mounts),
     ]
 
 
 def _build_pod(
-    sandbox_id: str, thread_id: str, user_id: str = DEFAULT_USER_ID
+    sandbox_id: str,
+    thread_id: str,
+    user_id: str = DEFAULT_USER_ID,
+    extra_mounts: list[ExtraMount] | None = None,
 ) -> k8s_client.V1Pod:
     """Construct a Pod manifest for a single sandbox."""
     return k8s_client.V1Pod(
@@ -373,14 +491,18 @@ def _build_pod(
                             "ephemeral-storage": "500Mi",
                         },
                     ),
-                    volume_mounts=_build_volume_mounts(thread_id, user_id=user_id),
+                    volume_mounts=_build_volume_mounts(
+                        thread_id,
+                        user_id=user_id,
+                        extra_mounts=extra_mounts,
+                    ),
                     security_context=k8s_client.V1SecurityContext(
                         privileged=False,
                         allow_privilege_escalation=True,
                     ),
                 )
             ],
-            volumes=_build_volumes(thread_id),
+            volumes=_build_volumes(thread_id, extra_mounts=extra_mounts),
             restart_policy="Always",
         ),
     )
@@ -455,7 +577,7 @@ def create_sandbox(req: CreateSandboxRequest):
     (idempotent).
     """
     sandbox_id = req.sandbox_id
-    thread_id = req.thread_id
+    thread_id = req.thread_id or sandbox_id
     user_id = req.user_id
 
     logger.info(
@@ -477,14 +599,18 @@ def create_sandbox(req: CreateSandboxRequest):
     # ── Create Pod ───────────────────────────────────────────────────
     try:
         core_v1.create_namespaced_pod(
-            K8S_NAMESPACE, _build_pod(sandbox_id, thread_id, user_id=user_id)
+            K8S_NAMESPACE,
+            _build_pod(
+                sandbox_id,
+                thread_id,
+                user_id=user_id,
+                extra_mounts=req.extra_mounts,
+            ),
         )
         logger.info(f"Created Pod {_pod_name(sandbox_id)}")
     except ApiException as exc:
         if exc.status != 409:  # 409 = AlreadyExists
-            raise HTTPException(
-                status_code=500, detail=f"Pod creation failed: {exc.reason}"
-            )
+            raise HTTPException(status_code=500, detail=f"Pod creation failed: {exc.reason}")
 
     # ── Create Service ───────────────────────────────────────────────
     try:
@@ -497,9 +623,7 @@ def create_sandbox(req: CreateSandboxRequest):
                 core_v1.delete_namespaced_pod(_pod_name(sandbox_id), K8S_NAMESPACE)
             except ApiException:
                 pass
-            raise HTTPException(
-                status_code=500, detail=f"Service creation failed: {exc.reason}"
-            )
+            raise HTTPException(status_code=500, detail=f"Service creation failed: {exc.reason}")
 
     # ── Read the auto-allocated NodePort ─────────────────────────────
     node_port: int | None = None
@@ -510,9 +634,7 @@ def create_sandbox(req: CreateSandboxRequest):
         time.sleep(0.5)
 
     if not node_port:
-        raise HTTPException(
-            status_code=500, detail="NodePort was not allocated in time"
-        )
+        raise HTTPException(status_code=500, detail="NodePort was not allocated in time")
 
     return SandboxResponse(
         sandbox_id=sandbox_id,
@@ -543,9 +665,7 @@ def destroy_sandbox(sandbox_id: str):
             errors.append(f"pod: {exc.reason}")
 
     if errors:
-        raise HTTPException(
-            status_code=500, detail=f"Partial cleanup: {', '.join(errors)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Partial cleanup: {', '.join(errors)}")
 
     return {"ok": True, "sandbox_id": sandbox_id}
 
@@ -573,9 +693,7 @@ def list_sandboxes():
             label_selector="app=deer-flow-sandbox",
         )
     except ApiException as exc:
-        raise HTTPException(
-            status_code=500, detail=f"Failed to list services: {exc.reason}"
-        )
+        raise HTTPException(status_code=500, detail=f"Failed to list services: {exc.reason}")
 
     sandboxes: list[SandboxResponse] = []
     for svc in services.items:

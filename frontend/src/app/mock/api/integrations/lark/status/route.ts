@@ -2,6 +2,8 @@ const status = {
   installed: false,
   version: "v1.0.65",
   manifest_version: null,
+  latest_available_version: "v1.0.65",
+  runtime_version_mismatch: false,
   app_configured: false,
   app_id: null,
   app_brand: null,

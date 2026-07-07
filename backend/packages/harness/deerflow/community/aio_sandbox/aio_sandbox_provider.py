@@ -37,6 +37,8 @@ from deerflow.community.warm_pool_lifecycle import (
 )
 from deerflow.config import get_app_config
 from deerflow.config.paths import VIRTUAL_PATH_PREFIX, get_paths
+from deerflow.integrations.lark_cli import INTEGRATION_ID as LARK_CLI_INTEGRATION_ID
+from deerflow.integrations.lark_cli import LARK_CLI_SANDBOX_CONFIG_DIR, LARK_CLI_SANDBOX_DATA_DIR
 from deerflow.runtime.user_context import get_effective_user_id
 from deerflow.sandbox.sandbox import Sandbox
 from deerflow.sandbox.sandbox_provider import SandboxProvider
@@ -318,6 +320,11 @@ class AioSandboxProvider(WarmPoolLifecycleMixin[SandboxInfo], SandboxProvider):
             mounts.extend(user_skill_mounts)
             logger.info(f"Adding user skill mounts: {user_skill_mounts}")
 
+        lark_cli_mounts = self._get_lark_cli_runtime_mounts(user_id=user_id)
+        if lark_cli_mounts:
+            mounts.extend(lark_cli_mounts)
+            logger.info(f"Adding Lark CLI runtime mounts: {lark_cli_mounts}")
+
         return mounts
 
     @staticmethod
@@ -382,6 +389,32 @@ class AioSandboxProvider(WarmPoolLifecycleMixin[SandboxInfo], SandboxProvider):
             ]
         except Exception as e:
             logger.warning(f"Could not setup user skill mounts: {e}")
+            return []
+
+    @staticmethod
+    def _get_lark_cli_runtime_mounts(*, user_id: str | None = None) -> list[tuple[str, str, bool]]:
+        """Mount the per-user lark-cli config/data dirs used by Settings auth.
+
+        Settings endpoints run ``lark-cli`` on the Gateway with
+        ``LARKSUITE_CLI_CONFIG_DIR`` / ``DATA_DIR`` pointing at
+        ``users/{user}/integrations/lark-cli``. Agent conversations run
+        ``lark-cli`` inside the sandbox, so those same directories must be
+        mounted into the container or the CLI sees a separate unauthenticated
+        profile.
+        """
+        try:
+            paths = get_paths()
+            effective_user_id = AioSandboxProvider._effective_acquire_user_id(user_id)
+            config_dir = paths.user_dir(effective_user_id) / "integrations" / LARK_CLI_INTEGRATION_ID / "config"
+            data_dir = paths.user_dir(effective_user_id) / "integrations" / LARK_CLI_INTEGRATION_ID / "data"
+            config_dir.mkdir(parents=True, exist_ok=True)
+            data_dir.mkdir(parents=True, exist_ok=True)
+            return [
+                (paths.host_user_integration_config_dir(effective_user_id, LARK_CLI_INTEGRATION_ID), LARK_CLI_SANDBOX_CONFIG_DIR, False),
+                (paths.host_user_integration_data_dir(effective_user_id, LARK_CLI_INTEGRATION_ID), LARK_CLI_SANDBOX_DATA_DIR, False),
+            ]
+        except Exception as e:
+            logger.warning(f"Could not setup Lark CLI runtime mounts: {e}")
             return []
 
     # ── Idle timeout management ──────────────────────────────────────────

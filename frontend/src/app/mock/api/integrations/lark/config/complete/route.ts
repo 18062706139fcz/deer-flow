@@ -6,6 +6,8 @@ export function POST() {
       installed: true,
       version: "v1.0.65",
       manifest_version: "v1.0.65",
+      latest_available_version: "v1.0.65",
+      runtime_version_mismatch: false,
       app_configured: true,
       app_id: "cli_mock",
       app_brand: "feishu",

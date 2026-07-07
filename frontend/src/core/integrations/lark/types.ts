@@ -20,6 +20,8 @@ export interface LarkIntegrationStatus {
   installed: boolean;
   version: string;
   manifest_version: string | null;
+  latest_available_version: string | null;
+  runtime_version_mismatch: boolean;
   app_configured: boolean;
   app_id: string | null;
   app_brand: string | null;

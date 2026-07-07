@@ -40,6 +40,8 @@ describe("lark integration api", () => {
         installed: false,
         version: "v1.0.65",
         manifest_version: null,
+        latest_available_version: "v1.0.65",
+        runtime_version_mismatch: false,
         app_configured: false,
         app_id: null,
         app_brand: null,
@@ -72,6 +74,8 @@ describe("lark integration api", () => {
           installed: true,
           version: "v1.0.65",
           manifest_version: "v1.0.65",
+          latest_available_version: "v1.0.65",
+          runtime_version_mismatch: false,
           app_configured: false,
           app_id: null,
           app_brand: null,
@@ -135,7 +139,7 @@ describe("lark integration api", () => {
       startLarkAuthorization({
         recommend: true,
         domains: ["calendar"],
-        scope: "calendar:calendar:readonly",
+        scope: "calendar:calendar.event:read",
       }),
     ).resolves.toEqual({
       verification_url: "https://open.feishu.cn/auth/mock",
@@ -152,7 +156,7 @@ describe("lark integration api", () => {
         body: JSON.stringify({
           recommend: true,
           domains: ["calendar"],
-          scope: "calendar:calendar:readonly",
+          scope: "calendar:calendar.event:read",
         }),
       },
     );
@@ -197,6 +201,8 @@ describe("lark integration api", () => {
           installed: true,
           version: "v1.0.65",
           manifest_version: "v1.0.65",
+          latest_available_version: "v1.0.65",
+          runtime_version_mismatch: false,
           app_configured: true,
           app_id: "cli_mock",
           app_brand: "feishu",
@@ -255,6 +261,8 @@ describe("lark integration api", () => {
           installed: true,
           version: "v1.0.65",
           manifest_version: "v1.0.65",
+          latest_available_version: "v1.0.65",
+          runtime_version_mismatch: false,
           app_configured: true,
           app_id: "cli_mock",
           app_brand: "feishu",

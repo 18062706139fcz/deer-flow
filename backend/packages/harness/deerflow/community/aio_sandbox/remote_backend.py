@@ -28,6 +28,33 @@ from .sandbox_info import SandboxInfo
 
 logger = logging.getLogger(__name__)
 
+_PROVISIONER_EXTRA_MOUNT_PATHS = {
+    "/mnt/acp-workspace",
+    "/mnt/skills/custom",
+    "/mnt/skills/integrations",
+    "/mnt/integrations/lark-cli/config",
+    "/mnt/integrations/lark-cli/data",
+}
+
+
+def _provisioner_extra_mounts_payload(extra_mounts: list[tuple[str, str, bool]] | None) -> list[dict[str, object]]:
+    """Return only extra mounts the provisioner knows how to recreate safely."""
+    if not extra_mounts:
+        return []
+
+    payload: list[dict[str, object]] = []
+    for host_path, container_path, read_only in extra_mounts:
+        if container_path not in _PROVISIONER_EXTRA_MOUNT_PATHS:
+            continue
+        payload.append(
+            {
+                "host_path": host_path,
+                "container_path": container_path,
+                "read_only": read_only,
+            }
+        )
+    return payload
+
 
 class RemoteSandboxBackend(SandboxBackend):
     """Backend that delegates sandbox lifecycle to the provisioner service.
@@ -143,16 +170,19 @@ class RemoteSandboxBackend(SandboxBackend):
         user_id: str | None = None,
     ) -> SandboxInfo:
         """POST /api/sandboxes → create Pod + Service."""
-        del extra_mounts
         effective_user_id = user_id or get_effective_user_id()
+        payload = {
+            "sandbox_id": sandbox_id,
+            "thread_id": thread_id,
+            "user_id": effective_user_id,
+        }
+        provisioner_extra_mounts = _provisioner_extra_mounts_payload(extra_mounts)
+        if provisioner_extra_mounts:
+            payload["extra_mounts"] = provisioner_extra_mounts
         try:
             resp = requests.post(
                 f"{self._provisioner_url}/api/sandboxes",
-                json={
-                    "sandbox_id": sandbox_id,
-                    "thread_id": thread_id,
-                    "user_id": effective_user_id,
-                },
+                json=payload,
                 timeout=30,
             )
             resp.raise_for_status()

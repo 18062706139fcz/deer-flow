@@ -647,6 +647,9 @@ export interface Translations {
         auth: string;
         notInstalled: string;
         skillsInstalled: (installed: number, expected: number) => string;
+        installedVersion: (version: string) => string;
+        updateAvailable: (version: string) => string;
+        runtimeVersionMismatch: string;
         authNotConfigured: string;
         connect: string;
         authStarting: string;
@@ -660,14 +663,31 @@ export interface Translations {
         authorizationStillPending: string;
         permissionTitle: string;
         permissionDescription: string;
-        authDomainCalendar: string;
-        authDomainCalendarDescription: string;
-        authDomainDocs: string;
-        authDomainDocsDescription: string;
-        authDomainDrive: string;
-        authDomainDriveDescription: string;
-        authDomainAll: string;
-        authDomainAllDescription: string;
+        authDomains: Record<
+          | "approval"
+          | "apps"
+          | "attendance"
+          | "base"
+          | "calendar"
+          | "contact"
+          | "docs"
+          | "drive"
+          | "event"
+          | "im"
+          | "mail"
+          | "markdown"
+          | "mindnotes"
+          | "minutes"
+          | "note"
+          | "okr"
+          | "sheets"
+          | "slides"
+          | "task"
+          | "vc"
+          | "wiki"
+          | "all",
+          { label: string; description: string }
+        >;
         customScopeLabel: string;
         customScopePlaceholder: string;
         customScopeDescription: string;

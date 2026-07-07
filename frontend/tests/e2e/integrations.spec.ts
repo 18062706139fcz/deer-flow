@@ -58,7 +58,7 @@ test.describe("Integrations settings", () => {
     await dialog.getByRole("button", { name: "Calendar" }).click();
     await dialog
       .getByLabel("Exact OAuth scope")
-      .fill("calendar:calendar:readonly");
+      .fill("calendar:calendar.event:read");
     await dialog.getByRole("button", { name: "Connect Lark" }).click();
     await expect(
       dialog.getByText("https://open.feishu.cn/page/cli?user_code=config"),
@@ -73,9 +73,9 @@ test.describe("Integrations settings", () => {
     await expect
       .poll(() => authStartRequest)
       .toMatchObject({
-        recommend: true,
+        recommend: false,
         domains: ["calendar"],
-        scope: "calendar:calendar:readonly",
+        scope: "calendar:calendar.event:read",
       });
 
     await expect(

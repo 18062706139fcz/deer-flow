@@ -309,9 +309,15 @@ def _resolve_skills_path(path: str) -> str:
         paths = get_paths()
         user_integrations_dir = paths.user_integration_skills_dir(user_id)
         integrations_relative = relative[len("integrations") :].lstrip("/")
-        if integrations_relative:
-            return str(user_integrations_dir / integrations_relative)
-        return str(user_integrations_dir)
+        if not integrations_relative:
+            return str(user_integrations_dir)
+        # Defense-in-depth: even though _reject_path_traversal runs upstream for
+        # sandbox callers, confirm the resolved path stays within the user's
+        # integration dir so a lexical ``../`` cannot escape it here.
+        resolved = (user_integrations_dir / integrations_relative).resolve()
+        if not resolved.is_relative_to(user_integrations_dir.resolve()):
+            raise PermissionError("Access denied: path traversal detected")
+        return str(user_integrations_dir / integrations_relative)
 
     return _join_path_preserving_style(skills_host, relative)
 
@@ -1663,6 +1669,30 @@ def _github_env_from_runtime(runtime: Runtime) -> dict[str, str] | None:
     return {"GH_TOKEN": token, "GITHUB_TOKEN": token}
 
 
+_LARK_CLI_COMMAND_RE = re.compile(r"(?<![A-Za-z0-9_.-])lark-cli(?![A-Za-z0-9_.-])")
+
+
+def _lark_cli_env_from_runtime(runtime: Runtime, command: str, *, sandbox_paths: bool) -> dict[str, str] | None:
+    """Expose Settings-page Lark auth to sandbox ``lark-cli`` commands.
+
+    Settings authorizes ``lark-cli`` under DeerFlow's per-user integration
+    config/data directories. Agent conversations invoke ``lark-cli`` through the
+    sandbox, so lark commands must receive those same directories or they see an
+    unrelated unauthenticated profile. Keep this scoped to commands that
+    actually call ``lark-cli`` so ordinary bash calls do not switch AIO into the
+    env-bearing execution path.
+    """
+    if not _LARK_CLI_COMMAND_RE.search(command):
+        return None
+    try:
+        from deerflow.integrations.lark_cli import lark_cli_env_overlay
+
+        return lark_cli_env_overlay(resolve_runtime_user_id(runtime), sandbox_paths=sandbox_paths)
+    except Exception:
+        logger.warning("Could not build Lark CLI env overlay; running command without managed auth", exc_info=True)
+        return None
+
+
 @tool("bash", parse_docstring=True)
 def bash_tool(runtime: Runtime, description: str, command: str) -> str:
     """Execute a bash command in a Linux environment.
@@ -1689,8 +1719,11 @@ def bash_tool(runtime: Runtime, description: str, command: str) -> str:
         injected_env = read_active_secrets(getattr(runtime, "context", None)) or None
         identity_prefix = _channel_identity_prefix(runtime)
         github_env = _github_env_from_runtime(runtime)
+        lark_cli_env = _lark_cli_env_from_runtime(runtime, command, sandbox_paths=not is_local_sandbox(runtime))
         if github_env:
             injected_env = {**(injected_env or {}), **github_env}
+        if lark_cli_env:
+            injected_env = {**(injected_env or {}), **lark_cli_env}
         if is_local_sandbox(runtime):
             if not is_host_bash_allowed():
                 return f"Error: {LOCAL_HOST_BASH_DISABLED_MESSAGE}"

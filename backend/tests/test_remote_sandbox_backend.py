@@ -166,6 +166,41 @@ def test_provisioner_create_returns_sandbox_info(monkeypatch):
     assert info.sandbox_url == "http://k3s:31001"
 
 
+def test_provisioner_create_forwards_supported_extra_mounts(monkeypatch):
+    backend = RemoteSandboxBackend("http://provisioner:8002")
+
+    def mock_post(url: str, json: dict, timeout: int):
+        assert url == "http://provisioner:8002/api/sandboxes"
+        assert json["extra_mounts"] == [
+            {
+                "host_path": "/state/users/alice/skills/integrations",
+                "container_path": "/mnt/skills/integrations",
+                "read_only": True,
+            },
+            {
+                "host_path": "/state/users/alice/integrations/lark-cli/config",
+                "container_path": "/mnt/integrations/lark-cli/config",
+                "read_only": False,
+            },
+        ]
+        assert timeout == 30
+        return _StubResponse(payload={"sandbox_id": "abc123", "sandbox_url": "http://k3s:31001"})
+
+    monkeypatch.setattr(requests, "post", mock_post)
+
+    backend._provisioner_create(
+        "thread-1",
+        "abc123",
+        extra_mounts=[
+            ("/state/users/alice/threads/thread-1/user-data/workspace", "/mnt/user-data/workspace", False),
+            ("/skills", "/mnt/skills", True),
+            ("/state/users/alice/skills/integrations", "/mnt/skills/integrations", True),
+            ("/state/users/alice/integrations/lark-cli/config", "/mnt/integrations/lark-cli/config", False),
+        ],
+        user_id="alice",
+    )
+
+
 def test_provisioner_create_accepts_anonymous_thread_id(monkeypatch):
     backend = RemoteSandboxBackend("http://provisioner:8002")
 

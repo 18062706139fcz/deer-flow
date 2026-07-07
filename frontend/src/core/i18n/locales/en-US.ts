@@ -764,6 +764,11 @@ export const enUS: Translations = {
         notInstalled: "Not installed",
         skillsInstalled: (installed, expected) =>
           `${installed}/${expected} skills installed`,
+        installedVersion: (version) => `Installed: ${version}`,
+        updateAvailable: (version) =>
+          `Update available: ${version} — reinstall to upgrade`,
+        runtimeVersionMismatch:
+          "Skill pack version differs from the runtime lark-cli binary",
         authNotConfigured: "Not connected",
         connect: "Connect Lark",
         authStarting: "Opening connection link...",
@@ -774,37 +779,125 @@ export const enUS: Translations = {
           "Lark is already connected. If authorization expires, refresh the status and reconnect.",
         connectionStarted: "Connection link opened",
         connectionReady: "Connection is ready. Opening authorization...",
-        authStarted: "Authorization page opened. Waiting for completion...",
+        authStarted:
+          "Authorization page opened. DeerFlow will detect completion automatically.",
         authorizationStillPending:
-          'Authorization is not complete yet. Finish it in the browser, then return here and click "I completed authorization".',
+          'Authorization is not complete yet. Finish it in the browser; DeerFlow keeps checking automatically. You can click "I completed authorization" if the page does not update.',
         permissionTitle: "Authorization scope",
         permissionDescription:
-          "DeerFlow requests the official recommended scopes by default. Add domains here when you need calendar, document, or Drive access; connected users can re-authorize to add permissions.",
-        authDomainCalendar: "Calendar",
-        authDomainCalendarDescription:
-          "Read and manage the current user's events, free/busy data, and meeting room flows.",
-        authDomainDocs: "Docs",
-        authDomainDocsDescription:
-          "Read and edit docs, sheets, Base, and related document content.",
-        authDomainDrive: "Drive",
-        authDomainDriveDescription:
-          "Access the current user's Drive files, folders, and attachments.",
-        authDomainAll: "All",
-        authDomainAllDescription:
-          "Request every business domain supported by lark-cli. Use this only when the missing permission is unclear.",
+          "By default, DeerFlow only completes the base sign-in and does not request any business permissions. Select the domains you need here; connected users can re-authorize to add more (scopes accumulate).",
+        authDomains: {
+          calendar: {
+            label: "Calendar",
+            description:
+              "Events, free/busy, RSVP, and meeting-room scheduling.",
+          },
+          im: {
+            label: "Messenger",
+            description:
+              "Send/reply messages, manage group chats, search history, download media.",
+          },
+          docs: {
+            label: "Docs",
+            description: "Create, read, update, and search documents.",
+          },
+          drive: {
+            label: "Drive",
+            description:
+              "Upload/download files, search docs & wiki, manage comments.",
+          },
+          sheets: {
+            label: "Sheets",
+            description: "Read, write, append, find, and export spreadsheets.",
+          },
+          base: {
+            label: "Base",
+            description:
+              "Bitable tables, fields, records, views, dashboards, and workflows.",
+          },
+          wiki: {
+            label: "Wiki",
+            description: "Knowledge spaces, nodes, and wiki documents.",
+          },
+          task: {
+            label: "Tasks",
+            description: "Tasks, task lists, subtasks, comments, and reminders.",
+          },
+          mail: {
+            label: "Mail",
+            description:
+              "Browse, search, read, send, reply, forward, and manage drafts.",
+          },
+          vc: {
+            label: "Meetings",
+            description: "Meeting records, minutes artifacts, and recordings.",
+          },
+          minutes: {
+            label: "Minutes",
+            description: "Meeting minutes content and transcripts.",
+          },
+          note: {
+            label: "Notes",
+            description: "Meeting notes and related content.",
+          },
+          slides: {
+            label: "Slides",
+            description: "Presentations and slide content.",
+          },
+          markdown: {
+            label: "Markdown",
+            description: "Create, fetch, patch, and overwrite Drive-native .md files.",
+          },
+          mindnotes: {
+            label: "Mind notes",
+            description: "Mind notes content.",
+          },
+          contact: {
+            label: "Contacts",
+            description: "Look up users by name/email/phone and read profiles.",
+          },
+          approval: {
+            label: "Approval",
+            description:
+              "Query and act on approval tasks; cancel and CC instances.",
+          },
+          attendance: {
+            label: "Attendance",
+            description: "Query personal attendance check-in records.",
+          },
+          okr: {
+            label: "OKR",
+            description:
+              "Objectives, key results, alignments, indicators, and progress.",
+          },
+          event: {
+            label: "Events",
+            description: "Subscribe to and consume real-time platform events.",
+          },
+          apps: {
+            label: "Apps",
+            description:
+              "Create Spark/Miaoda apps, publish sites, and manage access scope.",
+          },
+          all: {
+            label: "All",
+            description:
+              "Request every business domain supported by lark-cli. Use this only when the missing permission is unclear.",
+          },
+        },
         customScopeLabel: "Exact OAuth scope",
-        customScopePlaceholder: "For example calendar:calendar:readonly",
+        customScopePlaceholder: "For example calendar:calendar.event:read",
         customScopeDescription:
-          "Advanced: if an error reports a missing scope, paste it here. It will be requested together with selected domains.",
+          "Advanced: if an error reports a missing scope, paste it here. Examples: calendar:calendar.event:read, calendar:calendar.free_busy:read.",
         openConnectionLinkTitle: "Continue connecting Lark",
         openConnectionLinkDescription:
           "The first connection needs one browser confirmation from Lark. Open the link below and finish the prompt, then return here to continue authorization.",
         openAuthLinkTitle: "Authorize Lark in your browser",
         openAuthLinkDescription:
-          'Open the link below to authorize. DeerFlow detects completion automatically; if it does not finish, return here and click "I completed authorization".',
+          "Open the link below to authorize. DeerFlow keeps checking automatically and will save the connection after approval.",
         waitingAuthTitle: "Waiting for Lark authorization",
         waitingAuthDescription:
-          "Finish authorization in the browser page that just opened. This panel updates automatically after approval.",
+          "Finish authorization in the browser page that just opened. DeerFlow will update this panel automatically; the button below is only a fallback.",
         openAuthLink: "Open link",
         copyAuthLink: "Copy link",
         completeAuth: "I completed authorization",

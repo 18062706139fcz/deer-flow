@@ -4,6 +4,35 @@ The integration installs the official ``lark-*`` AI-agent skills into the
 current user's read-only managed integration skill directory. It deliberately
 does not use the ordinary custom-skill archive path: this is a trusted,
 versioned first-party integration package, not user-authored mutable content.
+
+Version resolution & integrity
+-------------------------------
+The installed skill-pack version is **discovered at install time** from the
+official ``larksuite/cli`` GitHub releases (``releases/latest``) rather than
+hard-coded — so a fresh install always tracks the newest published skills.
+``FALLBACK_LARK_CLI_VERSION`` is only a bottom line for offline / rate-limited /
+air-gapped installs; it is not the installed pin.
+
+Integrity is enforced without pinning a per-version archive byte hash (GitHub
+does not guarantee source-archive bytes are stable across their internal git
+upgrades, and pinning conflicts with tracking latest). Instead:
+
+* the download source is fixed to the official GitHub host over HTTPS and the
+  version only comes from the official ``releases/latest`` tag (no external URL
+  injection);
+* every archive member passes structural guards (zip-slip / symlink /
+  executable-binary / size / required-skill completeness / ``SKILL.md`` parse);
+* a **content** SHA-256 over the extracted skill tree is recorded in the
+  manifest, so a reinstall whose skill content changed is detectable/auditable
+  even when GitHub re-packs identical content with different archive bytes.
+
+Runtime coupling: the npm-installed ``lark-cli`` binary version is still pinned
+in ``backend/Dockerfile`` (``ARG LARK_CLI_NPM_VERSION``) and
+``docker/docker-compose*.yaml``. Because the skill pack now tracks latest, the
+pack version and the runtime binary version can drift; ``get_lark_integration_status``
+surfaces ``runtime_version_mismatch`` so the UI can prompt, and
+``test_python_and_docker_lark_cli_versions_match`` pins the fallback constant to
+the Dockerfile ARG so the two do not silently diverge.
 """
 
 from __future__ import annotations
@@ -12,6 +41,7 @@ import hashlib
 import json
 import os
 import posixpath
+import re
 import shutil
 import subprocess
 import tempfile
@@ -32,17 +62,23 @@ from deerflow.skills.permissions import make_skill_tree_sandbox_readable
 from deerflow.skills.types import SKILL_MD_FILE, SkillCategory
 
 INTEGRATION_ID = "lark-cli"
-DEFAULT_LARK_CLI_VERSION = "v1.0.65"
-LARK_CLI_NPM_VERSION = DEFAULT_LARK_CLI_VERSION.removeprefix("v")
-DEFAULT_LARK_CLI_ARCHIVE_URL = f"https://github.com/larksuite/cli/archive/refs/tags/{DEFAULT_LARK_CLI_VERSION}.zip"
-EXPECTED_LARK_CLI_ARCHIVE_SHA256 = "1c7eacc7881107513b2c07998fc4dc8958848fba2b435d43760fc9c545598fd6"
+# Bottom-line version for offline / rate-limited / air-gapped installs only.
+# The real installed version is resolved from releases/latest at install time.
+FALLBACK_LARK_CLI_VERSION = "v1.0.65"
+LARK_CLI_NPM_VERSION = FALLBACK_LARK_CLI_VERSION.removeprefix("v")
+LARK_CLI_GITHUB_REPO = "larksuite/cli"
+LARK_CLI_LATEST_RELEASE_API = f"https://api.github.com/repos/{LARK_CLI_GITHUB_REPO}/releases/latest"
 LARK_CLI_SOURCE_ARCHIVE_ENV = "DEER_FLOW_LARK_CLI_SKILLS_ARCHIVE"
 LARK_CLI_DOWNLOAD_TIMEOUT_SECONDS = 60
 LARK_HTTP_TIMEOUT_SECONDS = 20
 LARK_CONFIG_POLL_TIMEOUT_SECONDS = 45
+LARK_CLI_LATEST_VERSION_TTL_SECONDS = 3600
 LARK_CLI_MAX_ARCHIVE_BYTES = 128 * 1024 * 1024
 LARK_CLI_MAX_EXTRACTED_BYTES = 256 * 1024 * 1024
 LARK_CLI_MANIFEST_FILE = ".deerflow-lark-cli-manifest.json"
+LARK_CLI_SANDBOX_CONFIG_DIR = "/mnt/integrations/lark-cli/config"
+LARK_CLI_SANDBOX_DATA_DIR = "/mnt/integrations/lark-cli/data"
+_VERSION_TAG_RE = re.compile(r"v?\d+\.\d+\.\d+")
 _DEERFLOW_LARK_SHARED_GUIDANCE_MARKER = "<!-- deerflow-lark-cli-auth-guidance-v2 -->"
 _DEERFLOW_LARK_SHARED_GUIDANCE_LEGACY_MARKERS = ("<!-- deerflow-lark-cli-auth-guidance-v1 -->",)
 _LARK_APP_REGISTRATION_PATH = "/oauth/v1/app/registration"
@@ -99,6 +135,8 @@ class LarkIntegrationStatus:
     installed: bool
     version: str
     manifest_version: str | None
+    latest_available_version: str | None
+    runtime_version_mismatch: bool
     app_configured: bool
     app_id: str | None
     app_brand: str | None
@@ -169,24 +207,32 @@ def lark_cli_data_dir(user_id: str) -> Path:
     return get_paths().user_dir(user_id) / "integrations" / INTEGRATION_ID / "data"
 
 
-def lark_cli_env(user_id: str) -> dict[str, str]:
-    """Environment for Gateway-side lark-cli probes.
+def lark_cli_env_overlay(user_id: str, *, sandbox_paths: bool = False) -> dict[str, str]:
+    """Environment overlay for lark-cli using DeerFlow-managed credentials.
 
     The directories are per-user so a local trusted-mode login cannot bleed
     across accounts. Auth Proxy support can later replace these directories for
     sandbox execution without changing the status API contract.
     """
-    config_dir = lark_cli_config_dir(user_id)
-    data_dir = lark_cli_data_dir(user_id)
-    config_dir.mkdir(parents=True, exist_ok=True)
-    data_dir.mkdir(parents=True, exist_ok=True)
+    if sandbox_paths:
+        config_dir: Path | str = LARK_CLI_SANDBOX_CONFIG_DIR
+        data_dir: Path | str = LARK_CLI_SANDBOX_DATA_DIR
+    else:
+        config_dir = lark_cli_config_dir(user_id)
+        data_dir = lark_cli_data_dir(user_id)
+        config_dir.mkdir(parents=True, exist_ok=True)
+        data_dir.mkdir(parents=True, exist_ok=True)
     return {
-        **os.environ,
         "LARKSUITE_CLI_CONFIG_DIR": str(config_dir),
         "LARKSUITE_CLI_DATA_DIR": str(data_dir),
         "LARKSUITE_CLI_NO_UPDATE_NOTIFIER": "1",
         "LARKSUITE_CLI_NO_SKILLS_NOTIFIER": "1",
     }
+
+
+def lark_cli_env(user_id: str) -> dict[str, str]:
+    """Full environment for Gateway-side lark-cli probes."""
+    return {**os.environ, **lark_cli_env_overlay(user_id)}
 
 
 def probe_lark_cli() -> LarkCliProbe:
@@ -210,16 +256,27 @@ def probe_lark_cli() -> LarkCliProbe:
     return LarkCliProbe(available=True, path=path, version=output or None)
 
 
-def probe_lark_auth(user_id: str) -> LarkAuthProbe:
+def probe_lark_auth(user_id: str, *, verify: bool = False) -> LarkAuthProbe:
+    """Probe the user's Lark authorization state.
+
+    By default this only checks local token presence (``auth status --json``),
+    which is cheap and offline — suitable for the frequently-polled status
+    endpoint. Pass ``verify=True`` to add ``--verify`` for a live token check
+    against Lark; reserve that for the explicit "complete authorization" step
+    since it costs a network round-trip on every call.
+    """
     path = _resolve_lark_cli_path()
     if path is None:
         return LarkAuthProbe(status="unavailable", message="lark-cli is not installed on the Gateway")
     app_config = read_lark_app_config(user_id)
     if not app_config["configured"]:
         return LarkAuthProbe(status="not_configured", message="Lark app is not configured")
+    args = [path, "auth", "status", "--json"]
+    if verify:
+        args.append("--verify")
     try:
         result = subprocess.run(
-            [path, "auth", "status", "--json", "--verify"],
+            args,
             check=False,
             capture_output=True,
             text=True,
@@ -256,16 +313,27 @@ def probe_lark_auth(user_id: str) -> LarkAuthProbe:
     return LarkAuthProbe(status="authenticated", user=user, message="lark-cli auth is configured")
 
 
-def get_lark_integration_status(user_id: str, config: AppConfig) -> LarkIntegrationStatus:
+def get_lark_integration_status(
+    user_id: str,
+    config: AppConfig,
+    *,
+    verify_auth: bool = False,
+    check_latest: bool = False,
+) -> LarkIntegrationStatus:
     root = lark_integration_root(user_id)
     manifest = _read_manifest(root)
     app_config = read_lark_app_config(user_id)
     installed_skills = tuple(sorted(_installed_lark_skill_names(root)))
     enabled_skills = tuple(sorted(_enabled_lark_skill_names(user_id, config)))
+    manifest_version = str(manifest.get("version")) if manifest else None
+    cli = probe_lark_cli()
+    latest_available = _cached_latest_lark_cli_version() if check_latest else None
     return LarkIntegrationStatus(
         installed=bool(manifest) and "lark-shared" in installed_skills,
-        version=DEFAULT_LARK_CLI_VERSION,
-        manifest_version=str(manifest.get("version")) if manifest else None,
+        version=manifest_version or FALLBACK_LARK_CLI_VERSION,
+        manifest_version=manifest_version,
+        latest_available_version=latest_available,
+        runtime_version_mismatch=_versions_drifted(manifest_version, cli.version),
         app_configured=bool(app_config["configured"]),
         app_id=app_config["app_id"],
         app_brand=app_config["brand"],
@@ -274,9 +342,31 @@ def get_lark_integration_status(user_id: str, config: AppConfig) -> LarkIntegrat
         installed_skills=installed_skills,
         enabled_skills=enabled_skills,
         install_path=str(root),
-        cli=probe_lark_cli(),
-        auth=probe_lark_auth(user_id),
+        cli=cli,
+        auth=probe_lark_auth(user_id, verify=verify_auth),
     )
+
+
+def _normalize_version(value: str | None) -> str | None:
+    """Extract a comparable ``major.minor.patch`` from a version-ish string."""
+    if not value:
+        return None
+    match = re.search(r"\d+\.\d+\.\d+", value)
+    return match.group(0) if match else None
+
+
+def _versions_drifted(manifest_version: str | None, cli_version: str | None) -> bool:
+    """True when both versions are known and their numeric cores differ.
+
+    The manifest records the skill-pack version (tracks latest); ``cli_version``
+    is the runtime ``lark-cli`` binary (pinned in the image). Unknown on either
+    side means we cannot claim a mismatch, so we stay quiet.
+    """
+    left = _normalize_version(manifest_version)
+    right = _normalize_version(cli_version)
+    if left is None or right is None:
+        return False
+    return left != right
 
 
 def read_lark_app_config(user_id: str) -> dict[str, str | bool | None]:
@@ -312,12 +402,24 @@ def install_lark_integration(
     *,
     source_archive: str | Path | None = None,
 ) -> LarkInstallResult:
-    archive_path = Path(source_archive) if source_archive is not None else _resolve_or_download_archive()
-    created_temp_archive = source_archive is None and not os.getenv(LARK_CLI_SOURCE_ARCHIVE_ENV)
+    env_archive = os.getenv(LARK_CLI_SOURCE_ARCHIVE_ENV)
+    if source_archive is not None:
+        archive_path = Path(source_archive)
+        resolved_version = None
+        created_temp_archive = False
+    elif env_archive:
+        archive_path = Path(env_archive)
+        resolved_version = None
+        created_temp_archive = False
+    else:
+        resolved_version = _resolve_latest_lark_cli_version()
+        archive_path = _download_lark_archive(resolved_version)
+        created_temp_archive = True
 
+    previous = _read_manifest(lark_integration_root(user_id))
+    previous_content_sha = str(previous.get("content_sha256")) if previous else None
     try:
-        _verify_lark_archive_integrity(archive_path)
-        installed_skills = _install_lark_skills_from_archive(user_id, archive_path)
+        installed_skills, content_sha = _install_lark_skills_from_archive(user_id, archive_path, version=resolved_version)
     finally:
         if created_temp_archive:
             try:
@@ -326,11 +428,15 @@ def install_lark_integration(
                 pass
 
     status = get_lark_integration_status(user_id, config)
+    content_changed = previous_content_sha is not None and previous_content_sha != content_sha
+    message = f"Installed {len(installed_skills)} Lark/Feishu skills."
+    if content_changed:
+        message += " Skill content changed since the previous install."
     return LarkInstallResult(
         success=True,
         installed_skills=installed_skills,
         status=status,
-        message=f"Installed {len(installed_skills)} Lark/Feishu skills.",
+        message=message,
     )
 
 
@@ -405,7 +511,7 @@ def start_lark_auth(
     *,
     domains: tuple[str, ...] = (),
     scope: str | None = None,
-    recommend: bool = True,
+    recommend: bool = False,
 ) -> LarkAuthStartResult:
     """Start a non-blocking Lark device authorization flow.
 
@@ -451,7 +557,7 @@ def complete_lark_auth(user_id: str, config: AppConfig, *, device_code: str) -> 
         timeout=45,
         allow_empty_success=True,
     )
-    status = get_lark_integration_status(user_id, config)
+    status = get_lark_integration_status(user_id, config, verify_auth=True)
     return LarkAuthCompleteResult(
         success=status.auth.status == "authenticated",
         status=status,
@@ -506,11 +612,13 @@ def _request_lark_app_registration_begin(brand: str) -> dict[str, Any]:
 
 def _build_lark_config_verification_url(brand: str, user_code: str) -> str:
     base = f"{_lark_endpoints(brand)['open']}/page/cli"
+    # lpv/ocv mirror the *runtime* lark-cli client version doing the auth, which
+    # is the binary pinned in the image — not the skill-pack version.
     query = urllib.parse.urlencode(
         {
             "user_code": user_code,
-            "lpv": DEFAULT_LARK_CLI_VERSION,
-            "ocv": DEFAULT_LARK_CLI_VERSION,
+            "lpv": FALLBACK_LARK_CLI_VERSION,
+            "ocv": FALLBACK_LARK_CLI_VERSION,
             "from": "cli",
         }
     )
@@ -694,15 +802,78 @@ def _enabled_lark_skill_names(user_id: str, config: AppConfig) -> set[str]:
         return set()
 
 
-def _resolve_or_download_archive() -> Path:
-    if env_archive := os.getenv(LARK_CLI_SOURCE_ARCHIVE_ENV):
-        return Path(env_archive)
+def _resolve_latest_lark_cli_version() -> str:
+    """Resolve the newest published ``larksuite/cli`` release tag.
 
+    Queries the official ``releases/latest`` API. Any failure (rate limit,
+    offline, air-gapped, malformed payload) falls back to
+    ``FALLBACK_LARK_CLI_VERSION`` so an install can still proceed with a known
+    good version rather than aborting.
+    """
+    try:
+        request = urllib.request.Request(
+            LARK_CLI_LATEST_RELEASE_API,
+            headers={"Accept": "application/vnd.github+json", "User-Agent": "deer-flow"},
+        )
+        with urllib.request.urlopen(request, timeout=LARK_HTTP_TIMEOUT_SECONDS) as response:
+            raw = response.read().decode("utf-8")
+        data = json.loads(raw)
+        tag = str(data.get("tag_name") or "").strip() if isinstance(data, dict) else ""
+        version = _normalize_lark_cli_version_tag(tag)
+        if version is not None:
+            return version
+    except Exception:  # noqa: BLE001 - version discovery is best-effort
+        pass
+    return FALLBACK_LARK_CLI_VERSION
+
+
+def _cached_latest_lark_cli_version() -> str | None:
+    """Best-effort latest version for status display, cached with a short TTL.
+
+    Returns ``None`` on failure so the status endpoint never blocks the UI on a
+    GitHub outage; the install path uses :func:`_resolve_latest_lark_cli_version`
+    which has its own fallback.
+    """
+    now = time.monotonic()
+    cached = getattr(_cached_latest_lark_cli_version, "_cache", None)
+    if cached is not None and now - cached[0] < LARK_CLI_LATEST_VERSION_TTL_SECONDS:
+        return cached[1]
+    try:
+        request = urllib.request.Request(
+            LARK_CLI_LATEST_RELEASE_API,
+            headers={"Accept": "application/vnd.github+json", "User-Agent": "deer-flow"},
+        )
+        with urllib.request.urlopen(request, timeout=LARK_HTTP_TIMEOUT_SECONDS) as response:
+            data = json.loads(response.read().decode("utf-8"))
+        tag = str(data.get("tag_name") or "").strip() if isinstance(data, dict) else ""
+        version = _normalize_lark_cli_version_tag(tag)
+    except Exception:  # noqa: BLE001 - status probe is best-effort
+        version = None
+    _cached_latest_lark_cli_version._cache = (now, version)  # type: ignore[attr-defined]
+    return version
+
+
+def _lark_archive_url(version: str) -> str:
+    tag = _normalize_lark_cli_version_tag(version)
+    if tag is None:
+        raise ValueError(f"Invalid Lark CLI version tag: {version!r}")
+    return f"https://codeload.github.com/{LARK_CLI_GITHUB_REPO}/zip/refs/tags/{tag}"
+
+
+def _normalize_lark_cli_version_tag(value: str | None) -> str | None:
+    tag = (value or "").strip()
+    if not _VERSION_TAG_RE.fullmatch(tag):
+        return None
+    return tag if tag.startswith("v") else f"v{tag}"
+
+
+def _download_lark_archive(version: str) -> Path:
     fd, archive_name = tempfile.mkstemp(prefix="lark-cli-skills-", suffix=".zip")
     os.close(fd)
     archive_path = Path(archive_name)
+    url = _lark_archive_url(version)
     try:
-        with urllib.request.urlopen(DEFAULT_LARK_CLI_ARCHIVE_URL, timeout=LARK_CLI_DOWNLOAD_TIMEOUT_SECONDS) as response:
+        with urllib.request.urlopen(url, timeout=LARK_CLI_DOWNLOAD_TIMEOUT_SECONDS) as response:
             total = 0
             with archive_path.open("wb") as out:
                 while chunk := response.read(1024 * 1024):
@@ -710,35 +881,54 @@ def _resolve_or_download_archive() -> Path:
                     if total > LARK_CLI_MAX_ARCHIVE_BYTES:
                         raise ValueError("Lark CLI source archive is too large.")
                     out.write(chunk)
-    except Exception:
+    except ValueError:
         archive_path.unlink(missing_ok=True)
         raise
+    except Exception as exc:  # noqa: BLE001 - network boundary
+        archive_path.unlink(missing_ok=True)
+        raise ValueError(f"Could not download the Lark skill pack ({version}) from GitHub. Check the Gateway's internet access, or pre-stage the archive via {LARK_CLI_SOURCE_ARCHIVE_ENV}.") from exc
     return archive_path
 
 
-def _verify_lark_archive_integrity(archive_path: Path) -> None:
-    actual = _sha256_file(archive_path)
-    expected = EXPECTED_LARK_CLI_ARCHIVE_SHA256.lower()
-    if actual != expected:
-        raise ValueError(f"Lark CLI source archive SHA-256 mismatch: expected {expected}, got {actual}.")
+def _content_sha256(root: Path, skill_names: set[str]) -> str:
+    """SHA-256 over the extracted skill tree contents (not the archive bytes).
 
-
-def _sha256_file(path: Path) -> str:
-    if not path.is_file():
-        raise FileNotFoundError(f"Lark CLI skills archive not found: {path}")
-
+    Stable across GitHub re-packs of identical content; changes only when the
+    skill files themselves change. Hashes each file's relative path and bytes in
+    sorted order so it is deterministic.
+    """
     digest = hashlib.sha256()
-    total = 0
-    with path.open("rb") as f:
-        while chunk := f.read(1024 * 1024):
-            total += len(chunk)
-            if total > LARK_CLI_MAX_ARCHIVE_BYTES:
-                raise ValueError("Lark CLI source archive is too large.")
-            digest.update(chunk)
+    for skill_name in sorted(skill_names):
+        skill_dir = root / skill_name
+        if not skill_dir.is_dir():
+            continue
+        for file_path in sorted(p for p in skill_dir.rglob("*") if p.is_file()):
+            rel = file_path.relative_to(root).as_posix()
+            digest.update(rel.encode("utf-8"))
+            digest.update(b"\0")
+            digest.update(file_path.read_bytes())
+            digest.update(b"\0")
     return digest.hexdigest()
 
 
-def _install_lark_skills_from_archive(user_id: str, archive_path: Path) -> tuple[str, ...]:
+def _infer_lark_archive_version(zf: zipfile.ZipFile) -> str | None:
+    """Infer version from GitHub source archive roots such as ``cli-1.0.65/``.
+
+    This keeps air-gapped / pre-staged archives from being mislabeled as the
+    fallback version when the archive itself clearly identifies its release.
+    """
+    for info in zf.infolist():
+        normalized = posixpath.normpath(info.filename.replace("\\", "/"))
+        parts = PurePosixPath(normalized).parts
+        if not parts:
+            continue
+        match = re.fullmatch(r"cli-(\d+\.\d+\.\d+)", parts[0])
+        if match:
+            return f"v{match.group(1)}"
+    return None
+
+
+def _install_lark_skills_from_archive(user_id: str, archive_path: Path, *, version: str | None = None) -> tuple[tuple[str, ...], str]:
     if not archive_path.is_file():
         raise FileNotFoundError(f"Lark CLI skills archive not found: {archive_path}")
 
@@ -752,10 +942,12 @@ def _install_lark_skills_from_archive(user_id: str, archive_path: Path) -> tuple
     backup: Path | None = None
     try:
         with zipfile.ZipFile(archive_path, "r") as zf:
+            archive_version = version or _infer_lark_archive_version(zf)
             extracted = _extract_lark_skills(zf, staging_target)
         _validate_extracted_lark_skills(staging_target, extracted)
         _append_deerflow_lark_shared_guidance(staging_target)
-        _write_manifest(staging_target, extracted)
+        content_sha = _content_sha256(staging_target, extracted)
+        _write_manifest(staging_target, extracted, version=archive_version, content_sha256=content_sha)
         make_skill_tree_sandbox_readable(staging_target)
 
         if target.exists():
@@ -766,7 +958,7 @@ def _install_lark_skills_from_archive(user_id: str, archive_path: Path) -> tuple
         staging_target.rename(target)
         if backup is not None:
             shutil.rmtree(backup)
-        return tuple(sorted(extracted))
+        return tuple(sorted(extracted)), content_sha
     except Exception:
         if backup is not None and backup.exists() and not target.exists():
             backup.rename(target)
@@ -876,11 +1068,13 @@ def _append_deerflow_lark_shared_guidance(root: Path) -> None:
     skill_file.write_text(content.rstrip() + guidance + "\n", encoding="utf-8")
 
 
-def _write_manifest(root: Path, installed_skills: set[str]) -> None:
+def _write_manifest(root: Path, installed_skills: set[str], *, version: str | None, content_sha256: str) -> None:
+    resolved_version = version or FALLBACK_LARK_CLI_VERSION
     manifest = {
         "provider": INTEGRATION_ID,
-        "version": DEFAULT_LARK_CLI_VERSION,
-        "source": DEFAULT_LARK_CLI_ARCHIVE_URL,
+        "version": resolved_version,
+        "source": _lark_archive_url(resolved_version),
+        "content_sha256": content_sha256,
         "installed_at": datetime.now(UTC).isoformat(),
         "skills": sorted(installed_skills),
     }

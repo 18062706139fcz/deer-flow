@@ -12,6 +12,7 @@ VIRTUAL_PATH_PREFIX = "/mnt/user-data"
 
 _SAFE_THREAD_ID_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
 _SAFE_USER_ID_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
+_SAFE_INTEGRATION_ID_RE = re.compile(r"^[A-Za-z0-9_.\-]+$")
 _UNSAFE_USER_ID_CHAR_RE = re.compile(r"[^A-Za-z0-9_\-]")
 _SAFE_USER_ID_DIGEST_HEX_LEN = 16
 
@@ -35,6 +36,13 @@ def _validate_user_id(user_id: str) -> str:
     if not _SAFE_USER_ID_RE.match(user_id):
         raise ValueError(f"Invalid user_id {user_id!r}: only alphanumeric characters, hyphens, and underscores are allowed.")
     return user_id
+
+
+def _validate_integration_id(integration_id: str) -> str:
+    """Validate an integration ID before using it in filesystem paths."""
+    if not _SAFE_INTEGRATION_ID_RE.match(integration_id):
+        raise ValueError(f"Invalid integration_id {integration_id!r}: only alphanumeric characters, dots, hyphens, and underscores are allowed.")
+    return integration_id
 
 
 def make_safe_user_id(raw: str) -> str:
@@ -341,6 +349,14 @@ class Paths:
     def host_user_integration_skills_dir(self, user_id: str) -> str:
         """Host path for a user's managed integration skills directory."""
         return _join_host_path(self._host_base_dir_str(), "users", _validate_user_id(user_id), "skills", "integrations")
+
+    def host_user_integration_config_dir(self, user_id: str, integration_id: str) -> str:
+        """Host path for a user's managed integration runtime config directory."""
+        return _join_host_path(self._host_base_dir_str(), "users", _validate_user_id(user_id), "integrations", _validate_integration_id(integration_id), "config")
+
+    def host_user_integration_data_dir(self, user_id: str, integration_id: str) -> str:
+        """Host path for a user's managed integration runtime data directory."""
+        return _join_host_path(self._host_base_dir_str(), "users", _validate_user_id(user_id), "integrations", _validate_integration_id(integration_id), "data")
 
     def ensure_thread_dirs(self, thread_id: str, *, user_id: str | None = None) -> None:
         """Create all standard sandbox directories for a thread.

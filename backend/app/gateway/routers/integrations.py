@@ -47,8 +47,10 @@ class LarkAuthProbeResponse(BaseModel):
 
 class LarkIntegrationStatusResponse(BaseModel):
     installed: bool = Field(..., description="Whether the managed Lark skill pack is installed")
-    version: str = Field(..., description="Pinned Lark CLI integration version")
+    version: str = Field(..., description="Installed Lark CLI skill-pack version (from manifest, resolved at install time)")
     manifest_version: str | None = Field(None, description="Installed manifest version")
+    latest_available_version: str | None = Field(None, description="Newest larksuite/cli release version available on GitHub, when known")
+    runtime_version_mismatch: bool = Field(False, description="Whether the installed skill-pack version differs from the runtime lark-cli binary")
     app_configured: bool = Field(..., description="Whether lark-cli has app_id/app_secret configured for this user")
     app_id: str | None = Field(None, description="Configured Lark app ID")
     app_brand: str | None = Field(None, description="Configured Lark brand: feishu or lark")
@@ -69,7 +71,7 @@ class LarkInstallResponse(BaseModel):
 
 
 class LarkAuthStartRequest(BaseModel):
-    recommend: bool = Field(default=True, description="Request the official recommended auto-approve scopes")
+    recommend: bool = Field(default=False, description="Request the official recommended auto-approve scopes")
     domains: list[str] = Field(default_factory=list, description="Optional Lark auth domains, e.g. calendar or docs")
     scope: str | None = Field(default=None, description="Optional explicit OAuth scope string")
 
@@ -140,6 +142,8 @@ def _status_to_response(status: LarkIntegrationStatus) -> LarkIntegrationStatusR
         installed=status.installed,
         version=status.version,
         manifest_version=status.manifest_version,
+        latest_available_version=status.latest_available_version,
+        runtime_version_mismatch=status.runtime_version_mismatch,
         app_configured=status.app_configured,
         app_id=status.app_id,
         app_brand=status.app_brand,
@@ -202,11 +206,11 @@ def _auth_complete_to_response(result: LarkAuthCompleteResult) -> LarkAuthComple
 @router.get("/lark/status", response_model=LarkIntegrationStatusResponse, summary="Get Lark/Feishu Integration Status")
 async def get_lark_status(config: AppConfig = Depends(get_config)) -> LarkIntegrationStatusResponse:
     try:
-        status = await asyncio.to_thread(get_lark_integration_status, get_effective_user_id(), config)
+        status = await asyncio.to_thread(get_lark_integration_status, get_effective_user_id(), config, check_latest=True)
         return _status_to_response(status)
     except Exception as e:
         logger.error("Failed to get Lark integration status: %s", e, exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to get Lark integration status: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to get Lark integration status.")
 
 
 @router.post("/lark/install", response_model=LarkInstallResponse, summary="Install Lark/Feishu Skill Pack")
@@ -225,7 +229,7 @@ async def install_lark(request: Request, config: AppConfig = Depends(get_config)
         raise
     except Exception as e:
         logger.error("Failed to install Lark integration: %s", e, exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to install Lark integration: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to install Lark integration.")
 
 
 @router.post("/lark/config/start", response_model=LarkConfigStartResponse, summary="Start Lark/Feishu App Configuration")
@@ -245,7 +249,7 @@ async def start_lark_app_config(body: LarkConfigStartRequest) -> LarkConfigStart
         raise HTTPException(status_code=504, detail=str(e))
     except Exception as e:
         logger.error("Failed to start Lark connection setup: %s", e, exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to start Lark connection setup: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to start Lark connection setup.")
 
 
 @router.post("/lark/config/complete", response_model=LarkConfigCompleteResponse, summary="Complete Lark/Feishu App Configuration")
@@ -269,7 +273,7 @@ async def complete_lark_app_config(body: LarkConfigCompleteRequest, config: AppC
         raise HTTPException(status_code=504, detail=str(e))
     except Exception as e:
         logger.error("Failed to complete Lark connection setup: %s", e, exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to complete Lark connection setup: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to complete Lark connection setup.")
 
 
 @router.post("/lark/auth/start", response_model=LarkAuthStartResponse, summary="Start Lark/Feishu Browser Authorization")
@@ -291,7 +295,7 @@ async def start_lark_browser_auth(body: LarkAuthStartRequest) -> LarkAuthStartRe
         raise HTTPException(status_code=504, detail=str(e))
     except Exception as e:
         logger.error("Failed to start Lark authorization: %s", e, exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to start Lark authorization: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to start Lark authorization.")
 
 
 @router.post("/lark/auth/complete", response_model=LarkAuthCompleteResponse, summary="Complete Lark/Feishu Browser Authorization")
@@ -312,4 +316,4 @@ async def complete_lark_browser_auth(body: LarkAuthCompleteRequest, config: AppC
         raise HTTPException(status_code=504, detail=str(e))
     except Exception as e:
         logger.error("Failed to complete Lark authorization: %s", e, exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to complete Lark authorization: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to complete Lark authorization.")

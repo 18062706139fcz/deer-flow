@@ -100,6 +100,26 @@ def test_get_thread_mounts_uses_explicit_user_id(tmp_path, monkeypatch):
     assert container_paths["/mnt/user-data/outputs"] == str(tmp_path / "users" / "ou-user" / "threads" / "thread-4" / "user-data" / "outputs")
 
 
+def test_get_lark_cli_runtime_mounts_uses_user_auth_dirs(tmp_path, monkeypatch):
+    """Sandbox lark-cli commands must read the same auth dirs as Settings."""
+    aio_mod = importlib.import_module("deerflow.community.aio_sandbox.aio_sandbox_provider")
+    lark_cli = importlib.import_module("deerflow.integrations.lark_cli")
+    monkeypatch.setattr(aio_mod, "get_paths", lambda: Paths(base_dir=tmp_path))
+    monkeypatch.setattr(aio_mod, "get_effective_user_id", lambda: "default")
+
+    mounts = aio_mod.AioSandboxProvider._get_lark_cli_runtime_mounts(user_id="alice")
+    container_paths = {container_path: (host_path, read_only) for host_path, container_path, read_only in mounts}
+
+    assert container_paths[lark_cli.LARK_CLI_SANDBOX_CONFIG_DIR] == (
+        str(tmp_path / "users" / "alice" / "integrations" / "lark-cli" / "config"),
+        False,
+    )
+    assert container_paths[lark_cli.LARK_CLI_SANDBOX_DATA_DIR] == (
+        str(tmp_path / "users" / "alice" / "integrations" / "lark-cli" / "data"),
+        False,
+    )
+
+
 def test_join_host_path_preserves_windows_drive_letter_style():
     base = r"C:\Users\demo\deer-flow\backend\.deer-flow"
 
