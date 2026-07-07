@@ -42,6 +42,11 @@ def _validate_integration_id(integration_id: str) -> str:
     """Validate an integration ID before using it in filesystem paths."""
     if not _SAFE_INTEGRATION_ID_RE.match(integration_id):
         raise ValueError(f"Invalid integration_id {integration_id!r}: only alphanumeric characters, dots, hyphens, and underscores are allowed.")
+    # The charset allows dots for names like ``some.integration``; reject the
+    # bare ``.``/``..`` path components so a future caller cannot escape the
+    # per-integration namespace via ``_join_host_path(..., integration_id, ...)``.
+    if integration_id in {".", ".."}:
+        raise ValueError(f"Invalid integration_id {integration_id!r}: '.' and '..' are not allowed.")
     return integration_id
 
 

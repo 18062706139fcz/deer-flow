@@ -746,8 +746,9 @@ export const zhCN: Translations = {
           `已安装 ${installed}/${expected} 个技能`,
         installedVersion: (version) => `已安装版本：${version}`,
         updateAvailable: (version) =>
-          `有新版本：${version} —— 重新安装即可升级`,
-        runtimeVersionMismatch: "技能包版本与运行时 lark-cli 版本不一致",
+          `有新版本：${version} —— 管理员重新安装会更新 managed Gateway CLI 和技能包`,
+        runtimeVersionMismatch:
+          "技能包版本与 Gateway 运行时 lark-cli 不一致；管理员重新安装会尝试更新 managed Gateway CLI 并重新对齐技能包",
         authNotConfigured: "尚未连接",
         connect: "连接飞书",
         authStarting: "正在打开连接链接...",
@@ -881,9 +882,9 @@ export const zhCN: Translations = {
         installNextTitle: "先安装官方技能包",
         installNextDescription:
           "安装后，/lark-doc、/lark-im、/lark-sheets 等技能会出现在技能索引中。",
-        cliNextTitle: "需要重建运行镜像",
+        cliNextTitle: "需要安装 Gateway CLI",
         cliNextDescription:
-          "技能包已安装，但 Gateway 找不到 lark-cli。请使用包含 @larksuite/cli 的镜像后再重试。",
+          "技能包已安装，但 Gateway 找不到 lark-cli。管理员重新安装集成会尝试下载 managed Gateway CLI；离线部署可使用内置 @larksuite/cli 的镜像。",
         connectedTitle: "飞书已连接",
         connectedDescription:
           "当前用户已完成授权。如果后续授权过期，刷新状态后会重新允许连接。",

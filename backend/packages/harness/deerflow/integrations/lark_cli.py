@@ -7,38 +7,44 @@ versioned first-party integration package, not user-authored mutable content.
 
 Version resolution & integrity
 -------------------------------
-The installed skill-pack version is **discovered at install time** from the
-official ``larksuite/cli`` GitHub releases (``releases/latest``) rather than
-hard-coded — so a fresh install always tracks the newest published skills.
-``FALLBACK_LARK_CLI_VERSION`` is only a bottom line for offline / rate-limited /
-air-gapped installs; it is not the installed pin.
+The installed skill-pack version follows the Gateway runtime ``lark-cli``
+binary version (``lark-cli --version``). This keeps the managed skills aligned
+with the server-side CLI that will execute them. ``FALLBACK_LARK_CLI_VERSION``
+matches the Dockerfile/npm pin and is used only when the runtime binary is
+unavailable or does not report a parseable version.
 
 Integrity is enforced without pinning a per-version archive byte hash (GitHub
 does not guarantee source-archive bytes are stable across their internal git
 upgrades, and pinning conflicts with tracking latest). Instead:
 
 * the download source is fixed to the official GitHub host over HTTPS and the
-  version only comes from the official ``releases/latest`` tag (no external URL
-  injection);
+  version only comes from the Gateway runtime CLI version or the pinned
+  fallback (no external URL injection);
 * every archive member passes structural guards (zip-slip / symlink /
   executable-binary / size / required-skill completeness / ``SKILL.md`` parse);
 * a **content** SHA-256 over the extracted skill tree is recorded in the
   manifest, so a reinstall whose skill content changed is detectable/auditable
   even when GitHub re-packs identical content with different archive bytes.
 
-Runtime coupling: the npm-installed ``lark-cli`` binary version is still pinned
-in ``backend/Dockerfile`` (``ARG LARK_CLI_NPM_VERSION``) and
-``docker/docker-compose*.yaml``. Because the skill pack now tracks latest, the
-pack version and the runtime binary version can drift; ``get_lark_integration_status``
-surfaces ``runtime_version_mismatch`` so the UI can prompt, and
-``test_python_and_docker_lark_cli_versions_match`` pins the fallback constant to
-the Dockerfile ARG so the two do not silently diverge.
+Runtime coupling: the npm-installed ``lark-cli`` binary version is pinned in
+``backend/Dockerfile`` (``ARG LARK_CLI_NPM_VERSION``) and
+``docker/docker-compose*.yaml`` as a bootstrap fallback. The admin install path
+also manages a writable DeerFlow-owned Gateway CLI under
+``.deer-flow/integrations/lark-cli/gateway-cli`` and prefers it over the system
+PATH, so users do not need to run terminal installation commands. Reinstalling
+the integration refreshes both the managed Gateway CLI and the skill pack to the
+same version when network access is available. ``get_lark_integration_status``
+surfaces ``latest_available_version`` and ``runtime_version_mismatch`` for
+operators, and ``test_python_and_docker_lark_cli_versions_match`` pins the
+fallback constant to the Dockerfile ARG so packaged deployments do not silently
+diverge.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import posixpath
 import re
@@ -61,15 +67,19 @@ from deerflow.skills.parser import parse_skill_file
 from deerflow.skills.permissions import make_skill_tree_sandbox_readable
 from deerflow.skills.types import SKILL_MD_FILE, SkillCategory
 
+logger = logging.getLogger(__name__)
+
 INTEGRATION_ID = "lark-cli"
-# Bottom-line version for offline / rate-limited / air-gapped installs only.
-# The real installed version is resolved from releases/latest at install time.
+# Matches the Gateway image/npm pin. Used when the runtime binary is unavailable
+# or reports an unparsable version.
 FALLBACK_LARK_CLI_VERSION = "v1.0.65"
 LARK_CLI_NPM_VERSION = FALLBACK_LARK_CLI_VERSION.removeprefix("v")
+LARK_CLI_NPM_PACKAGE = "@larksuite/cli"
 LARK_CLI_GITHUB_REPO = "larksuite/cli"
 LARK_CLI_LATEST_RELEASE_API = f"https://api.github.com/repos/{LARK_CLI_GITHUB_REPO}/releases/latest"
 LARK_CLI_SOURCE_ARCHIVE_ENV = "DEER_FLOW_LARK_CLI_SKILLS_ARCHIVE"
 LARK_CLI_DOWNLOAD_TIMEOUT_SECONDS = 60
+LARK_CLI_NPM_INSTALL_TIMEOUT_SECONDS = 180
 LARK_HTTP_TIMEOUT_SECONDS = 20
 LARK_CONFIG_POLL_TIMEOUT_SECONDS = 45
 LARK_CLI_LATEST_VERSION_TTL_SECONDS = 3600
@@ -207,6 +217,23 @@ def lark_cli_data_dir(user_id: str) -> Path:
     return get_paths().user_dir(user_id) / "integrations" / INTEGRATION_ID / "data"
 
 
+def lark_cli_managed_gateway_dir() -> Path:
+    """Gateway-scoped DeerFlow-managed lark-cli install root."""
+    return get_paths().base_dir / "integrations" / INTEGRATION_ID / "gateway-cli"
+
+
+def _lark_cli_managed_bin_dir() -> Path:
+    return lark_cli_managed_gateway_dir() / "node_modules" / ".bin"
+
+
+def _lark_cli_managed_path() -> str | None:
+    for name in ("lark-cli", "lark-cli.cmd"):
+        candidate = _lark_cli_managed_bin_dir() / name
+        if candidate.exists():
+            return str(candidate)
+    return None
+
+
 def lark_cli_env_overlay(user_id: str, *, sandbox_paths: bool = False) -> dict[str, str]:
     """Environment overlay for lark-cli using DeerFlow-managed credentials.
 
@@ -222,12 +249,15 @@ def lark_cli_env_overlay(user_id: str, *, sandbox_paths: bool = False) -> dict[s
         data_dir = lark_cli_data_dir(user_id)
         config_dir.mkdir(parents=True, exist_ok=True)
         data_dir.mkdir(parents=True, exist_ok=True)
-    return {
+    overlay = {
         "LARKSUITE_CLI_CONFIG_DIR": str(config_dir),
         "LARKSUITE_CLI_DATA_DIR": str(data_dir),
         "LARKSUITE_CLI_NO_UPDATE_NOTIFIER": "1",
         "LARKSUITE_CLI_NO_SKILLS_NOTIFIER": "1",
     }
+    if not sandbox_paths and _lark_cli_managed_path() is not None:
+        overlay["PATH"] = f"{_lark_cli_managed_bin_dir()}{os.pathsep}{os.environ.get('PATH', '')}"
+    return overlay
 
 
 def lark_cli_env(user_id: str) -> dict[str, str]:
@@ -238,7 +268,11 @@ def lark_cli_env(user_id: str) -> dict[str, str]:
 def probe_lark_cli() -> LarkCliProbe:
     path = _resolve_lark_cli_path()
     if path is None:
-        return LarkCliProbe(available=False, error="lark-cli is not on PATH")
+        return LarkCliProbe(available=False, error="lark-cli is not installed on the Gateway")
+    return _probe_lark_cli_at_path(path)
+
+
+def _probe_lark_cli_at_path(path: str) -> LarkCliProbe:
     try:
         result = subprocess.run(
             [path, "--version"],
@@ -358,15 +392,29 @@ def _normalize_version(value: str | None) -> str | None:
 def _versions_drifted(manifest_version: str | None, cli_version: str | None) -> bool:
     """True when both versions are known and their numeric cores differ.
 
-    The manifest records the skill-pack version (tracks latest); ``cli_version``
-    is the runtime ``lark-cli`` binary (pinned in the image). Unknown on either
-    side means we cannot claim a mismatch, so we stay quiet.
+    The manifest records the installed skill-pack version; ``cli_version`` is
+    the Gateway runtime ``lark-cli`` binary. Unknown on either side means we
+    cannot claim a mismatch, so we stay quiet.
     """
     left = _normalize_version(manifest_version)
     right = _normalize_version(cli_version)
     if left is None or right is None:
         return False
     return left != right
+
+
+def _resolve_runtime_lark_cli_version() -> str:
+    """Resolve the skill-pack version that matches the Gateway runtime CLI.
+
+    Managed Lark skills are executed by the server-side ``lark-cli`` binary, so
+    integration installs should align to that binary rather than blindly taking
+    GitHub's newest release. Packaged deployments install the pinned fallback in
+    the Gateway image; local/dev deployments can override this by putting a
+    newer ``lark-cli`` on the Gateway PATH and restarting the backend.
+    """
+    cli = probe_lark_cli()
+    version = _normalize_version(cli.version)
+    return f"v{version}" if version is not None else FALLBACK_LARK_CLI_VERSION
 
 
 def read_lark_app_config(user_id: str) -> dict[str, str | bool | None]:
@@ -412,7 +460,9 @@ def install_lark_integration(
         resolved_version = None
         created_temp_archive = False
     else:
-        resolved_version = _resolve_latest_lark_cli_version()
+        cli = _ensure_managed_gateway_lark_cli()
+        runtime_version = _normalize_version(cli.version)
+        resolved_version = f"v{runtime_version}" if runtime_version is not None else FALLBACK_LARK_CLI_VERSION
         archive_path = _download_lark_archive(resolved_version)
         created_temp_archive = True
 
@@ -566,13 +616,77 @@ def complete_lark_auth(user_id: str, config: AppConfig, *, device_code: str) -> 
 
 
 def _resolve_lark_cli_path() -> str | None:
-    return shutil.which("lark-cli")
+    return _lark_cli_managed_path() or shutil.which("lark-cli")
+
+
+def _ensure_managed_gateway_lark_cli() -> LarkCliProbe:
+    """Install/update the DeerFlow-managed Gateway lark-cli.
+
+    This is called by the admin install endpoint so non-technical users do not
+    need to install ``@larksuite/cli`` in a terminal. If npm/GitHub are not
+    reachable but an existing CLI is already available (managed or on PATH), we
+    keep using it and let the skill-pack install align to that runtime version.
+    """
+    target_version = _resolve_latest_lark_cli_version()
+    current = probe_lark_cli()
+    current_version = _normalize_version(current.version)
+    if current.available and current_version == _normalize_version(target_version):
+        return current
+
+    try:
+        return _install_managed_gateway_lark_cli(target_version)
+    except Exception:
+        fallback = probe_lark_cli()
+        if fallback.available:
+            logger.warning("Could not update managed lark-cli; using existing Gateway lark-cli", exc_info=True)
+            return fallback
+        raise
+
+
+def _install_managed_gateway_lark_cli(version: str) -> LarkCliProbe:
+    normalized = _normalize_lark_cli_version_tag(version)
+    if normalized is None:
+        raise ValueError(f"Invalid Lark CLI npm version: {version!r}")
+    npm_version = normalized.removeprefix("v")
+    npm = shutil.which("npm")
+    if npm is None:
+        raise FileNotFoundError("npm is not available on the Gateway; cannot install managed @larksuite/cli.")
+
+    install_root = lark_cli_managed_gateway_dir()
+    install_root.mkdir(parents=True, exist_ok=True)
+    result = subprocess.run(
+        [
+            npm,
+            "install",
+            "--prefix",
+            str(install_root),
+            "--no-audit",
+            "--no-fund",
+            f"{LARK_CLI_NPM_PACKAGE}@{npm_version}",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=LARK_CLI_NPM_INSTALL_TIMEOUT_SECONDS,
+        env={**os.environ, "npm_config_update_notifier": "false"},
+    )
+    if result.returncode != 0:
+        raw = (result.stderr or result.stdout or "").strip()
+        raise ValueError(raw or f"npm install {LARK_CLI_NPM_PACKAGE}@{npm_version} exited with code {result.returncode}")
+
+    path = _lark_cli_managed_path()
+    if path is None:
+        raise FileNotFoundError("Managed lark-cli install completed, but no lark-cli binary was found.")
+    probe = _probe_lark_cli_at_path(path)
+    if not probe.available:
+        raise ValueError(probe.error or "Managed lark-cli install did not produce a runnable CLI.")
+    return probe
 
 
 def _require_lark_cli_path() -> str:
     path = _resolve_lark_cli_path()
     if path is None:
-        raise FileNotFoundError("lark-cli is not on PATH. Rebuild the Gateway image with @larksuite/cli installed.")
+        raise FileNotFoundError("lark-cli is not installed on the Gateway. Install the managed Lark integration as an admin, or rebuild the Gateway image with @larksuite/cli installed.")
     return path
 
 
@@ -613,12 +727,14 @@ def _request_lark_app_registration_begin(brand: str) -> dict[str, Any]:
 def _build_lark_config_verification_url(brand: str, user_code: str) -> str:
     base = f"{_lark_endpoints(brand)['open']}/page/cli"
     # lpv/ocv mirror the *runtime* lark-cli client version doing the auth, which
-    # is the binary pinned in the image — not the skill-pack version.
+    # is the server-side Gateway binary — not the latest available skill-pack
+    # version.
+    runtime_version = _resolve_runtime_lark_cli_version()
     query = urllib.parse.urlencode(
         {
             "user_code": user_code,
-            "lpv": FALLBACK_LARK_CLI_VERSION,
-            "ocv": FALLBACK_LARK_CLI_VERSION,
+            "lpv": runtime_version,
+            "ocv": runtime_version,
             "from": "cli",
         }
     )
@@ -957,7 +1073,11 @@ def _install_lark_skills_from_archive(user_id: str, archive_path: Path, *, versi
             target.rename(backup)
         staging_target.rename(target)
         if backup is not None:
-            shutil.rmtree(backup)
+            # Best-effort: the new skills are already live after the rename, so a
+            # transient error deleting the old backup must not flip a successful
+            # install into a failure (the except-branch restore guard would also
+            # not fire because ``target`` now exists with the new content).
+            shutil.rmtree(backup, ignore_errors=True)
         return tuple(sorted(extracted)), content_sha
     except Exception:
         if backup is not None and backup.exists() and not target.exists():

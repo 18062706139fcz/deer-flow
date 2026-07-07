@@ -772,9 +772,9 @@ export const enUS: Translations = {
           `${installed}/${expected} skills installed`,
         installedVersion: (version) => `Installed: ${version}`,
         updateAvailable: (version) =>
-          `Update available: ${version} — reinstall to upgrade`,
+          `Update available: ${version} — admin reinstall updates the managed Gateway CLI and skill pack`,
         runtimeVersionMismatch:
-          "Skill pack version differs from the runtime lark-cli binary",
+          "Skill pack version differs from the Gateway runtime lark-cli; admin reinstall attempts to update the managed Gateway CLI and realign the skill pack",
         authNotConfigured: "Not connected",
         connect: "Connect Lark",
         authStarting: "Opening connection link...",
@@ -920,9 +920,9 @@ export const enUS: Translations = {
         installNextTitle: "Install the official skill pack first",
         installNextDescription:
           "After installation, /lark-doc, /lark-im, /lark-sheets and related skills appear in the skill index.",
-        cliNextTitle: "Rebuild the runtime image",
+        cliNextTitle: "Install Gateway CLI",
         cliNextDescription:
-          "The skill pack is installed, but the Gateway cannot find lark-cli. Use an image that includes @larksuite/cli, then retry.",
+          "The skill pack is installed, but the Gateway cannot find lark-cli. Admin reinstall attempts to download the managed Gateway CLI; offline deployments can use an image with @larksuite/cli built in.",
         connectedTitle: "Lark is connected",
         connectedDescription:
           "The current user is authorized. If authorization expires later, refreshing the status will allow reconnection.",

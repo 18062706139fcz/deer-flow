@@ -33,7 +33,7 @@ _ADMIN_REQUIRED_DETAIL = "Admin privileges required to install integrations."
 
 
 class LarkCliProbeResponse(BaseModel):
-    available: bool = Field(..., description="Whether lark-cli is available on the Gateway PATH")
+    available: bool = Field(..., description="Whether lark-cli is available to the Gateway, either managed by DeerFlow or on PATH")
     path: str | None = Field(None, description="Resolved lark-cli executable path")
     version: str | None = Field(None, description="lark-cli --version output")
     error: str | None = Field(None, description="Probe failure message")
@@ -50,7 +50,7 @@ class LarkIntegrationStatusResponse(BaseModel):
     version: str = Field(..., description="Installed Lark CLI skill-pack version (from manifest, resolved at install time)")
     manifest_version: str | None = Field(None, description="Installed manifest version")
     latest_available_version: str | None = Field(None, description="Newest larksuite/cli release version available on GitHub, when known")
-    runtime_version_mismatch: bool = Field(False, description="Whether the installed skill-pack version differs from the runtime lark-cli binary")
+    runtime_version_mismatch: bool = Field(False, description="Whether the installed skill-pack version differs from the Gateway runtime lark-cli binary")
     app_configured: bool = Field(..., description="Whether lark-cli has app_id/app_secret configured for this user")
     app_id: str | None = Field(None, description="Configured Lark app ID")
     app_brand: str | None = Field(None, description="Configured Lark brand: feishu or lark")

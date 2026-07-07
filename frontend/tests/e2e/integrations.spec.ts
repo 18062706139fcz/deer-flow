@@ -15,6 +15,44 @@ test.describe("Integrations settings", () => {
     await expect(dialog.getByText("Lark / Feishu CLI")).toBeVisible();
   });
 
+  test("keeps a single settings dialog when the deep link and nav menu both open it", async ({
+    page,
+  }) => {
+    mockLangGraphAPI(page);
+
+    let authStartCount = 0;
+    await page.route("**/api/integrations/lark/auth/start", async (route) => {
+      authStartCount += 1;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          verification_url: "https://open.feishu.cn/auth/mock-device",
+          device_code: "mock-device-code",
+          expires_in: 600,
+          user_code: null,
+          hint: null,
+        }),
+      });
+    });
+
+    // Deep link opens the shared dialog on Integrations.
+    await page.goto("/workspace/chats/new?settings=integrations");
+    const dialog = page.getByRole("dialog", { name: "Settings" });
+    await expect(dialog).toBeVisible();
+
+    // Opening again from the nav menu must reuse the same single dialog.
+    const sidebar = page.locator("[data-sidebar='sidebar']");
+    await sidebar.getByRole("button", { name: /Settings and more/ }).click();
+    await page.getByRole("menuitem", { name: "Settings" }).click();
+
+    // Exactly one Settings dialog is mounted/visible at any time.
+    await expect(page.getByRole("dialog", { name: "Settings" })).toHaveCount(1);
+
+    // And the single Lark card runs a single auth flow, not one per instance.
+    expect(authStartCount).toBeLessThanOrEqual(1);
+  });
+
   test("can install the Lark integration skill pack from settings", async ({
     page,
   }) => {

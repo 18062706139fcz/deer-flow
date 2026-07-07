@@ -145,6 +145,7 @@ function LarkIntegrationCard() {
   );
   const authAttemptIdRef = useRef(0);
   const authDeadlineRef = useRef(0);
+  const isMountedRef = useRef(true);
   const connectBusy =
     startConfig.isPending || completeConfig.isPending || startAuth.isPending;
   const connectActionBusy = connectBusy || isCheckingConnection;
@@ -175,6 +176,7 @@ function LarkIntegrationCard() {
 
   useEffect(
     () => () => {
+      isMountedRef.current = false;
       if (authRetryTimeoutRef.current != null) {
         clearTimeout(authRetryTimeoutRef.current);
       }
@@ -310,10 +312,13 @@ function LarkIntegrationCard() {
   const handleConnect = async () => {
     if (!data) return;
     authRequestRef.current = buildAuthRequest();
-    const browserWindow =
-      data.auth.status === "authenticated" && !hasAdditionalPermissionRequest
-        ? null
-        : openPendingBrowserWindow();
+    // Pre-open the blank tab synchronously inside the click gesture. We cannot
+    // trust the cached auth status here: an `authenticated` cache can be stale
+    // (session expired server-side), and if we skipped the pre-open and then
+    // discovered that only after `await refetch()`, the later `window.open`
+    // would run outside the user gesture and be blocked by the browser. Opening
+    // now and closing below when it turns out unneeded keeps the popup reliable.
+    const browserWindow = openPendingBrowserWindow();
     setIsCheckingConnection(true);
     try {
       const refreshed = await refetch();
@@ -347,6 +352,12 @@ function LarkIntegrationCard() {
       { device_code: deviceCode },
       {
         onSuccess: (result) => {
+          // react-query still fires this after the dialog unmounts; bail so we
+          // don't toast, setState, refetch, or reschedule a retry timer on a
+          // component that is gone.
+          if (!isMountedRef.current) {
+            return;
+          }
           if (automatic && attemptId !== authAttemptIdRef.current) {
             return;
           }
@@ -369,6 +380,9 @@ function LarkIntegrationCard() {
           }
         },
         onError: (err) => {
+          if (!isMountedRef.current) {
+            return;
+          }
           if (automatic && attemptId !== authAttemptIdRef.current) {
             return;
           }
@@ -401,6 +415,9 @@ function LarkIntegrationCard() {
     attemptId: number,
   ) => {
     clearAuthRetryTimer();
+    if (!isMountedRef.current) {
+      return;
+    }
     if (Date.now() >= authDeadlineRef.current) {
       toast.info(t.settings.integrations.lark.authorizationStillPending);
       return;

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import stat
 import subprocess
 import zipfile
@@ -121,6 +122,50 @@ def test_install_lark_integration_is_idempotent_across_reinstalls(monkeypatch, t
     # No leftover backup/staging dirs beside the target after a reinstall.
     parent = root.parent
     leftovers = [p.name for p in parent.iterdir() if p.name != lark_cli.INTEGRATION_ID]
+    assert leftovers == []
+    reset_skill_storage()
+
+
+def test_install_lark_integration_succeeds_when_backup_cleanup_fails(monkeypatch, tmp_path):
+    reset_skill_storage()
+    _patch_paths(monkeypatch, tmp_path / "home")
+    skills_root = tmp_path / "skills"
+    (skills_root / "public").mkdir(parents=True)
+    (skills_root / "custom").mkdir()
+    config = _config(skills_root)
+    archive = _make_lark_cli_source_zip(tmp_path)
+
+    monkeypatch.setattr(lark_cli, "probe_lark_cli", lambda: lark_cli.LarkCliProbe(available=True, path="/usr/bin/lark-cli", version="v1.0.65"))
+    monkeypatch.setattr(lark_cli, "probe_lark_auth", lambda _user_id, **_kwargs: lark_cli.LarkAuthProbe(status="not_configured", message="not configured"))
+
+    # First install lays down the target so the reinstall has a backup to clean.
+    lark_cli.install_lark_integration("alice", config, source_archive=archive)
+
+    real_rmtree = shutil.rmtree
+    forced_raises = {"count": 0}
+
+    def _rmtree(path, *args, **kwargs):
+        # The post-rename backup deletion is best-effort and now passes
+        # ignore_errors=True, so a transient FS error there must not flip a
+        # successful install into a failure. Force any rmtree that does *not*
+        # ignore errors to raise, proving the success path no longer depends on
+        # a fragile backup cleanup.
+        if kwargs.get("ignore_errors"):
+            return real_rmtree(path, *args, **kwargs)
+        forced_raises["count"] += 1
+        raise OSError("transient FS error during backup cleanup")
+
+    monkeypatch.setattr(lark_cli.shutil, "rmtree", _rmtree)
+
+    result = lark_cli.install_lark_integration("alice", config, source_archive=archive)
+
+    assert result.success is True
+    root = lark_cli.lark_integration_root("alice")
+    assert (root / "lark-doc" / "SKILL.md").is_file()
+    # No non-ignoring rmtree is relied upon on the success path, and no leftover
+    # backup dir remains beside the target after the reinstall.
+    assert forced_raises["count"] == 0
+    leftovers = [p.name for p in root.parent.iterdir() if p.name != lark_cli.INTEGRATION_ID]
     assert leftovers == []
     reset_skill_storage()
 
@@ -254,6 +299,75 @@ def test_fallback_and_docker_lark_cli_versions_match():
     assert match is not None
     assert lark_cli.LARK_CLI_NPM_VERSION == match.group("version")
     assert lark_cli.FALLBACK_LARK_CLI_VERSION == f"v{lark_cli.LARK_CLI_NPM_VERSION}"
+
+
+def test_resolve_lark_cli_path_prefers_managed_gateway_cli(monkeypatch, tmp_path):
+    _patch_paths(monkeypatch, tmp_path / "home")
+    managed_bin = lark_cli.lark_cli_managed_gateway_dir() / "node_modules" / ".bin" / "lark-cli"
+    managed_bin.parent.mkdir(parents=True)
+    managed_bin.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    monkeypatch.setattr(lark_cli.shutil, "which", lambda _name: "/usr/bin/lark-cli")
+
+    assert lark_cli._resolve_lark_cli_path() == str(managed_bin)
+
+
+def test_install_managed_gateway_lark_cli_uses_deerflow_prefix(monkeypatch, tmp_path):
+    _patch_paths(monkeypatch, tmp_path / "home")
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(lark_cli.shutil, "which", lambda name: "/usr/bin/npm" if name == "npm" else None)
+
+    def _run(args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        managed_bin = lark_cli.lark_cli_managed_gateway_dir() / "node_modules" / ".bin" / "lark-cli"
+        managed_bin.parent.mkdir(parents=True)
+        managed_bin.write_text("#!/bin/sh\n", encoding="utf-8")
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(lark_cli.subprocess, "run", _run)
+    monkeypatch.setattr(lark_cli, "_probe_lark_cli_at_path", lambda path: lark_cli.LarkCliProbe(available=True, path=path, version="lark-cli VERSION 1.2.3"))
+
+    result = lark_cli._install_managed_gateway_lark_cli("v1.2.3")
+
+    assert result.available is True
+    assert result.version == "lark-cli VERSION 1.2.3"
+    assert captured["args"] == [
+        "/usr/bin/npm",
+        "install",
+        "--prefix",
+        str(lark_cli.lark_cli_managed_gateway_dir()),
+        "--no-audit",
+        "--no-fund",
+        "@larksuite/cli@1.2.3",
+    ]
+
+
+def test_install_lark_integration_installs_managed_gateway_cli_before_skill_pack(monkeypatch, tmp_path):
+    reset_skill_storage()
+    _patch_paths(monkeypatch, tmp_path / "home")
+    skills_root = tmp_path / "skills"
+    (skills_root / "public").mkdir(parents=True)
+    (skills_root / "custom").mkdir()
+    config = _config(skills_root)
+    archive = _make_lark_cli_source_zip(tmp_path)
+    downloaded_versions: list[str] = []
+
+    monkeypatch.setattr(lark_cli, "probe_lark_auth", lambda _user_id, **_kwargs: lark_cli.LarkAuthProbe(status="not_configured", message="not configured"))
+    monkeypatch.setattr(lark_cli, "_ensure_managed_gateway_lark_cli", lambda: lark_cli.LarkCliProbe(available=True, path="/managed/bin/lark-cli", version="lark-cli VERSION 9.9.9"))
+
+    def _download(version: str) -> Path:
+        downloaded_versions.append(version)
+        return archive
+
+    monkeypatch.setattr(lark_cli, "_download_lark_archive", _download)
+
+    result = lark_cli.install_lark_integration("alice", config)
+
+    assert downloaded_versions == ["v9.9.9"]
+    assert result.status.manifest_version == "v9.9.9"
+    reset_skill_storage()
 
 
 def test_resolve_latest_lark_cli_version_uses_release_tag(monkeypatch):
