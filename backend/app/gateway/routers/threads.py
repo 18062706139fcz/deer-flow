@@ -338,6 +338,7 @@ class ThreadCompactRequest(BaseModel):
 
     force: bool = Field(default=True, description="Run compaction even if automatic summarization thresholds are not met")
     keep: ContextSize | None = Field(default=None, description="Optional retention policy for this compaction only")
+    agent_name: str | None = Field(default=None, max_length=128, description="Optional custom agent name for memory attribution")
 
 
 class ThreadCompactResponse(BaseModel):
@@ -859,25 +860,28 @@ def _thread_compact_response(result: ThreadCompactionResult) -> ThreadCompactRes
 async def compact_thread(thread_id: str, body: ThreadCompactRequest, request: Request) -> ThreadCompactResponse:
     """Manually summarize old thread context while preserving the visible history."""
     run_manager = get_run_manager(request)
-    if await run_manager.has_inflight(thread_id):
-        raise HTTPException(status_code=409, detail="Thread has a run in flight. Compact after the run finishes.")
-
     checkpointer = get_checkpointer(request)
     keep = body.keep.to_tuple() if body.keep is not None else None
     try:
-        result = await compact_thread_context(
-            checkpointer,
-            thread_id,
-            keep=keep,
-            force=body.force,
-            user_id=get_effective_user_id(),
-        )
+        async with goal_thread_lock(thread_id):
+            if await run_manager.has_inflight(thread_id):
+                raise HTTPException(status_code=409, detail="Thread has a run in flight. Compact after the run finishes.")
+            result = await compact_thread_context(
+                checkpointer,
+                thread_id,
+                keep=keep,
+                force=body.force,
+                user_id=get_effective_user_id(),
+                agent_name=body.agent_name,
+            )
     except ContextCompactionDisabled:
         raise HTTPException(status_code=409, detail="Context compaction is disabled.") from None
     except ContextCompactionFailed:
         raise HTTPException(status_code=500, detail="Failed to compact thread context.") from None
     except LookupError:
         raise HTTPException(status_code=404, detail=f"Thread {thread_id} not found") from None
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("Failed to compact thread %s", sanitize_log_param(thread_id))
         raise HTTPException(status_code=500, detail="Failed to compact thread context.") from None

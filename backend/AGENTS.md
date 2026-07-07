@@ -845,7 +845,10 @@ Automatic conversation summarization when approaching token limits:
 - Keeps recent messages while summarizing older ones
 - Manual compaction uses `POST /api/threads/{id}/compact`, reuses the same
   `DeerFlowSummarizationMiddleware`, writes a new checkpoint with updated
-  `messages` and `summary_text`, and bumps only those channel versions
+  `messages` and `summary_text`, and bumps only those channel versions.
+  The route shares the per-thread serialization gate used by `/goal` writes
+  and run admission so compaction cannot race with goal updates or runs that
+  read/write checkpoints.
 
 See [docs/summarization.md](docs/summarization.md) for details.
 

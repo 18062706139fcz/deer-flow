@@ -285,6 +285,21 @@ describe("goal request lifecycle", () => {
     ).toBe(true);
     expect(isAbortError(new Error("other"))).toBe(false);
   });
+
+  it("supports compact request staleness guards with the same lifecycle", () => {
+    const state = createGoalRequestState();
+    const compact = beginGoalRequest(state, "thread-1");
+
+    const replacement = beginGoalRequest(state, "thread-1");
+
+    expect(compact.controller.signal.aborted).toBe(true);
+    expect(isCurrentGoalRequest(state, compact, "thread-1")).toBe(false);
+    expect(isCurrentGoalRequest(state, replacement, "thread-1")).toBe(true);
+
+    finishGoalRequest(state, replacement);
+
+    expect(isCurrentGoalRequest(state, replacement, "thread-1")).toBe(false);
+  });
 });
 
 describe("findSuggestionTemplatePlaceholder", () => {

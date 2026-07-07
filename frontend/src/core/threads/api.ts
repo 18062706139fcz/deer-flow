@@ -14,6 +14,11 @@ export type ThreadCompactResponse = {
   total_tokens: number;
 };
 
+export type CompactThreadContextOptions = {
+  signal?: AbortSignal;
+  agentName?: string | null;
+};
+
 export type ThreadBranchResponse = {
   thread_id: string;
   parent_thread_id: string;
@@ -93,6 +98,7 @@ export async function branchThreadFromTurn(
 
 export async function compactThreadContext(
   threadId: string,
+  options: CompactThreadContextOptions = {},
 ): Promise<ThreadCompactResponse> {
   const response = await fetchWithAuth(
     `${getBackendBaseURL()}/api/threads/${encodeURIComponent(threadId)}/compact`,
@@ -101,7 +107,11 @@ export async function compactThreadContext(
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ force: true }),
+      body: JSON.stringify({
+        force: true,
+        ...(options.agentName ? { agent_name: options.agentName } : {}),
+      }),
+      signal: options.signal,
     },
   );
 

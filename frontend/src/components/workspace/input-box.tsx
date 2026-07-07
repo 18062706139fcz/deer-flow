@@ -268,6 +268,7 @@ export function InputBox({
   const promptRootRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const goalRequestStateRef = useRef(createGoalRequestState());
+  const compactRequestStateRef = useRef(createGoalRequestState());
   const promptHistoryIndexRef = useRef<number | null>(null);
   const promptHistoryDraftRef = useRef("");
 
@@ -437,7 +438,11 @@ export function InputBox({
 
   useEffect(() => {
     const goalRequestState = goalRequestStateRef.current;
-    return () => abortGoalRequest(goalRequestState);
+    const compactRequestState = compactRequestStateRef.current;
+    return () => {
+      abortGoalRequest(goalRequestState);
+      abortGoalRequest(compactRequestState);
+    };
   }, [threadId]);
 
   useEffect(() => {
@@ -616,8 +621,19 @@ export function InputBox({
       toast.info(t.inputBox.compactSkipped);
       return;
     }
+    const request = beginGoalRequest(compactRequestStateRef.current, threadId);
+    const signal = request.controller.signal;
     try {
-      const result = await compactThreadContext(threadId);
+      const result = await compactThreadContext(threadId, {
+        signal,
+        agentName:
+          typeof context.agent_name === "string" ? context.agent_name : null,
+      });
+      if (
+        !isCurrentGoalRequest(compactRequestStateRef.current, request, threadId)
+      ) {
+        return;
+      }
       textInput.setInput("");
       promptHistoryIndexRef.current = null;
       promptHistoryDraftRef.current = "";
@@ -636,11 +652,20 @@ export function InputBox({
         toast.info(t.inputBox.compactSkipped);
       }
     } catch (error) {
+      if (
+        isAbortError(error) ||
+        !isCurrentGoalRequest(compactRequestStateRef.current, request, threadId)
+      ) {
+        return;
+      }
       toast.error(
         error instanceof Error ? error.message : t.inputBox.compactFailed,
       );
+    } finally {
+      finishGoalRequest(compactRequestStateRef.current, request);
     }
   }, [
+    context.agent_name,
     queryClient,
     t.inputBox.compactFailed,
     t.inputBox.compactSkipped,

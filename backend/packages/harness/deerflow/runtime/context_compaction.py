@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 import hashlib
 from dataclasses import dataclass
 from types import SimpleNamespace
@@ -10,10 +9,9 @@ from typing import Any
 
 from langgraph.checkpoint.base import uuid6
 
-from deerflow.agents.memory.summarization_hook import memory_flush_hook
-from deerflow.agents.middlewares.summarization_middleware import DeerFlowSummarizationMiddleware
+from deerflow.agents.middlewares.summarization_middleware import DeerFlowSummarizationMiddleware, create_summarization_middleware
 from deerflow.config.app_config import AppConfig, get_app_config
-from deerflow.models import create_chat_model
+from deerflow.runtime.goal import _call_checkpointer_method, _next_channel_version
 from deerflow.utils.time import now_iso
 
 
@@ -39,64 +37,15 @@ class ThreadCompactionResult:
     total_tokens: int = 0
 
 
-def _bump_channel_version(checkpointer: Any, current_version: Any) -> Any:
-    get_next_version = getattr(checkpointer, "get_next_version", None)
-    if callable(get_next_version):
-        try:
-            next_version = get_next_version(current_version, None)
-        except Exception:
-            next_version = None
-        if next_version is not None and next_version != current_version:
-            return next_version
-
-    if isinstance(current_version, bool):
-        return int(current_version) + 1
-    if isinstance(current_version, int):
-        return current_version + 1
-    if isinstance(current_version, float):
-        return current_version + 1.0
-    if isinstance(current_version, str):
-        try:
-            return str(int(current_version) + 1)
-        except ValueError:
-            return f"{current_version}.1"
-    return 1
-
-
 def _create_compaction_middleware(
     *,
     app_config: AppConfig,
     keep: tuple[str, int | float] | None,
 ) -> DeerFlowSummarizationMiddleware:
-    config = app_config.summarization
-    if not config.enabled:
+    middleware = create_summarization_middleware(app_config=app_config, keep=keep)
+    if middleware is None:
         raise ContextCompactionDisabled("Context compaction is disabled.")
-
-    trigger = None
-    if config.trigger is not None:
-        if isinstance(config.trigger, list):
-            trigger = [item.to_tuple() for item in config.trigger]
-        else:
-            trigger = config.trigger.to_tuple()
-
-    model = create_chat_model(
-        name=config.model_name,
-        thinking_enabled=False,
-        app_config=app_config,
-    ).with_config(tags=["middleware:summarize"])
-
-    kwargs: dict[str, Any] = {
-        "model": model,
-        "trigger": trigger,
-        "keep": keep or config.keep.to_tuple(),
-    }
-    if config.trim_tokens_to_summarize is not None:
-        kwargs["trim_tokens_to_summarize"] = config.trim_tokens_to_summarize
-    if config.summary_prompt is not None:
-        kwargs["summary_prompt"] = config.summary_prompt
-
-    hooks = [memory_flush_hook] if app_config.memory.enabled else []
-    return DeerFlowSummarizationMiddleware(**kwargs, before_summarization=hooks)
+    return middleware
 
 
 def _checkpoint_namespace(checkpoint_tuple: Any) -> str:
@@ -113,6 +62,7 @@ async def compact_thread_context(
     keep: tuple[str, int | float] | None = None,
     force: bool = True,
     user_id: str | None = None,
+    agent_name: str | None = None,
     app_config: AppConfig | None = None,
 ) -> ThreadCompactionResult:
     """Summarize old messages in a thread and write a compacted checkpoint."""
@@ -120,12 +70,12 @@ async def compact_thread_context(
     middleware = _create_compaction_middleware(app_config=resolved_app_config, keep=keep)
 
     read_config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
-    checkpoint_tuple = await checkpointer.aget_tuple(read_config)
+    checkpoint_tuple = await _call_checkpointer_method(checkpointer, "aget_tuple", "get_tuple", read_config)
     if checkpoint_tuple is None:
         raise LookupError(f"Thread {thread_id} checkpoint not found")
 
-    checkpoint: dict[str, Any] = copy.deepcopy(getattr(checkpoint_tuple, "checkpoint", {}) or {})
-    metadata: dict[str, Any] = copy.deepcopy(getattr(checkpoint_tuple, "metadata", {}) or {})
+    checkpoint: dict[str, Any] = dict(getattr(checkpoint_tuple, "checkpoint", {}) or {})
+    metadata: dict[str, Any] = dict(getattr(checkpoint_tuple, "metadata", {}) or {})
     channel_values: dict[str, Any] = dict(checkpoint.get("channel_values", {}) or {})
     messages = channel_values.get("messages")
     if not isinstance(messages, list) or not messages:
@@ -135,13 +85,14 @@ async def compact_thread_context(
         "messages": list(messages),
         "summary_text": channel_values.get("summary_text"),
     }
-    if middleware._prepare_compaction(state, force=force) is None:
-        return ThreadCompactionResult(thread_id=thread_id, compacted=False, reason="not_enough_messages")
 
-    runtime = SimpleNamespace(context={"thread_id": thread_id, "user_id": user_id})
+    runtime_context = {"thread_id": thread_id, "user_id": user_id}
+    if agent_name:
+        runtime_context["agent_name"] = agent_name
+    runtime = SimpleNamespace(context=runtime_context)
     result = await middleware.acompact_state(state, runtime, force=force)  # type: ignore[arg-type]
     if result is None:
-        raise ContextCompactionFailed("Summary generation failed.")
+        return ThreadCompactionResult(thread_id=thread_id, compacted=False, reason="not_enough_messages")
 
     channel_values["messages"] = list(result.preserved_messages)
     channel_values["summary_text"] = result.summary_text
@@ -150,7 +101,7 @@ async def compact_thread_context(
     channel_versions = dict(checkpoint.get("channel_versions", {}) or {})
     new_versions: dict[str, Any] = {}
     for channel in ("messages", "summary_text"):
-        next_version = _bump_channel_version(checkpointer, channel_versions.get(channel))
+        next_version = _next_channel_version(checkpointer, channel_versions.get(channel))
         channel_versions[channel] = next_version
         new_versions[channel] = next_version
     checkpoint["channel_versions"] = channel_versions
@@ -175,7 +126,7 @@ async def compact_thread_context(
     }
 
     write_config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": _checkpoint_namespace(checkpoint_tuple)}}
-    new_config = await checkpointer.aput(write_config, checkpoint, metadata, new_versions)
+    new_config = await _call_checkpointer_method(checkpointer, "aput", "put", write_config, checkpoint, metadata, new_versions)
     new_checkpoint_id = None
     if isinstance(new_config, dict):
         new_checkpoint_id = new_config.get("configurable", {}).get("checkpoint_id")

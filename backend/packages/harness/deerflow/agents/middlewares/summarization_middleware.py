@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Protocol, override, runtime_checkable
+from typing import Any, Protocol, override, runtime_checkable
 
 from langchain.agents import AgentState
 from langchain.agents.middleware import SummarizationMiddleware
@@ -15,6 +15,8 @@ from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.runtime import Runtime
 
 from deerflow.agents.middlewares.dynamic_context_middleware import is_dynamic_context_reminder
+from deerflow.config.app_config import get_app_config
+from deerflow.models import create_chat_model
 
 logger = logging.getLogger(__name__)
 _SUMMARY_TRIGGER_MESSAGE_NAME = "summary"
@@ -429,3 +431,64 @@ class DeerFlowSummarizationMiddleware(SummarizationMiddleware):
             except Exception:
                 hook_name = getattr(hook, "__name__", None) or type(hook).__name__
                 logger.exception("before_summarization hook %s failed", hook_name)
+
+
+def create_summarization_middleware(
+    *,
+    app_config: Any | None = None,
+    keep: tuple[str, int | float] | None = None,
+) -> DeerFlowSummarizationMiddleware | None:
+    """Create the configured summarization middleware.
+
+    Both the lead-agent automatic path and the manual context-compaction path
+    use this factory so model resolution, hooks, prompt config, and retention
+    defaults cannot drift.
+    """
+    from deerflow.agents.memory.summarization_hook import memory_flush_hook
+
+    resolved_app_config = app_config or get_app_config()
+    config = resolved_app_config.summarization
+
+    if not config.enabled:
+        return None
+
+    trigger = None
+    if config.trigger is not None:
+        if isinstance(config.trigger, list):
+            trigger = [item.to_tuple() for item in config.trigger]
+        else:
+            trigger = config.trigger.to_tuple()
+
+    if config.model_name:
+        model = create_chat_model(
+            name=config.model_name,
+            thinking_enabled=False,
+            app_config=resolved_app_config,
+            attach_tracing=False,
+        )
+    else:
+        model = create_chat_model(
+            thinking_enabled=False,
+            app_config=resolved_app_config,
+            attach_tracing=False,
+        )
+    model = model.with_config(tags=["middleware:summarize"])
+
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "trigger": trigger,
+        "keep": keep or config.keep.to_tuple(),
+    }
+    if config.trim_tokens_to_summarize is not None:
+        kwargs["trim_tokens_to_summarize"] = config.trim_tokens_to_summarize
+    if config.summary_prompt is not None:
+        kwargs["summary_prompt"] = config.summary_prompt
+
+    hooks: list[BeforeSummarizationHook] = []
+    if resolved_app_config.memory.enabled:
+        hooks.append(memory_flush_hook)
+
+    return DeerFlowSummarizationMiddleware(
+        **kwargs,
+        before_summarization=hooks,
+    )
