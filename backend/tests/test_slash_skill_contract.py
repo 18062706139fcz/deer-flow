@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from deerflow.skills.slash import RESERVED_SLASH_SKILL_NAMES, _SLASH_SKILL_RE
+from deerflow.skills.slash import _SLASH_SKILL_RE, RESERVED_SLASH_SKILL_NAMES
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _CONTRACT_PATH = _REPO_ROOT / "contracts" / "slash_skill_contract.json"
