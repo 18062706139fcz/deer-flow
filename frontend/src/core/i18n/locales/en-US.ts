@@ -821,7 +821,8 @@ export const enUS: Translations = {
           },
           task: {
             label: "Tasks",
-            description: "Tasks, task lists, subtasks, comments, and reminders.",
+            description:
+              "Tasks, task lists, subtasks, comments, and reminders.",
           },
           mail: {
             label: "Mail",
@@ -846,7 +847,8 @@ export const enUS: Translations = {
           },
           markdown: {
             label: "Markdown",
-            description: "Create, fetch, patch, and overwrite Drive-native .md files.",
+            description:
+              "Create, fetch, patch, and overwrite Drive-native .md files.",
           },
           mindnotes: {
             label: "Mind notes",
