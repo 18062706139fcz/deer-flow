@@ -44,6 +44,8 @@ import {
 } from "@/core/messages/utils";
 import { useRehypeSplitWordsIntoSpans } from "@/core/rehype";
 import { readReferenceMessageContexts } from "@/core/sidecar";
+import { resolveSlashSkillDisplay } from "@/core/skills";
+import { useSkills } from "@/core/skills/hooks";
 import { SafeReasoningContent } from "@/core/streamdown/components";
 import { cn } from "@/lib/utils";
 
@@ -212,6 +214,28 @@ function MessageImage({
 
 const clientTurnDurations = new Map<string, number>();
 
+function HumanMessageText({ content }: { content: string }) {
+  const { skills } = useSkills();
+  const slashSkill = resolveSlashSkillDisplay(content, skills);
+
+  if (!slashSkill) {
+    return <div className="break-words whitespace-pre-wrap">{content}</div>;
+  }
+
+  return (
+    <div className="flex max-w-full min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+      <span className="border-primary/20 bg-primary/8 text-primary inline-flex h-6 max-w-full shrink-0 items-center rounded-md border px-1.5 font-mono text-xs leading-none font-medium shadow-xs">
+        /{slashSkill.name}
+      </span>
+      {slashSkill.remainingText && (
+        <span className="min-w-0 flex-1 break-words whitespace-pre-wrap">
+          {slashSkill.remainingText}
+        </span>
+      )}
+    </div>
+  );
+}
+
 function MessageContent_({
   className,
   message,
@@ -378,9 +402,7 @@ function MessageContent_({
         {filesList}
         {contentToDisplay && (
           <AIElementMessageContent className="w-full max-w-full">
-            <div className="break-words whitespace-pre-wrap">
-              {contentToDisplay}
-            </div>
+            <HumanMessageText content={contentToDisplay} />
           </AIElementMessageContent>
         )}
       </div>

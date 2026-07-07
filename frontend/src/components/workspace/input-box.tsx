@@ -34,7 +34,6 @@ import {
   PromptInputActionMenuTrigger,
   PromptInputAttachment,
   PromptInputAttachments,
-  PromptInputBody,
   PromptInputButton,
   PromptInputFooter,
   PromptInputHeader,
@@ -275,6 +274,8 @@ export function InputBox({
   const [followupsLoading, setFollowupsLoading] = useState(false);
   const [textareaFocused, setTextareaFocused] = useState(false);
   const [skillSuggestionIndex, setSkillSuggestionIndex] = useState(0);
+  const [selectedSlashSkill, setSelectedSlashSkill] =
+    useState<SlashSuggestion | null>(null);
   const [dismissedSkillSuggestionValue, setDismissedSkillSuggestionValue] =
     useState<string | null>(null);
   const lastGeneratedForAiIdRef = useRef<string | null>(null);
@@ -424,6 +425,7 @@ export function InputBox({
   useEffect(() => {
     promptHistoryIndexRef.current = null;
     promptHistoryDraftRef.current = "";
+    setSelectedSlashSkill(null);
   }, [threadId]);
 
   useEffect(() => {
@@ -691,9 +693,15 @@ export function InputBox({
         toast.info(t.inputBox.pleaseWaitStreaming);
         return Promise.reject(new Error("streaming"));
       }
+      const messageWithSlashSkill = selectedSlashSkill
+        ? {
+            ...message,
+            text: `/${selectedSlashSkill.name} ${message.text}`,
+          }
+        : message;
       const submitAction = getInputSubmitAction({
-        text: message.text,
-        fileCount: message.files.length,
+        text: messageWithSlashSkill.text,
+        fileCount: messageWithSlashSkill.files.length,
         status,
       });
       if (submitAction.kind === "goal") {
@@ -720,11 +728,15 @@ export function InputBox({
       if (submitAction.kind === "empty") {
         return;
       }
-      return submitThreadMessage(message);
+      await submitThreadMessage(messageWithSlashSkill);
+      if (selectedSlashSkill) {
+        setSelectedSlashSkill(null);
+      }
     },
     [
       handleGoalCommand,
       onStop,
+      selectedSlashSkill,
       status,
       submitThreadMessage,
       t.inputBox.pleaseWaitStreaming,
@@ -800,6 +812,7 @@ export function InputBox({
   const showSkillSuggestions =
     !disabled &&
     textareaFocused &&
+    !selectedSlashSkill &&
     slashSkillQuery !== null &&
     skillSuggestions.length > 0 &&
     dismissedSkillSuggestionValue !== textInput.value;
@@ -810,6 +823,16 @@ export function InputBox({
 
   const applySkillSuggestion = useCallback(
     (suggestion: SlashSuggestion) => {
+      if (suggestion.kind === "skill") {
+        setSelectedSlashSkill(suggestion);
+        textInput.setInput("");
+        setDismissedSkillSuggestionValue(null);
+        requestAnimationFrame(() => {
+          textareaRef.current?.focus();
+        });
+        return;
+      }
+
       const nextValue = `/${suggestion.name} `;
       textInput.setInput(nextValue);
       setDismissedSkillSuggestionValue(nextValue);
@@ -897,6 +920,7 @@ export function InputBox({
         event.metaKey ||
         event.shiftKey ||
         isIMEComposing(event) ||
+        selectedSlashSkill ||
         promptHistory.length === 0 ||
         (event.key !== "ArrowUp" && event.key !== "ArrowDown")
       ) {
@@ -940,7 +964,24 @@ export function InputBox({
       promptHistoryIndexRef.current = nextIndex;
       setPromptHistoryValue(promptHistory[nextIndex] ?? "");
     },
-    [promptHistory, setPromptHistoryValue, textInput.value],
+    [promptHistory, selectedSlashSkill, setPromptHistoryValue, textInput.value],
+  );
+
+  const handleSelectedSlashSkillKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLTextAreaElement>) => {
+      if (
+        event.key !== "Backspace" ||
+        !selectedSlashSkill ||
+        textInput.value.length > 0 ||
+        isIMEComposing(event)
+      ) {
+        return;
+      }
+
+      event.preventDefault();
+      setSelectedSlashSkill(null);
+    },
+    [selectedSlashSkill, textInput.value],
   );
 
   const handlePromptTextareaKeyDown = useCallback(
@@ -949,9 +990,17 @@ export function InputBox({
       if (event.defaultPrevented) {
         return;
       }
+      handleSelectedSlashSkillKeyDown(event);
+      if (event.defaultPrevented) {
+        return;
+      }
       handlePromptHistoryKeyDown(event);
     },
-    [handlePromptHistoryKeyDown, handleSkillSuggestionKeyDown],
+    [
+      handlePromptHistoryKeyDown,
+      handleSelectedSlashSkillKeyDown,
+      handleSkillSuggestionKeyDown,
+    ],
   );
 
   const handlePromptTextareaChange = useCallback(() => {
@@ -959,10 +1008,18 @@ export function InputBox({
     promptHistoryDraftRef.current = "";
   }, []);
 
+  const clearSelectedSlashSkill = useCallback(() => {
+    setSelectedSlashSkill(null);
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+    });
+  }, []);
+
   const showFollowups =
     !disabled &&
     !isWelcomeMode &&
     !showSkillSuggestions &&
+    !selectedSlashSkill &&
     !followupsHidden &&
     (followupsLoading || followups.length > 0);
 
@@ -1200,20 +1257,35 @@ export function InputBox({
             />
           )}
         </PromptInputHeader>
-        <PromptInputBody className="absolute top-0 right-0 left-0 z-3">
-          <PromptInputTextarea
-            className={cn("size-full")}
-            disabled={disabled}
-            placeholder={t.inputBox.placeholder}
-            autoFocus={autoFocus}
-            defaultValue={initialValue}
-            onBlur={() => setTextareaFocused(false)}
-            onChange={handlePromptTextareaChange}
-            onFocus={() => setTextareaFocused(true)}
-            onKeyDown={handlePromptTextareaKeyDown}
-            ref={textareaRef}
-          />
-        </PromptInputBody>
+        <div className="min-h-16 w-full min-w-0 px-3 py-3">
+          <div className="flex w-full min-w-0 items-center gap-2">
+            {selectedSlashSkill && (
+              <button
+                aria-label={`Remove /${selectedSlashSkill.name}`}
+                className="border-primary/20 bg-primary/8 text-primary hover:bg-primary/12 inline-flex h-6 max-w-[min(11rem,45%)] shrink-0 cursor-pointer items-center gap-1 rounded-md border px-1.5 font-mono text-xs leading-none font-medium shadow-xs transition-colors"
+                onClick={clearSelectedSlashSkill}
+                type="button"
+              >
+                <span className="min-w-0 truncate">
+                  /{selectedSlashSkill.name}
+                </span>
+                <XIcon className="text-primary/70 size-2.5 shrink-0" />
+              </button>
+            )}
+            <PromptInputTextarea
+              className="min-h-6! min-w-0 p-0! leading-6!"
+              disabled={disabled}
+              placeholder={t.inputBox.placeholder}
+              autoFocus={autoFocus}
+              defaultValue={initialValue}
+              onBlur={() => setTextareaFocused(false)}
+              onChange={handlePromptTextareaChange}
+              onFocus={() => setTextareaFocused(true)}
+              onKeyDown={handlePromptTextareaKeyDown}
+              ref={textareaRef}
+            />
+          </div>
+        </div>
         <PromptInputFooter className="flex flex-wrap gap-2 sm:flex-nowrap">
           <PromptInputTools className="min-w-0 flex-1 flex-wrap">
             {/* TODO: Add more connectors here
@@ -1577,6 +1649,7 @@ export function InputBox({
 
       {isWelcomeMode &&
         searchParams.get("mode") !== "skill" &&
+        !selectedSlashSkill &&
         !showSkillSuggestions && (
           <div className="flex items-center justify-center pt-2">
             <SuggestionList onSelectPlaceholder={onSelectPlaceholder} />
