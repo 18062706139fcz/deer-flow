@@ -70,9 +70,9 @@ test.describe("Chat workspace", () => {
     await textarea.fill("summarize this dataset");
     await textarea.press("Enter");
 
-    await expect.poll(() => submittedText).toBe(
-      "/data-analysis summarize this dataset",
-    );
+    await expect
+      .poll(() => submittedText)
+      .toBe("/data-analysis summarize this dataset");
   });
 
   test("goal command sets a goal and starts an agent run", async ({ page }) => {
