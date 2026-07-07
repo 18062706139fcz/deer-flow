@@ -184,6 +184,14 @@ export function parseGoalCommand(value: string): GoalCommand | null {
   return { kind: "set", objective: args };
 }
 
+export function canPolishInput(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return false;
+  }
+  return !/^\/(?:goal|help)(?:\s+|$)/i.test(trimmed);
+}
+
 export function getInputSubmitAction({
   text,
   fileCount,

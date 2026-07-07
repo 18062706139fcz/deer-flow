@@ -3,6 +3,7 @@ import { describe, expect, it } from "@rstest/core";
 import {
   abortGoalRequest,
   beginGoalRequest,
+  canPolishInput,
   createGoalRequestState,
   findSuggestionTemplatePlaceholder,
   finishGoalRequest,
@@ -114,6 +115,27 @@ describe("getInputSubmitAction", () => {
         status: "ready",
       }),
     ).toEqual({ kind: "empty" });
+  });
+});
+
+describe("canPolishInput", () => {
+  it("requires non-empty input", () => {
+    expect(canPolishInput("")).toBe(false);
+    expect(canPolishInput("   ")).toBe(false);
+  });
+
+  it("allows ordinary text and slash skill prompts", () => {
+    expect(canPolishInput("make this clearer")).toBe(true);
+    expect(canPolishInput("/web-dev build a polished page")).toBe(true);
+    expect(canPolishInput("/goalkeeper do thing")).toBe(true);
+    expect(canPolishInput("/helper explain this")).toBe(true);
+  });
+
+  it("blocks reserved builtin commands", () => {
+    expect(canPolishInput("/goal")).toBe(false);
+    expect(canPolishInput("/goal ship this feature")).toBe(false);
+    expect(canPolishInput("/help")).toBe(false);
+    expect(canPolishInput("/help me")).toBe(false);
   });
 });
 

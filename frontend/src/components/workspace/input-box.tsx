@@ -6,11 +6,13 @@ import {
   CheckIcon,
   GraduationCapIcon,
   LightbulbIcon,
+  Loader2Icon,
   PaperclipIcon,
   PlusIcon,
-  SparklesIcon,
   RocketIcon,
+  SparklesIcon,
   TargetIcon,
+  Undo2Icon,
   XIcon,
   ZapIcon,
 } from "lucide-react";
@@ -63,6 +65,7 @@ import {
 import { fetch } from "@/core/api/fetcher";
 import { getBackendBaseURL } from "@/core/config";
 import { useI18n } from "@/core/i18n/hooks";
+import { polishInputDraft } from "@/core/input-polish/api";
 import { isHiddenFromUIMessage } from "@/core/messages/utils";
 import { useModels } from "@/core/models/hooks";
 import {
@@ -103,6 +106,7 @@ import {
 import {
   abortGoalRequest,
   beginGoalRequest,
+  canPolishInput,
   createGoalRequestState,
   findSuggestionTemplatePlaceholder,
   finishGoalRequest,
@@ -250,7 +254,7 @@ export function InputBox({
   ) => void | Promise<void>;
   onStop?: () => void;
 }) {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const searchParams = useSearchParams();
   const [modelDialogOpen, setModelDialogOpen] = useState(false);
   const { models } = useModels();
@@ -264,6 +268,13 @@ export function InputBox({
   const promptRootRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const goalRequestStateRef = useRef(createGoalRequestState());
+  const inputPolishRequestRef = useRef<{
+    controller: AbortController | null;
+    sequence: number;
+  }>({
+    controller: null,
+    sequence: 0,
+  });
   const promptHistoryIndexRef = useRef<number | null>(null);
   const promptHistoryDraftRef = useRef("");
 
@@ -273,6 +284,11 @@ export function InputBox({
   const suggestionsEnabled = suggestionsConfig?.enabled;
   const [followupsHidden, setFollowupsHidden] = useState(false);
   const [followupsLoading, setFollowupsLoading] = useState(false);
+  const [polishingInput, setPolishingInput] = useState(false);
+  const [inputPolishUndo, setInputPolishUndo] = useState<{
+    originalText: string;
+    rewrittenText: string;
+  } | null>(null);
   const [textareaFocused, setTextareaFocused] = useState(false);
   const [skillSuggestionIndex, setSkillSuggestionIndex] = useState(0);
   const [dismissedSkillSuggestionValue, setDismissedSkillSuggestionValue] =
@@ -424,12 +440,24 @@ export function InputBox({
   useEffect(() => {
     promptHistoryIndexRef.current = null;
     promptHistoryDraftRef.current = "";
+    setInputPolishUndo(null);
   }, [threadId]);
 
   useEffect(() => {
     const goalRequestState = goalRequestStateRef.current;
     return () => abortGoalRequest(goalRequestState);
   }, [threadId]);
+
+  const abortInputPolishRequest = useCallback(() => {
+    inputPolishRequestRef.current.controller?.abort();
+    inputPolishRequestRef.current.controller = null;
+    inputPolishRequestRef.current.sequence += 1;
+    setPolishingInput(false);
+  }, []);
+
+  useEffect(() => {
+    return () => abortInputPolishRequest();
+  }, [abortInputPolishRequest, threadId]);
 
   useEffect(() => {
     const currentIndex = promptHistoryIndexRef.current;
@@ -441,6 +469,9 @@ export function InputBox({
 
   const handleModelSelect = useCallback(
     (model_name: string) => {
+      if (disabled || polishingInput) {
+        return;
+      }
       const model = models.find((m) => m.name === model_name);
       if (!model) {
         return;
@@ -453,11 +484,14 @@ export function InputBox({
       });
       setModelDialogOpen(false);
     },
-    [onContextChange, context, models],
+    [disabled, onContextChange, context, models, polishingInput],
   );
 
   const handleModeSelect = useCallback(
     (mode: InputMode) => {
+      if (disabled || polishingInput) {
+        return;
+      }
       onContextChange?.({
         ...context,
         mode: getResolvedMode(mode, supportThinking),
@@ -471,17 +505,20 @@ export function InputBox({
                 : "minimal",
       });
     },
-    [onContextChange, context, supportThinking],
+    [disabled, onContextChange, context, polishingInput, supportThinking],
   );
 
   const handleReasoningEffortSelect = useCallback(
     (effort: "minimal" | "low" | "medium" | "high") => {
+      if (disabled || polishingInput) {
+        return;
+      }
       onContextChange?.({
         ...context,
         reasoning_effort: effort,
       });
     },
-    [onContextChange, context],
+    [disabled, onContextChange, context, polishingInput],
   );
 
   const handleGoalCommand = useCallback(
@@ -628,6 +665,7 @@ export function InputBox({
       }
       promptHistoryIndexRef.current = null;
       promptHistoryDraftRef.current = "";
+      setInputPolishUndo(null);
       setFollowups([]);
       setFollowupsHidden(false);
       setFollowupsLoading(false);
@@ -803,6 +841,21 @@ export function InputBox({
     slashSkillQuery !== null &&
     skillSuggestions.length > 0 &&
     dismissedSkillSuggestionValue !== textInput.value;
+  const isComposerDisabled = disabled === true;
+  const isMockThread = isMock === true;
+  const composerLocked = isComposerDisabled || polishingInput;
+  const inputPolishUndoAvailable =
+    !polishingInput &&
+    inputPolishUndo !== null &&
+    (textInput.value ?? "") === inputPolishUndo.rewrittenText;
+  const inputPolishDisabled =
+    isComposerDisabled ||
+    isMockThread ||
+    polishingInput ||
+    (!inputPolishUndoAvailable &&
+      (status === "streaming" ||
+        slashSkillQuery !== null ||
+        !canPolishInput(textInput.value ?? "")));
 
   useEffect(() => {
     setSkillSuggestionIndex(0);
@@ -889,6 +942,87 @@ export function InputBox({
     [textInput],
   );
 
+  const handlePolishInput = useCallback(async () => {
+    if (inputPolishDisabled) {
+      return;
+    }
+
+    const originalText = textInput.value ?? "";
+    const controller = new AbortController();
+    inputPolishRequestRef.current.controller?.abort();
+    const sequence = inputPolishRequestRef.current.sequence + 1;
+    inputPolishRequestRef.current = {
+      controller,
+      sequence,
+    };
+    setPolishingInput(true);
+
+    try {
+      const result = await polishInputDraft(
+        {
+          text: originalText,
+          locale,
+          thread_id: threadId,
+        },
+        { signal: controller.signal },
+      );
+
+      const isCurrentRequest =
+        inputPolishRequestRef.current.controller === controller &&
+        inputPolishRequestRef.current.sequence === sequence &&
+        !controller.signal.aborted;
+      if (!isCurrentRequest || (textInput.value ?? "") !== originalText) {
+        return;
+      }
+
+      const rewrittenText = result.rewritten_text.trim();
+      if (!rewrittenText || !result.changed) {
+        toast.info(t.inputBox.inputPolishNoChanges);
+        return;
+      }
+
+      setPromptHistoryValue(rewrittenText);
+      setInputPolishUndo({
+        originalText,
+        rewrittenText,
+      });
+    } catch (error) {
+      const isCurrentRequest =
+        inputPolishRequestRef.current.controller === controller &&
+        inputPolishRequestRef.current.sequence === sequence;
+      if (isAbortError(error) || !isCurrentRequest) {
+        return;
+      }
+      toast.error(
+        error instanceof Error ? error.message : t.inputBox.inputPolishFailed,
+      );
+    } finally {
+      if (
+        inputPolishRequestRef.current.controller === controller &&
+        inputPolishRequestRef.current.sequence === sequence
+      ) {
+        inputPolishRequestRef.current.controller = null;
+        setPolishingInput(false);
+      }
+    }
+  }, [
+    inputPolishDisabled,
+    locale,
+    setPromptHistoryValue,
+    t.inputBox.inputPolishFailed,
+    t.inputBox.inputPolishNoChanges,
+    textInput,
+    threadId,
+  ]);
+
+  const handleUndoInputPolish = useCallback(() => {
+    if (!inputPolishUndoAvailable || inputPolishUndo === null) {
+      return;
+    }
+    setPromptHistoryValue(inputPolishUndo.originalText);
+    setInputPolishUndo(null);
+  }, [inputPolishUndo, inputPolishUndoAvailable, setPromptHistoryValue]);
+
   const handlePromptHistoryKeyDown = useCallback(
     (event: KeyboardEvent<HTMLTextAreaElement>) => {
       if (
@@ -955,9 +1089,11 @@ export function InputBox({
   );
 
   const handlePromptTextareaChange = useCallback(() => {
+    abortInputPolishRequest();
+    setInputPolishUndo(null);
     promptHistoryIndexRef.current = null;
     promptHistoryDraftRef.current = "";
-  }, []);
+  }, [abortInputPolishRequest]);
 
   const showFollowups =
     !disabled &&
@@ -1169,14 +1305,22 @@ export function InputBox({
       <PromptInput
         className={cn(
           "bg-background/85 relative z-10 rounded-2xl backdrop-blur-sm transition-all duration-300 ease-out *:data-[slot='input-group']:rounded-2xl",
+          polishingInput &&
+            "shadow-primary/10 ring-primary/25 shadow-lg ring-1",
           className,
         )}
-        disabled={disabled}
+        disabled={composerLocked}
         globalDrop
         multiple
         onSubmit={handleSubmit}
         {...props}
       >
+        {polishingInput && (
+          <div
+            aria-hidden="true"
+            className="border-primary/30 bg-primary/5 pointer-events-auto absolute inset-0 z-20 animate-pulse cursor-wait rounded-2xl border opacity-80"
+          />
+        )}
         {extraHeader && (
           <div className="absolute top-0 right-0 left-0 z-10">
             <div className="absolute right-0 bottom-0 left-0 flex items-center justify-center">
@@ -1192,6 +1336,16 @@ export function InputBox({
               </div>
             )}
           </PromptInputAttachments>
+          {polishingInput && (
+            <div
+              aria-live="polite"
+              className="text-primary bg-primary/10 border-primary/20 relative z-30 flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium"
+              role="status"
+            >
+              <Loader2Icon className="size-3 animate-spin" />
+              {t.inputBox.inputPolishing}
+            </div>
+          )}
           {sidecar && sidecar.conversationQuotes.length > 0 && (
             <ReferenceAttachmentSummary
               references={sidecar.conversationQuotes}
@@ -1203,7 +1357,7 @@ export function InputBox({
         <PromptInputBody className="absolute top-0 right-0 left-0 z-3">
           <PromptInputTextarea
             className={cn("size-full")}
-            disabled={disabled}
+            disabled={composerLocked}
             placeholder={t.inputBox.placeholder}
             autoFocus={autoFocus}
             defaultValue={initialValue}
@@ -1227,8 +1381,42 @@ export function InputBox({
           </PromptInputActionMenu> */}
             <AddAttachmentsButton
               className="px-2!"
+              disabled={composerLocked}
               uploadLimits={uploadLimits}
             />
+            <Tooltip
+              content={
+                polishingInput
+                  ? t.inputBox.inputPolishing
+                  : inputPolishUndoAvailable
+                    ? t.inputBox.inputPolishUndo
+                    : t.inputBox.inputPolish
+              }
+            >
+              <PromptInputButton
+                aria-label={
+                  inputPolishUndoAvailable
+                    ? t.inputBox.inputPolishUndo
+                    : t.inputBox.inputPolish
+                }
+                className="px-2!"
+                data-testid="polish-input-button"
+                disabled={inputPolishDisabled}
+                onClick={
+                  inputPolishUndoAvailable
+                    ? handleUndoInputPolish
+                    : handlePolishInput
+                }
+              >
+                {polishingInput ? (
+                  <Loader2Icon className="size-3 animate-spin" />
+                ) : inputPolishUndoAvailable ? (
+                  <Undo2Icon className="size-3" />
+                ) : (
+                  <SparklesIcon className="size-3" />
+                )}
+              </PromptInputButton>
+            </Tooltip>
             <PromptInputActionMenu>
               <ModeHoverGuide
                 mode={
@@ -1240,7 +1428,10 @@ export function InputBox({
                     : "flash"
                 }
               >
-                <PromptInputActionMenuTrigger className="max-w-28 gap-1! px-2! sm:max-w-none">
+                <PromptInputActionMenuTrigger
+                  className="max-w-28 gap-1! px-2! sm:max-w-none"
+                  disabled={composerLocked}
+                >
                   <div>
                     {context.mode === "flash" && <ZapIcon className="size-3" />}
                     {context.mode === "thinking" && (
@@ -1402,7 +1593,10 @@ export function InputBox({
             </PromptInputActionMenu>
             {supportReasoningEffort && context.mode !== "flash" && (
               <PromptInputActionMenu>
-                <PromptInputActionMenuTrigger className="hidden gap-1! px-2! sm:inline-flex">
+                <PromptInputActionMenuTrigger
+                  className="hidden gap-1! px-2! sm:inline-flex"
+                  disabled={composerLocked}
+                >
                   <div className="text-xs font-normal">
                     {t.inputBox.reasoningEffort}:
                     {context.reasoning_effort === "minimal" &&
@@ -1523,7 +1717,10 @@ export function InputBox({
               onOpenChange={setModelDialogOpen}
             >
               <ModelSelectorTrigger asChild>
-                <PromptInputButton className="max-w-40 min-w-0 sm:max-w-56">
+                <PromptInputButton
+                  className="max-w-40 min-w-0 sm:max-w-56"
+                  disabled={composerLocked}
+                >
                   <div className="flex min-w-0 flex-col items-start text-left">
                     <ModelSelectorName className="text-xs font-normal">
                       {selectedModel?.display_name}
@@ -1558,7 +1755,7 @@ export function InputBox({
             </ModelSelector>
             <PromptInputSubmit
               className="rounded-full"
-              disabled={disabled}
+              disabled={composerLocked}
               variant="outline"
               status={status}
               onClick={(e) => {
@@ -1671,9 +1868,11 @@ function SuggestionList({
 
 function AddAttachmentsButton({
   className,
+  disabled,
   uploadLimits,
 }: {
   className?: string;
+  disabled?: boolean;
   uploadLimits?: UploadLimits;
 }) {
   const { t } = useI18n();
@@ -1691,6 +1890,7 @@ function AddAttachmentsButton({
         aria-label={t.inputBox.addAttachments}
         className={cn("px-2!", className)}
         data-testid="add-attachments-button"
+        disabled={disabled}
         onClick={() => attachments.openFileDialog()}
       >
         <PaperclipIcon className="size-3" />
