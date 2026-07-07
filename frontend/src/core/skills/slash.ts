@@ -2,8 +2,12 @@ import type { Skill } from "./type";
 
 /**
  * Composer control commands that own the leading slash. They must never be
- * shown as skill activations. Keep in sync with the backend
- * `RESERVED_SLASH_SKILL_NAMES` in `deerflow/skills/slash.py`.
+ * shown as skill activations. These values plus {@link SLASH_SKILL_RE} mirror
+ * the backend gate in `deerflow/skills/slash.py`; both sides are pinned to the
+ * shared fixture at `contracts/slash_skill_contract.json` by contract tests
+ * (`tests/unit/core/skills/slash-contract.test.ts` here,
+ * `tests/test_slash_skill_contract.py` on the backend), so adding a reserved
+ * command or changing the name grammar in only one language fails CI.
  */
 export const RESERVED_SLASH_SKILL_NAMES = new Set([
   "bootstrap",
@@ -15,7 +19,7 @@ export const RESERVED_SLASH_SKILL_NAMES = new Set([
   "status",
 ]);
 
-const SLASH_SKILL_RE = /^\/([a-z0-9]+(?:-[a-z0-9]+)*)(?:\s+|$)/;
+export const SLASH_SKILL_RE = /^\/([a-z0-9]+(?:-[a-z0-9]+)*)(?:\s+|$)/;
 
 export type SlashSkillReference = {
   name: string;

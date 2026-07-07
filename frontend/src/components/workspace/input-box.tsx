@@ -117,6 +117,7 @@ import {
 import { useThread } from "./messages/context";
 import { ModeHoverGuide } from "./mode-hover-guide";
 import { ReferenceAttachmentSummary, useMaybeSidecar } from "./sidecar";
+import { SlashSkillChip } from "./slash-skill-chip";
 import { Tooltip } from "./tooltip";
 
 type InputMode = "flash" | "thinking" | "pro" | "ultra";
@@ -1260,17 +1261,11 @@ export function InputBox({
         <div className="min-h-16 w-full min-w-0 px-3 py-3">
           <div className="flex w-full min-w-0 items-center gap-2">
             {selectedSlashSkill && (
-              <button
-                aria-label={`Remove /${selectedSlashSkill.name}`}
-                className="border-primary/20 bg-primary/8 text-primary hover:bg-primary/12 inline-flex h-6 max-w-[min(11rem,45%)] shrink-0 cursor-pointer items-center gap-1 rounded-md border px-1.5 font-mono text-xs leading-none font-medium shadow-xs transition-colors"
-                onClick={clearSelectedSlashSkill}
-                type="button"
-              >
-                <span className="min-w-0 truncate">
-                  /{selectedSlashSkill.name}
-                </span>
-                <XIcon className="text-primary/70 size-2.5 shrink-0" />
-              </button>
+              <SlashSkillChip
+                name={selectedSlashSkill.name}
+                className="max-w-[min(11rem,45%)]"
+                onRemove={clearSelectedSlashSkill}
+              />
             )}
             <PromptInputTextarea
               className="min-h-6! min-w-0 p-0! leading-6!"

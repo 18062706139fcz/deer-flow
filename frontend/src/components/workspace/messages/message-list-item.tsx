@@ -44,7 +44,10 @@ import {
 } from "@/core/messages/utils";
 import { useRehypeSplitWordsIntoSpans } from "@/core/rehype";
 import { readReferenceMessageContexts } from "@/core/sidecar";
-import { resolveSlashSkillDisplay } from "@/core/skills";
+import {
+  parseSlashSkillReference,
+  resolveSlashSkillDisplay,
+} from "@/core/skills";
 import { useSkills } from "@/core/skills/hooks";
 import { SafeReasoningContent } from "@/core/streamdown/components";
 import { cn } from "@/lib/utils";
@@ -53,6 +56,7 @@ import { WorkspaceChangeBadge } from "../changes";
 import { CitationSourcesPanel } from "../citations/citation-sources-panel";
 import { CopyButton } from "../copy-button";
 import { ReferenceAttachmentSummary } from "../sidecar/reference-attachments";
+import { SlashSkillChip } from "../slash-skill-chip";
 
 import { MarkdownContent } from "./markdown-content";
 import { createMarkdownLinkComponent } from "./markdown-link";
@@ -215,6 +219,22 @@ function MessageImage({
 const clientTurnDurations = new Map<string, number>();
 
 function HumanMessageText({ content }: { content: string }) {
+  // `parseSlashSkillReference` is a pure regex gate (no data subscription), so
+  // the overwhelmingly common plain-text human message never subscribes to the
+  // skills query. Only a message that literally looks like a `/skill …`
+  // activation mounts `HumanSlashSkillText`, which owns the `useSkills()`
+  // lookup. This keeps a skill-enabled toggle from re-rendering every human
+  // turn — only the few slash-candidate turns react to catalog changes.
+  const reference = useMemo(() => parseSlashSkillReference(content), [content]);
+
+  if (!reference) {
+    return <div className="break-words whitespace-pre-wrap">{content}</div>;
+  }
+
+  return <HumanSlashSkillText content={content} />;
+}
+
+function HumanSlashSkillText({ content }: { content: string }) {
   const { skills } = useSkills();
   const slashSkill = resolveSlashSkillDisplay(content, skills);
 
@@ -224,9 +244,7 @@ function HumanMessageText({ content }: { content: string }) {
 
   return (
     <div className="flex max-w-full min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-      <span className="border-primary/20 bg-primary/8 text-primary inline-flex h-6 max-w-full shrink-0 items-center rounded-md border px-1.5 font-mono text-xs leading-none font-medium shadow-xs">
-        /{slashSkill.name}
-      </span>
+      <SlashSkillChip name={slashSkill.name} />
       {slashSkill.remainingText && (
         <span className="min-w-0 flex-1 break-words whitespace-pre-wrap">
           {slashSkill.remainingText}
