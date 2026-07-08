@@ -61,7 +61,7 @@ SANDBOX_IMAGE = os.environ.get(
 )
 SKILLS_HOST_PATH = os.environ.get("SKILLS_HOST_PATH", "/skills")
 THREADS_HOST_PATH = os.environ.get("THREADS_HOST_PATH", "/.deer-flow/threads")
-DEER_FLOW_HOST_BASE_DIR = os.environ.get("DEER_FLOW_HOST_BASE_DIR", "")
+DEER_FLOW_HOST_BASE_DIR = os.environ.get("DEER_FLOW_HOST_BASE_DIR", "/.deer-flow")
 SKILLS_PVC_NAME = os.environ.get("SKILLS_PVC_NAME", "")
 USERDATA_PVC_NAME = os.environ.get("USERDATA_PVC_NAME", "")
 SANDBOX_CONTAINER_PORT_RAW = os.environ.get("SANDBOX_CONTAINER_PORT", "8080")
@@ -301,6 +301,7 @@ class CreateSandboxRequest(BaseModel):
     thread_id: str | None = Field(default=None, pattern=SAFE_THREAD_ID_PATTERN)
     user_id: str = Field(default=DEFAULT_USER_ID, pattern=SAFE_USER_ID_PATTERN)
     extra_mounts: list[ExtraMount] = Field(default_factory=list)
+    include_legacy_skills: bool = False
 
 
 class SandboxResponse(BaseModel):
@@ -365,24 +366,79 @@ def _build_extra_volume_mounts(extra_mounts: list[ExtraMount] | None = None) -> 
     return mounts
 
 
-def _build_volumes(thread_id: str, extra_mounts: list[ExtraMount] | None = None) -> list[k8s_client.V1Volume]:
-    """Build volume list: PVC when configured, otherwise hostPath."""
+def _build_volumes(
+    thread_id: str,
+    user_id: str = DEFAULT_USER_ID,
+    *,
+    include_legacy_skills: bool = False,
+    extra_mounts: list[ExtraMount] | None = None,
+) -> list[k8s_client.V1Volume]:
+    """Build volume list: PVC when configured, otherwise hostPath.
+
+    Skills are split into public, per-user custom, and legacy (global-custom)
+    volumes so that ``/mnt/skills/{public,custom,legacy}/`` paths resolve
+    correctly inside the sandbox — matching the hostPath layout produced by
+    ``LocalSandboxProvider`` and ``AioSandboxProvider``.
+    """
+    volumes: list[k8s_client.V1Volume] = []
+
+    # ── Skills volumes ────────────────────────────────────────────────
+
     if SKILLS_PVC_NAME:
-        skills_vol = k8s_client.V1Volume(
-            name="skills",
-            persistent_volume_claim=k8s_client.V1PersistentVolumeClaimVolumeSource(
-                claim_name=SKILLS_PVC_NAME,
-                read_only=True,
-            ),
+        # PVC mode: three-way subPath not yet supported; fall back to
+        # single-volume mount for backward compatibility.
+        logger.warning(
+            "SKILLS_PVC_NAME is set — three-way skills layout is not "
+            "supported in PVC mode yet; falling back to single /mnt/skills mount"
+        )
+        volumes.append(
+            k8s_client.V1Volume(
+                name="skills",
+                persistent_volume_claim=k8s_client.V1PersistentVolumeClaimVolumeSource(
+                    claim_name=SKILLS_PVC_NAME,
+                    read_only=True,
+                ),
+            )
         )
     else:
-        skills_vol = k8s_client.V1Volume(
-            name="skills",
-            host_path=k8s_client.V1HostPathVolumeSource(
-                path=SKILLS_HOST_PATH,
-                type="Directory",
-            ),
+        # hostPath mode: three-way layout
+        public_path = join_host_path(SKILLS_HOST_PATH, "public")
+        volumes.append(
+            k8s_client.V1Volume(
+                name="skills-public",
+                host_path=k8s_client.V1HostPathVolumeSource(
+                    path=public_path,
+                    type="Directory",
+                ),
+            )
         )
+
+        user_custom_path = join_host_path(
+            DEER_FLOW_HOST_BASE_DIR, "users", user_id, "skills", "custom",
+        )
+        volumes.append(
+            k8s_client.V1Volume(
+                name="skills-custom",
+                host_path=k8s_client.V1HostPathVolumeSource(
+                    path=user_custom_path,
+                    type="DirectoryOrCreate",
+                ),
+            )
+        )
+
+        if include_legacy_skills:
+            legacy_path = join_host_path(SKILLS_HOST_PATH, "custom")
+            volumes.append(
+                k8s_client.V1Volume(
+                    name="skills-legacy",
+                    host_path=k8s_client.V1HostPathVolumeSource(
+                        path=legacy_path,
+                        type="Directory",
+                    ),
+                )
+            )
+
+    # ── User-data volume ──────────────────────────────────────────────
 
     if USERDATA_PVC_NAME:
         userdata_vol = k8s_client.V1Volume(
@@ -400,15 +456,58 @@ def _build_volumes(thread_id: str, extra_mounts: list[ExtraMount] | None = None)
             ),
         )
 
-    return [skills_vol, userdata_vol, *_build_extra_volumes(extra_mounts)]
+    volumes.append(userdata_vol)
+    volumes.extend(_build_extra_volumes(extra_mounts))
+    return volumes
 
 
 def _build_volume_mounts(
     thread_id: str,
     user_id: str = DEFAULT_USER_ID,
+    *,
+    include_legacy_skills: bool = False,
     extra_mounts: list[ExtraMount] | None = None,
 ) -> list[k8s_client.V1VolumeMount]:
-    """Build volume mount list, using subPath for PVC user-data."""
+    """Build volume mount list, mirroring three-way skills layout.
+
+    Skills are mounted to ``/mnt/skills/{public,custom,legacy}/`` so that
+    category-aware ``Skill.get_container_path()`` paths resolve correctly.
+    PVC mode falls back to a single ``/mnt/skills`` mount.
+    """
+    mounts: list[k8s_client.V1VolumeMount] = []
+
+    if SKILLS_PVC_NAME:
+        mounts.append(
+            k8s_client.V1VolumeMount(
+                name="skills",
+                mount_path="/mnt/skills",
+                read_only=True,
+            )
+        )
+    else:
+        mounts.extend(
+            [
+                k8s_client.V1VolumeMount(
+                    name="skills-public",
+                    mount_path="/mnt/skills/public",
+                    read_only=True,
+                ),
+                k8s_client.V1VolumeMount(
+                    name="skills-custom",
+                    mount_path="/mnt/skills/custom",
+                    read_only=True,
+                ),
+            ]
+        )
+        if include_legacy_skills:
+            mounts.append(
+                k8s_client.V1VolumeMount(
+                    name="skills-legacy",
+                    mount_path="/mnt/skills/legacy",
+                    read_only=True,
+                )
+            )
+
     userdata_mount = k8s_client.V1VolumeMount(
         name="user-data",
         mount_path="/mnt/user-data",
@@ -416,22 +515,18 @@ def _build_volume_mounts(
     )
     if USERDATA_PVC_NAME:
         userdata_mount.sub_path = f"deer-flow/users/{user_id}/threads/{thread_id}/user-data"
+    mounts.append(userdata_mount)
+    mounts.extend(_build_extra_volume_mounts(extra_mounts))
 
-    return [
-        k8s_client.V1VolumeMount(
-            name="skills",
-            mount_path="/mnt/skills",
-            read_only=True,
-        ),
-        userdata_mount,
-        *_build_extra_volume_mounts(extra_mounts),
-    ]
+    return mounts
 
 
 def _build_pod(
     sandbox_id: str,
     thread_id: str,
     user_id: str = DEFAULT_USER_ID,
+    *,
+    include_legacy_skills: bool = False,
     extra_mounts: list[ExtraMount] | None = None,
 ) -> k8s_client.V1Pod:
     """Construct a Pod manifest for a single sandbox."""
@@ -494,6 +589,7 @@ def _build_pod(
                     volume_mounts=_build_volume_mounts(
                         thread_id,
                         user_id=user_id,
+                        include_legacy_skills=include_legacy_skills,
                         extra_mounts=extra_mounts,
                     ),
                     security_context=k8s_client.V1SecurityContext(
@@ -502,7 +598,12 @@ def _build_pod(
                     ),
                 )
             ],
-            volumes=_build_volumes(thread_id, extra_mounts=extra_mounts),
+            volumes=_build_volumes(
+                thread_id,
+                user_id=user_id,
+                include_legacy_skills=include_legacy_skills,
+                extra_mounts=extra_mounts,
+            ),
             restart_policy="Always",
         ),
     )
@@ -579,12 +680,14 @@ def create_sandbox(req: CreateSandboxRequest):
     sandbox_id = req.sandbox_id
     thread_id = req.thread_id or sandbox_id
     user_id = req.user_id
+    include_legacy_skills = req.include_legacy_skills
 
     logger.info(
-        "Received request to create sandbox '%s' for thread '%s' user '%s'",
+        "Received request to create sandbox '%s' for thread '%s' user '%s' include_legacy_skills=%s",
         sandbox_id,
         thread_id,
         user_id,
+        include_legacy_skills,
     )
 
     # ── Fast path: sandbox already exists ────────────────────────────
@@ -604,6 +707,7 @@ def create_sandbox(req: CreateSandboxRequest):
                 sandbox_id,
                 thread_id,
                 user_id=user_id,
+                include_legacy_skills=include_legacy_skills,
                 extra_mounts=req.extra_mounts,
             ),
         )
