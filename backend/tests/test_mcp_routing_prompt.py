@@ -1,0 +1,109 @@
+"""Tests for MCP routing hint prompt rendering."""
+
+from __future__ import annotations
+
+from langchain_core.tools import StructuredTool
+from langchain_core.utils.function_calling import convert_to_openai_function
+from pydantic import BaseModel, Field
+
+from deerflow.agents.lead_agent.prompt import apply_prompt_template
+from deerflow.tools.builtins.tool_search import get_mcp_routing_hints_prompt_section
+from deerflow.tools.mcp_metadata import tag_mcp_routing, tag_mcp_tool
+
+
+class _Args(BaseModel):
+    query: str = Field(..., description="query")
+
+
+def _tool(name: str, description: str = "Query internal data") -> StructuredTool:
+    async def _call(query: str) -> str:
+        return query
+
+    return StructuredTool(
+        name=name,
+        description=description,
+        args_schema=_Args,
+        coroutine=_call,
+    )
+
+
+def _routed_tool(name: str, *, priority: int, keywords: list[str], mode: str = "prefer") -> StructuredTool:
+    tool = tag_mcp_tool(_tool(name))
+    tag_mcp_routing(
+        tool,
+        {
+            "mode": mode,
+            "priority": priority,
+            "keywords": keywords,
+            "auto_promote_top_k": None,
+        },
+    )
+    return tool
+
+
+def test_zero_mcp_routing_tools_render_empty_section():
+    assert get_mcp_routing_hints_prompt_section([]) == ""
+
+
+def test_off_mode_and_empty_keywords_are_excluded():
+    section = get_mcp_routing_hints_prompt_section(
+        [
+            _routed_tool("postgres_query", priority=100, keywords=["订单"], mode="off"),
+            _routed_tool("metrics_query", priority=90, keywords=[]),
+        ]
+    )
+
+    assert section == ""
+
+
+def test_routing_hints_are_ordered_by_priority_then_name():
+    section = get_mcp_routing_hints_prompt_section(
+        [
+            _routed_tool("z_tool", priority=50, keywords=["z"]),
+            _routed_tool("a_tool", priority=50, keywords=["a"]),
+            _routed_tool("top_tool", priority=90, keywords=["top", "SQL"]),
+        ]
+    )
+
+    assert section.startswith("<mcp_routing_hints>")
+    top_index = section.index("`top_tool`")
+    a_index = section.index("`a_tool`")
+    z_index = section.index("`z_tool`")
+    assert top_index < a_index < z_index
+    assert "When the user's request involves top, or SQL:" in section
+    assert "prefer the `top_tool` tool (priority 90)." in section
+
+
+def test_apply_prompt_template_places_routing_hints_after_deferred_tools():
+    section = get_mcp_routing_hints_prompt_section(
+        [
+            _routed_tool("postgres_query", priority=100, keywords=["订单"]),
+        ]
+    )
+
+    prompt = apply_prompt_template(
+        deferred_names=frozenset({"postgres_query"}),
+        mcp_routing_hints_section=section,
+    )
+
+    assert "<available-deferred-tools>" in prompt
+    assert "<mcp_routing_hints>" in prompt
+    assert prompt.index("<available-deferred-tools>") < prompt.index("<mcp_routing_hints>")
+
+
+def test_routing_metadata_does_not_change_openai_function_schema():
+    tool = tag_mcp_tool(_tool("postgres_query"))
+    before = convert_to_openai_function(tool)
+
+    tag_mcp_routing(
+        tool,
+        {
+            "mode": "prefer",
+            "priority": 100,
+            "keywords": ["订单"],
+            "auto_promote_top_k": None,
+        },
+    )
+    after = convert_to_openai_function(tool)
+
+    assert after == before

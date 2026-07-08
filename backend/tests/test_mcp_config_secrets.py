@@ -7,6 +7,7 @@ preserves existing secrets when the frontend round-trips masked values.
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -26,6 +27,7 @@ from app.gateway.routers.mcp import (
     reset_mcp_tools_cache_endpoint,
     update_mcp_configuration,
 )
+from deerflow.config.extensions_config import ExtensionsConfig
 
 # ---------------------------------------------------------------------------
 # _mask_server_config
@@ -406,6 +408,127 @@ async def test_update_mcp_configuration_resets_tools_cache(monkeypatch, tmp_path
 
     assert reset_calls == 1
     assert list(response.mcp_servers) == ["github"]
+
+
+@pytest.mark.asyncio
+async def test_update_mcp_configuration_preserves_omitted_routing_and_tools(monkeypatch, tmp_path):
+    """Frontend toggles must not erase hand-authored MCP routing hints."""
+    config_path = tmp_path / "extensions_config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "postgres": {
+                        "enabled": True,
+                        "type": "stdio",
+                        "command": "npx",
+                        "args": ["-y", "@modelcontextprotocol/server-postgres"],
+                        "routing": {
+                            "mode": "prefer",
+                            "priority": 50,
+                            "keywords": ["订单", "SQL"],
+                        },
+                        "tools": {
+                            "query": {
+                                "routing": {
+                                    "priority": 100,
+                                    "keywords": ["查库"],
+                                }
+                            }
+                        },
+                    }
+                },
+                "skills": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    current_config = SimpleNamespace(skills={}, mcp_servers={})
+
+    def fake_reload_extensions_config():
+        return ExtensionsConfig.model_validate(json.loads(config_path.read_text(encoding="utf-8")))
+
+    monkeypatch.setattr(mcp_router.ExtensionsConfig, "resolve_config_path", lambda: config_path)
+    monkeypatch.setattr(mcp_router, "get_extensions_config", lambda: current_config)
+    monkeypatch.setattr(mcp_router, "reload_extensions_config", fake_reload_extensions_config)
+    monkeypatch.setattr(mcp_router, "reset_mcp_tools_cache", lambda: None)
+
+    response = await update_mcp_configuration(
+        _request_with_role("admin"),
+        McpConfigUpdateRequest(
+            mcp_servers={
+                "postgres": McpServerConfigResponse(
+                    enabled=False,
+                    type="stdio",
+                    command="npx",
+                    args=["-y", "@modelcontextprotocol/server-postgres"],
+                )
+            }
+        ),
+    )
+
+    persisted = json.loads(config_path.read_text(encoding="utf-8"))
+    postgres = persisted["mcpServers"]["postgres"]
+    assert postgres["enabled"] is False
+    assert postgres["routing"]["keywords"] == ["订单", "SQL"]
+    assert postgres["tools"]["query"]["routing"]["priority"] == 100
+    assert response.mcp_servers["postgres"].routing.keywords == ["订单", "SQL"]
+
+
+@pytest.mark.asyncio
+async def test_update_mcp_configuration_preserves_server_extra_fields(monkeypatch, tmp_path):
+    """Gateway round-trips must preserve advanced server fields unknown to the API model."""
+    config_path = tmp_path / "extensions_config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "playwright": {
+                        "enabled": True,
+                        "type": "stdio",
+                        "command": "npx",
+                        "args": ["-y", "@playwright/mcp"],
+                        "cwd": "/srv/mcp-workdir",
+                        "customFlag": "keep-me",
+                    }
+                },
+                "skills": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    current_config = SimpleNamespace(skills={}, mcp_servers={})
+
+    def fake_reload_extensions_config():
+        return ExtensionsConfig.model_validate(json.loads(config_path.read_text(encoding="utf-8")))
+
+    monkeypatch.setattr(mcp_router.ExtensionsConfig, "resolve_config_path", lambda: config_path)
+    monkeypatch.setattr(mcp_router, "get_extensions_config", lambda: current_config)
+    monkeypatch.setattr(mcp_router, "reload_extensions_config", fake_reload_extensions_config)
+    monkeypatch.setattr(mcp_router, "reset_mcp_tools_cache", lambda: None)
+
+    response = await update_mcp_configuration(
+        _request_with_role("admin"),
+        McpConfigUpdateRequest(
+            mcp_servers={
+                "playwright": McpServerConfigResponse(
+                    enabled=False,
+                    type="stdio",
+                    command="npx",
+                    args=["-y", "@playwright/mcp"],
+                )
+            }
+        ),
+    )
+
+    persisted = json.loads(config_path.read_text(encoding="utf-8"))
+    playwright = persisted["mcpServers"]["playwright"]
+    assert playwright["enabled"] is False
+    assert playwright["cwd"] == "/srv/mcp-workdir"
+    assert playwright["customFlag"] == "keep-me"
+    assert response.mcp_servers["playwright"].model_extra["cwd"] == "/srv/mcp-workdir"
 
 
 def test_validate_mcp_update_allows_default_npx_stdio_command(monkeypatch):
