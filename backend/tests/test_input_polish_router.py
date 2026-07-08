@@ -6,6 +6,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.gateway.routers import input_polish
+from deerflow.utils import oneshot_llm
 
 
 def _config(
@@ -28,6 +29,14 @@ def test_clean_rewritten_text_removes_think_and_fence():
     assert input_polish._clean_rewritten_text(text) == "rewrite this"
 
 
+def test_clean_rewritten_text_keeps_literal_think_tag():
+    # A polished draft may legitimately mention the <think> tag. The cleaner
+    # must not truncate at the dangling open tag (which would drop the rest of
+    # the rewrite and can surface as a spurious 503).
+    text = "Explain what the <think> tag does in reasoning models."
+    assert input_polish._clean_rewritten_text(text) == "Explain what the <think> tag does in reasoning models."
+
+
 def test_polish_input_uses_config_model_and_preserves_response(monkeypatch):
     request = input_polish.InputPolishRequest(
         text="/web-dev 做一个页面",
@@ -38,7 +47,7 @@ def test_polish_input_uses_config_model_and_preserves_response(monkeypatch):
     fake_model.ainvoke = AsyncMock(return_value=MagicMock(content="/web-dev 请设计并实现一个视觉精致的页面。"))
 
     create_chat_model = MagicMock(return_value=fake_model)
-    monkeypatch.setattr(input_polish, "create_chat_model", create_chat_model)
+    monkeypatch.setattr(oneshot_llm, "create_chat_model", create_chat_model)
     config = _config(model_name="polish-model")
 
     result = asyncio.run(
@@ -66,7 +75,7 @@ def test_polish_input_uses_default_model_when_config_model_is_missing(monkeypatc
     fake_model.ainvoke = AsyncMock(return_value=MagicMock(content="Make this clearer."))
 
     create_chat_model = MagicMock(return_value=fake_model)
-    monkeypatch.setattr(input_polish, "create_chat_model", create_chat_model)
+    monkeypatch.setattr(oneshot_llm, "create_chat_model", create_chat_model)
 
     result = asyncio.run(
         input_polish.polish_input.__wrapped__(
@@ -84,7 +93,7 @@ def test_polish_input_uses_default_model_when_config_model_is_missing(monkeypatc
 def test_polish_input_returns_404_when_disabled(monkeypatch):
     request = input_polish.InputPolishRequest(text="hello")
     fake_model = MagicMock()
-    monkeypatch.setattr(input_polish, "create_chat_model", fake_model)
+    monkeypatch.setattr(oneshot_llm, "create_chat_model", fake_model)
 
     with pytest.raises(HTTPException) as exc_info:
         asyncio.run(
@@ -101,7 +110,7 @@ def test_polish_input_returns_404_when_disabled(monkeypatch):
 
 def test_polish_input_rejects_empty_or_too_long_input(monkeypatch):
     fake_model = MagicMock()
-    monkeypatch.setattr(input_polish, "create_chat_model", fake_model)
+    monkeypatch.setattr(oneshot_llm, "create_chat_model", fake_model)
 
     with pytest.raises(HTTPException) as empty_exc:
         asyncio.run(
@@ -129,7 +138,7 @@ def test_polish_input_returns_503_on_model_error(monkeypatch):
     request = input_polish.InputPolishRequest(text="hello")
     fake_model = MagicMock()
     fake_model.ainvoke = AsyncMock(side_effect=RuntimeError("boom"))
-    monkeypatch.setattr(input_polish, "create_chat_model", MagicMock(return_value=fake_model))
+    monkeypatch.setattr(oneshot_llm, "create_chat_model", MagicMock(return_value=fake_model))
 
     with pytest.raises(HTTPException) as exc_info:
         asyncio.run(
@@ -141,3 +150,46 @@ def test_polish_input_returns_503_on_model_error(monkeypatch):
         )
 
     assert exc_info.value.status_code == 503
+
+
+def test_polish_input_rejects_whitespace_only_draft(monkeypatch):
+    # A padded draft that is empty after normalization is rejected as empty,
+    # matching the normalized view used for the model input.
+    fake_model = MagicMock()
+    monkeypatch.setattr(oneshot_llm, "create_chat_model", fake_model)
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            input_polish.polish_input.__wrapped__(
+                input_polish.InputPolishRequest(text="   \n\t  "),
+                request=None,
+                config=_config(),
+            ),
+        )
+
+    assert exc_info.value.status_code == 400
+    fake_model.assert_not_called()
+
+
+def test_polish_input_validates_and_sends_normalized_text(monkeypatch):
+    # The length boundary and the model input must agree on one normalized view:
+    # a draft whose raw length exceeds max_chars only due to padding is accepted
+    # (strip fits), and the model receives the stripped text, not the padding.
+    raw_draft = "   summarize report   "  # 22 chars raw, 16 chars stripped
+    fake_model = MagicMock()
+    fake_model.ainvoke = AsyncMock(return_value=MagicMock(content="Please summarize the report clearly."))
+    monkeypatch.setattr(oneshot_llm, "create_chat_model", MagicMock(return_value=fake_model))
+
+    result = asyncio.run(
+        input_polish.polish_input.__wrapped__(
+            input_polish.InputPolishRequest(text=raw_draft),
+            request=None,
+            config=_config(max_chars=len(raw_draft.strip())),
+        ),
+    )
+
+    assert result.rewritten_text == "Please summarize the report clearly."
+    messages = fake_model.ainvoke.await_args.args[0]
+    human_content = messages[-1].content
+    assert "summarize report" in human_content
+    assert "   summarize report   " not in human_content

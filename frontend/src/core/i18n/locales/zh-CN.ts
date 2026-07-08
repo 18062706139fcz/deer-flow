@@ -120,6 +120,7 @@ export const zhCN: Translations = {
     inputPolishNoChanges: "当前输入已经足够清晰。",
     inputPolishFailed: "优化输入失败。",
     inputPolishUndo: "撤销优化",
+    inputPolishCancel: "取消优化",
     mode: "模式",
     flashMode: "闪速",
     flashModeDescription: "快速且高效的完成任务，但可能不够精准",

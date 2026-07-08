@@ -134,6 +134,50 @@ test.describe("Chat workspace", () => {
     await expect(polishButton).toHaveAccessibleName("Polish input");
   });
 
+  test("cancels an in-flight polish request", async ({ page }) => {
+    // Hold the polish response open so the request stays in flight while we
+    // exercise the cancel affordance.
+    let releasePolish!: () => void;
+    const polishHeld = new Promise<void>((resolve) => {
+      releasePolish = resolve;
+    });
+    await page.route("**/api/input-polish", async (route) => {
+      await polishHeld;
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          rewritten_text: "Please summarize the uploaded report clearly.",
+          changed: true,
+        }),
+      });
+    });
+
+    await page.goto("/workspace/chats/new");
+
+    const textarea = page.getByPlaceholder(/how can i assist you/i);
+    await expect(textarea).toBeVisible({ timeout: 15_000 });
+
+    await textarea.fill("summarize report");
+    await page.getByTestId("polish-input-button").click();
+
+    await expect(page.getByText("Polishing input...")).toBeVisible();
+    await expect(textarea).toBeDisabled();
+
+    await page.getByTestId("cancel-polish-input-button").click();
+
+    // Cancelling aborts the request, re-enables the composer, and leaves the
+    // original draft untouched (no rewrite applied).
+    await expect(page.getByText("Polishing input...")).toBeHidden();
+    await expect(textarea).toBeEnabled();
+    await expect(textarea).toHaveValue("summarize report");
+    await expect(page.getByTestId("polish-input-button")).toHaveAccessibleName(
+      "Polish input",
+    );
+
+    releasePolish();
+  });
+
   test("suggests matching skills after a leading slash", async ({ page }) => {
     await page.goto("/workspace/chats/new");
 

@@ -121,6 +121,7 @@ export const enUS: Translations = {
     inputPolishNoChanges: "This input is already clear.",
     inputPolishFailed: "Failed to polish input.",
     inputPolishUndo: "Undo polish",
+    inputPolishCancel: "Cancel polishing",
     mode: "Mode",
     flashMode: "Flash",
     flashModeDescription: "Fast and efficient, but may not be accurate",

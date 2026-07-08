@@ -103,6 +103,7 @@ export interface Translations {
     inputPolishNoChanges: string;
     inputPolishFailed: string;
     inputPolishUndo: string;
+    inputPolishCancel: string;
     mode: string;
     flashMode: string;
     flashModeDescription: string;

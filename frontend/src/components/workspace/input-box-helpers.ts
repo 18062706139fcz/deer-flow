@@ -185,18 +185,19 @@ export function parseGoalCommand(value: string): GoalCommand | null {
   return { kind: "set", objective: args };
 }
 
+export function parseCompactCommand(value: string): boolean {
+  return /^\/(?:compact|context\s+compact)\s*$/i.test(value.trim());
+}
+
 export function canPolishInput(value: string): boolean {
   const trimmed = value.trim();
   if (!trimmed) {
     return false;
   }
-  return (
-    !/^\/(?:goal|help)(?:\s+|$)/i.test(trimmed) && !parseCompactCommand(trimmed)
-  );
-}
-
-export function parseCompactCommand(value: string): boolean {
-  return /^\/(?:compact|context\s+compact)\s*$/i.test(value.trim());
+  // Reserved builtin command lines are routed to their own handlers, not the
+  // LLM, so they must not be rewritten. Reuse the same parsers the composer
+  // uses to dispatch them instead of maintaining a third parallel list.
+  return parseGoalCommand(trimmed) === null && !parseCompactCommand(trimmed);
 }
 
 export function getInputSubmitAction({

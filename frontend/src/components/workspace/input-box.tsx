@@ -67,6 +67,7 @@ import { fetch } from "@/core/api/fetcher";
 import { getBackendBaseURL } from "@/core/config";
 import { useI18n } from "@/core/i18n/hooks";
 import { polishInputDraft } from "@/core/input-polish/api";
+import { hasOpenHumanInputRequest } from "@/core/messages/human-input";
 import { isHiddenFromUIMessage } from "@/core/messages/utils";
 import { useModels } from "@/core/models/hooks";
 import {
@@ -921,6 +922,14 @@ export function InputBox({
     dismissedSkillSuggestionValue !== textInput.value;
   const isComposerDisabled = disabled === true;
   const isMockThread = isMock === true;
+  const hasOpenHumanInputCard = useMemo(
+    () =>
+      hasOpenHumanInputRequest(
+        thread.messages,
+        (message) => !isHiddenFromUIMessage(message),
+      ),
+    [thread.messages],
+  );
   const composerLocked = isComposerDisabled || polishingInput;
   const inputPolishUndoAvailable =
     !polishingInput &&
@@ -929,6 +938,7 @@ export function InputBox({
   const inputPolishDisabled =
     isComposerDisabled ||
     isMockThread ||
+    hasOpenHumanInputCard ||
     polishingInput ||
     (!inputPolishUndoAvailable &&
       (status === "streaming" ||
@@ -1059,6 +1069,11 @@ export function InputBox({
         return;
       }
 
+      // Applying the rewrite replaces the draft outside the textarea change
+      // handler, so clear any in-progress history browse state; otherwise a
+      // stale index would let the next ArrowDown overwrite the rewrite.
+      promptHistoryIndexRef.current = null;
+      promptHistoryDraftRef.current = "";
       setPromptHistoryValue(rewrittenText);
       setInputPolishUndo({
         originalText,
@@ -1097,6 +1112,8 @@ export function InputBox({
     if (!inputPolishUndoAvailable || inputPolishUndo === null) {
       return;
     }
+    promptHistoryIndexRef.current = null;
+    promptHistoryDraftRef.current = "";
     setPromptHistoryValue(inputPolishUndo.originalText);
     setInputPolishUndo(null);
   }, [inputPolishUndo, inputPolishUndoAvailable, setPromptHistoryValue]);
@@ -1417,11 +1434,20 @@ export function InputBox({
           {polishingInput && (
             <div
               aria-live="polite"
-              className="text-primary bg-primary/10 border-primary/20 relative z-30 flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium"
+              className="text-primary bg-primary/10 border-primary/20 relative z-30 flex h-7 items-center gap-1.5 rounded-full border py-0 pr-1 pl-2.5 text-xs font-medium"
               role="status"
             >
               <Loader2Icon className="size-3 animate-spin" />
               {t.inputBox.inputPolishing}
+              <button
+                aria-label={t.inputBox.inputPolishCancel}
+                className="hover:bg-primary/20 focus-visible:ring-primary/40 -mr-0.5 ml-0.5 flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-full transition-colors focus-visible:ring-2 focus-visible:outline-none"
+                data-testid="cancel-polish-input-button"
+                onClick={abortInputPolishRequest}
+                type="button"
+              >
+                <XIcon className="size-3" />
+              </button>
             </div>
           )}
           {sidecar && sidecar.conversationQuotes.length > 0 && (
