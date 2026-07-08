@@ -1399,7 +1399,7 @@ export function InputBox({
         <div className="min-h-16 w-full min-w-0 px-3 py-3">
           {selectedSlashSkill ? (
             <div
-              className="max-h-48 min-h-6 w-full min-w-0 cursor-text overflow-y-auto break-words whitespace-pre-wrap text-base leading-6 md:text-sm"
+              className="max-h-48 min-h-6 w-full min-w-0 cursor-text overflow-y-auto text-base leading-6 break-words whitespace-pre-wrap md:text-sm"
               onClick={(event) => {
                 if (event.target === event.currentTarget) {
                   focusContentEditableEnd(inlineSkillTextRef.current);
