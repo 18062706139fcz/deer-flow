@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+from types import SimpleNamespace
+
 from langchain_core.tools import StructuredTool
 from langchain_core.utils.function_calling import convert_to_openai_function
 from pydantic import BaseModel, Field
@@ -41,6 +44,15 @@ def _routed_tool(name: str, *, priority: int, keywords: list[str], mode: str = "
     return tool
 
 
+def _minimal_prompt_app_config() -> SimpleNamespace:
+    return SimpleNamespace(
+        sandbox=SimpleNamespace(mounts=[]),
+        skills=SimpleNamespace(container_path="/mnt/skills", get_skills_path=lambda: Path("/tmp/skills")),
+        skill_evolution=SimpleNamespace(enabled=False),
+        acp_agents={},
+    )
+
+
 def test_zero_mcp_routing_tools_render_empty_section():
     assert get_mcp_routing_hints_prompt_section([]) == ""
 
@@ -74,14 +86,19 @@ def test_routing_hints_are_ordered_by_priority_then_name():
     assert "prefer the `top_tool` tool (priority 90)." in section
 
 
-def test_apply_prompt_template_places_routing_hints_after_deferred_tools():
+def test_apply_prompt_template_places_routing_hints_after_deferred_tools(monkeypatch):
     section = get_mcp_routing_hints_prompt_section(
         [
             _routed_tool("postgres_query", priority=100, keywords=["订单"]),
         ]
     )
+    empty_storage = SimpleNamespace(load_skills=lambda *, enabled_only: [])
+    monkeypatch.setattr("deerflow.agents.lead_agent.prompt.get_or_new_skill_storage", lambda **kwargs: empty_storage)
+    monkeypatch.setattr("deerflow.agents.lead_agent.prompt.get_or_new_user_skill_storage", lambda *args, **kwargs: empty_storage)
+    monkeypatch.setattr("deerflow.agents.lead_agent.prompt.get_agent_soul", lambda agent_name=None: "")
 
     prompt = apply_prompt_template(
+        app_config=_minimal_prompt_app_config(),
         deferred_names=frozenset({"postgres_query"}),
         mcp_routing_hints_section=section,
     )
