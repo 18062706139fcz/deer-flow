@@ -1,0 +1,102 @@
+backend/tests/test_mcp_routing_prompt.py
+  s_ac9e2be29fa166::t_50e90abacbedaf 5-7,47-55,89,95-98,101 gitai:{"mixed_line_ranges":[],"operations":[{"operation_id":"6a4e691637b7f43d01f49a28","tool_type":"agent","tool_id":"apply_patch","line_ranges":[{"Range":[5,7]},{"Range":[47,55]},{"Single":89},{"Range":[95,98]},{"Single":101}]}]}
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "7d7a338093a9e68bd71773d881c7a81a904eb43b",
+  "prompts": {},
+  "sessions": {
+    "s_ac9e2be29fa166": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a4e675f37b7f43d01f49973",
+        "model": "gpt-5.5__max"
+      },
+      "human_author": "ryker <2279549769@qq.com>"
+    }
+  },
+  "attestation_metadata": {
+    "backend/tests/test_mcp_routing_prompt.py": [
+      {
+        "hash": "s_ac9e2be29fa166::t_50e90abacbedaf",
+        "line_ranges": [
+          {
+            "Range": [
+              5,
+              7
+            ]
+          },
+          {
+            "Range": [
+              47,
+              55
+            ]
+          },
+          {
+            "Single": 89
+          },
+          {
+            "Range": [
+              95,
+              98
+            ]
+          },
+          {
+            "Single": 101
+          }
+        ],
+        "mixed_line_ranges": [],
+        "operations": [
+          {
+            "operation_id": "6a4e691637b7f43d01f49a28",
+            "tool_type": "agent",
+            "tool_id": "apply_patch",
+            "line_ranges": [
+              {
+                "Range": [
+                  5,
+                  7
+                ]
+              },
+              {
+                "Range": [
+                  47,
+                  55
+                ]
+              },
+              {
+                "Single": 89
+              },
+              {
+                "Range": [
+                  95,
+                  98
+                ]
+              },
+              {
+                "Single": 101
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "remote_transcripts": {
+    "s_ac9e2be29fa166": {
+      "tool": "trae",
+      "conversation_id": "6a4e675f37b7f43d01f49973",
+      "session_id": "6a4e675f37b7f43d01f49973",
+      "status": "remote_only",
+      "message": "Remote transcript resolution is not implemented yet for TRAE prompts."
+    },
+    "s_ac9e2be29fa166::t_50e90abacbedaf": {
+      "tool": "trae",
+      "conversation_id": "6a4e675f37b7f43d01f49973",
+      "session_id": "6a4e675f37b7f43d01f49973",
+      "status": "remote_only",
+      "message": "Remote transcript resolution is not implemented yet for TRAE prompts."
+    }
+  }
+}
