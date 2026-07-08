@@ -64,11 +64,14 @@ test.describe("Chat workspace", () => {
 
     await textarea.press("Enter");
 
-    await expect(textarea).toHaveValue("");
     await expect(page.getByText("/data-analysis")).toBeVisible();
+    const skillInput = page.getByRole("textbox", {
+      name: /how can i assist you/i,
+    });
+    await expect(skillInput).toBeVisible();
 
-    await textarea.fill("summarize this dataset");
-    await textarea.press("Enter");
+    await skillInput.fill("summarize this dataset");
+    await skillInput.press("Enter");
 
     await expect
       .poll(() => submittedText)
@@ -177,8 +180,10 @@ test.describe("Chat workspace", () => {
     await textarea.press("ArrowDown");
     await textarea.press("Enter");
 
-    await expect(textarea).toHaveValue("");
     await expect(page.getByText("/frontend-design")).toBeVisible();
+    await expect(
+      page.getByRole("textbox", { name: /how can i assist you/i }),
+    ).toBeVisible();
   });
 
   test("keeps Shift+Enter as newline while skill suggestions are visible", async ({
