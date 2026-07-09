@@ -112,6 +112,26 @@ def test_mask_does_not_mutate_original():
     assert masked.env["KEY"] == "***"
 
 
+def test_mask_scrubs_sensitive_extra_fields_but_preserves_safe_extra_fields():
+    """Unknown advanced fields are preserved, but secret-shaped keys are masked."""
+    server = McpServerConfigResponse(
+        cwd="/srv/mcp-workdir",
+        customFlag="keep-me",
+        api_key="real-extra-secret",
+        nested={"refreshToken": "refresh-secret", "safe": "visible"},
+        endpoints=[{"access_key": "access-secret", "name": "prod"}],
+    )
+
+    masked = _mask_server_config(server)
+
+    assert masked.model_extra["cwd"] == "/srv/mcp-workdir"
+    assert masked.model_extra["customFlag"] == "keep-me"
+    assert masked.model_extra["api_key"] == "***"
+    assert masked.model_extra["nested"] == {"refreshToken": "***", "safe": "visible"}
+    assert masked.model_extra["endpoints"] == [{"access_key": "***", "name": "prod"}]
+    assert server.model_extra["api_key"] == "real-extra-secret"
+
+
 # ---------------------------------------------------------------------------
 # _merge_preserving_secrets
 # ---------------------------------------------------------------------------
@@ -201,6 +221,41 @@ def test_merge_does_not_mutate_original():
     assert incoming.env["KEY"] == "***"
     assert existing.env["KEY"] == "secret"
     assert merged.env["KEY"] == "secret"
+
+
+def test_merge_preserves_masked_sensitive_extra_values():
+    """Masked secret-shaped extra fields should round-trip to existing values."""
+    incoming = McpServerConfigResponse(
+        cwd="/srv/new-workdir",
+        api_key="***",
+        nested={"refreshToken": "***", "safe": "updated"},
+        endpoints=[{"access_key": "***", "name": "prod"}],
+    )
+    existing = McpServerConfigResponse(
+        cwd="/srv/old-workdir",
+        api_key="real-extra-secret",
+        nested={"refreshToken": "real-refresh", "safe": "old"},
+        endpoints=[{"access_key": "real-access", "name": "prod"}],
+    )
+
+    merged = _merge_preserving_secrets(incoming, existing)
+
+    assert merged.model_extra["cwd"] == "/srv/new-workdir"
+    assert merged.model_extra["api_key"] == "real-extra-secret"
+    assert merged.model_extra["nested"] == {"refreshToken": "real-refresh", "safe": "updated"}
+    assert merged.model_extra["endpoints"] == [{"access_key": "real-access", "name": "prod"}]
+
+
+def test_merge_rejects_masked_sensitive_extra_value_for_new_key():
+    """A new unknown secret field must provide a real value, not a mask."""
+    incoming = McpServerConfigResponse(api_key="***")
+    existing = McpServerConfigResponse()
+
+    with pytest.raises(HTTPException) as exc_info:
+        _merge_preserving_secrets(incoming, existing)
+
+    assert exc_info.value.status_code == 400
+    assert "api_key" in exc_info.value.detail
 
 
 # ---------------------------------------------------------------------------
@@ -491,6 +546,7 @@ async def test_update_mcp_configuration_preserves_server_extra_fields(monkeypatc
                         "args": ["-y", "@playwright/mcp"],
                         "cwd": "/srv/mcp-workdir",
                         "customFlag": "keep-me",
+                        "api_key": "real-extra-secret",
                     }
                 },
                 "skills": {},
@@ -528,7 +584,9 @@ async def test_update_mcp_configuration_preserves_server_extra_fields(monkeypatc
     assert playwright["enabled"] is False
     assert playwright["cwd"] == "/srv/mcp-workdir"
     assert playwright["customFlag"] == "keep-me"
+    assert playwright["api_key"] == "real-extra-secret"
     assert response.mcp_servers["playwright"].model_extra["cwd"] == "/srv/mcp-workdir"
+    assert response.mcp_servers["playwright"].model_extra["api_key"] == "***"
 
 
 def test_validate_mcp_update_allows_default_npx_stdio_command(monkeypatch):

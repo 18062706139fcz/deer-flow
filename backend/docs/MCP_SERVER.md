@@ -20,7 +20,9 @@ Use `routing` when an MCP server should be preferred for specific requests, such
 as internal database questions that should use a PostgreSQL MCP tool before web
 search. Routing hints are soft model guidance: they add a
 `<mcp_routing_hints>` prompt section, but they do not forbid other tools. Use
-agent-level allow/deny policy for hard restrictions.
+agent-level allow/deny policy for hard restrictions. If `tool_search.enabled`
+defers MCP tool schemas, the hint references `tool_search` so the model fetches
+the deferred tool before preferring it.
 
 ```json
 {

@@ -10,7 +10,7 @@ from langchain_core.utils.function_calling import convert_to_openai_function
 from pydantic import BaseModel, Field
 
 from deerflow.agents.lead_agent.prompt import apply_prompt_template
-from deerflow.tools.builtins.tool_search import get_mcp_routing_hints_prompt_section
+from deerflow.tools.builtins.tool_search import assemble_deferred_tools, get_mcp_routing_hints_prompt_section
 from deerflow.tools.mcp_metadata import tag_mcp_routing, tag_mcp_tool
 
 
@@ -38,7 +38,6 @@ def _routed_tool(name: str, *, priority: int, keywords: list[str], mode: str = "
             "mode": mode,
             "priority": priority,
             "keywords": keywords,
-            "auto_promote_top_k": None,
         },
     )
     return tool
@@ -83,7 +82,19 @@ def test_routing_hints_are_ordered_by_priority_then_name():
     z_index = section.index("`z_tool`")
     assert top_index < a_index < z_index
     assert "When the user's request involves top, or SQL:" in section
-    assert "prefer the `top_tool` tool (priority 90)." in section
+    assert "prefer the `top_tool` tool." in section
+    assert "priority" not in section
+
+
+def test_deferred_routing_hints_use_tool_search_promotion():
+    routed = _routed_tool("postgres_query", priority=100, keywords=["订单"])
+    _, deferred_setup = assemble_deferred_tools([routed], enabled=True)
+
+    section = get_mcp_routing_hints_prompt_section([routed], deferred_names=deferred_setup.deferred_names)
+
+    assert "When the user's request involves 订单:" in section
+    assert "use `tool_search` to fetch `postgres_query`, then prefer that MCP tool." in section
+    assert "prefer the `postgres_query` tool." not in section
 
 
 def test_apply_prompt_template_places_routing_hints_after_deferred_tools(monkeypatch):
@@ -118,7 +129,6 @@ def test_routing_metadata_does_not_change_openai_function_schema():
             "mode": "prefer",
             "priority": 100,
             "keywords": ["订单"],
-            "auto_promote_top_k": None,
         },
     )
     after = convert_to_openai_function(tool)

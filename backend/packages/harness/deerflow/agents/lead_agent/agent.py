@@ -546,7 +546,7 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
     if non_interactive:
         filtered = [tool for tool in filtered if tool.name not in _NON_INTERACTIVE_DISABLED_TOOL_NAMES]
     final_tools, setup = assemble_deferred_tools(filtered, enabled=resolved_app_config.tool_search.enabled)
-    mcp_routing_hints_section = get_mcp_routing_hints_prompt_section(filtered)
+    mcp_routing_hints_section = get_mcp_routing_hints_prompt_section(filtered, deferred_names=setup.deferred_names)
     if skill_setup.describe_skill_tool:
         final_tools.append(skill_setup.describe_skill_tool)
     return create_agent(

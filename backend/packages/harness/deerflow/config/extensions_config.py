@@ -28,11 +28,6 @@ class McpRoutingConfig(BaseModel):
         default_factory=list,
         description="Operator-authored keywords that describe when this MCP tool should be preferred.",
     )
-    auto_promote_top_k: int | None = Field(
-        default=None,
-        ge=0,
-        description="Reserved for future auto-promotion support when tool_search is enabled.",
-    )
     model_config = ConfigDict(extra="forbid")
 
     @field_validator("priority")

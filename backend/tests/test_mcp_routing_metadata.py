@@ -37,7 +37,6 @@ def test_tag_mcp_routing_preserves_existing_mcp_flag():
             "mode": "prefer",
             "priority": 80,
             "keywords": ["订单"],
-            "auto_promote_top_k": None,
         },
     )
 
@@ -53,7 +52,6 @@ def test_get_mcp_routing_returns_none_for_non_mcp_tools():
             "mode": "prefer",
             "priority": 80,
             "keywords": ["订单"],
-            "auto_promote_top_k": None,
         },
     )
 
@@ -68,7 +66,6 @@ def test_get_mcp_routing_returns_none_for_off_mode():
             "mode": "off",
             "priority": 80,
             "keywords": ["订单"],
-            "auto_promote_top_k": None,
         },
     )
 
@@ -76,7 +73,8 @@ def test_get_mcp_routing_returns_none_for_off_mode():
 
 
 @pytest.mark.asyncio
-async def test_get_mcp_tools_tags_effective_routing_metadata():
+@pytest.mark.parametrize("transport", ["http", "stdio"])
+async def test_get_mcp_tools_tags_effective_routing_metadata(transport: str):
     from deerflow.mcp.tools import get_mcp_tools
 
     tool = _tool("postgres_query")
@@ -84,8 +82,9 @@ async def test_get_mcp_tools_tags_effective_routing_metadata():
         {
             "mcpServers": {
                 "postgres": {
-                    "type": "http",
+                    "type": transport,
                     "url": "http://localhost:8000/mcp",
+                    "command": "npx",
                     "routing": {
                         "mode": "prefer",
                         "priority": 50,
@@ -108,7 +107,7 @@ async def test_get_mcp_tools_tags_effective_routing_metadata():
         patch("deerflow.mcp.tools.ExtensionsConfig.from_file", return_value=extensions_config),
         patch(
             "deerflow.mcp.tools.build_servers_config",
-            return_value={"postgres": {"transport": "http", "url": "http://localhost:8000/mcp"}},
+            return_value={"postgres": {"transport": transport, "url": "http://localhost:8000/mcp", "command": "npx"}},
         ),
         patch("deerflow.mcp.tools.get_initial_oauth_headers", return_value={}),
         patch("deerflow.mcp.tools.build_oauth_tool_interceptor", return_value=None),

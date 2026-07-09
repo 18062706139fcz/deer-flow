@@ -60,7 +60,6 @@ def test_tool_routing_override_only_replaces_explicit_fields():
         "mode": "prefer",
         "priority": 100,
         "keywords": ["database", "table"],
-        "auto_promote_top_k": None,
     }
 
 

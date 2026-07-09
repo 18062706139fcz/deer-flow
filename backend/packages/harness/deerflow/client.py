@@ -257,7 +257,7 @@ class DeerFlowClient:
 
         tools = self._get_tools(model_name=model_name, subagent_enabled=subagent_enabled)
         final_tools, deferred_setup = assemble_deferred_tools(tools, enabled=self._app_config.tool_search.enabled)
-        mcp_routing_hints_section = get_mcp_routing_hints_prompt_section(tools)
+        mcp_routing_hints_section = get_mcp_routing_hints_prompt_section(tools, deferred_names=deferred_setup.deferred_names)
 
         # Wire deferred skill discovery — mirrors agent.py so config flag works on both paths.
         skills_list = get_enabled_skills_for_config(self._app_config)
