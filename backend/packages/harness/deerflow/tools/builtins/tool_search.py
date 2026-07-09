@@ -208,6 +208,9 @@ def assemble_deferred_tools(filtered_tools: list[BaseTool], *, enabled: bool) ->
 
 
 def _routing_priority(value: Any) -> int:
+    # Produces the typed priority stored in the routing index. McpRoutingMiddleware
+    # ._normalize_index re-parses this defensively (it is built to accept arbitrary
+    # serialized data), so keep the two coercion rules in sync if either changes.
     try:
         return int(value)
     except (TypeError, ValueError):
@@ -215,6 +218,8 @@ def _routing_priority(value: Any) -> int:
 
 
 def _routing_keywords(value: Any) -> list[str]:
+    # See _routing_priority: McpRoutingMiddleware._normalize_index re-normalizes
+    # keywords defensively; keep both coercion rules aligned.
     if not isinstance(value, list):
         return []
     return [keyword for keyword in (str(item).strip() for item in value) if keyword]

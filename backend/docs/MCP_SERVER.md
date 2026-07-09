@@ -57,7 +57,11 @@ top-level `config.yaml -> tool_search.auto_promote_top_k` setting.
   When `tool_search.enabled=true`, priority also orders auto-promote matches.
 - `routing.keywords`: operator-authored terms that describe when to prefer the
   MCP tool. Empty keywords are allowed but do not emit a hint line and do not
-  trigger auto-promotion.
+  trigger auto-promotion. Auto-promote matching is a case-insensitive substring
+  test against the latest user message (not token/word-boundary matching), so
+  prefer distinctive keywords — a short term like `api` also matches `rapid`.
+  Over-matching only exposes an extra tool schema (soft/additive), never
+  disables other tools.
 - `tools.<original_tool_name>.routing`: overrides only the fields explicitly
   set for that tool. The key is the MCP server's original tool name, before the
   `<server>_` prefix added for model binding. If the server-level

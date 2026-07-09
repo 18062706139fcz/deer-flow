@@ -47,6 +47,11 @@ class McpRoutingMiddleware(AgentMiddleware[AgentState]):
 
     @staticmethod
     def _normalize_index(routing_index: McpRoutingIndex) -> dict[str, tuple[int, tuple[str, ...]]]:
+        # Defensive re-normalization: this middleware is built to accept arbitrary
+        # serialized routing data, not only the output of
+        # tool_search._routing_priority / _routing_keywords. In practice it is a
+        # no-op over the builder's output; keep the coercion rules aligned with
+        # those two helpers if either side changes.
         normalized: dict[str, tuple[int, tuple[str, ...]]] = {}
         for raw_name, raw_entry in routing_index.items():
             name = str(raw_name)

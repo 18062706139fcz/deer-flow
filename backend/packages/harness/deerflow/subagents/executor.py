@@ -441,12 +441,10 @@ class SubagentExecutor:
         if deferred_setup is not None and deferred_setup.deferred_names:
             from deerflow.tools.builtins.tool_search import build_mcp_routing_middleware
 
-            tool_search_config = getattr(app_config, "tool_search", None)
-            auto_promote_top_k = getattr(tool_search_config, "auto_promote_top_k", 3)
             mcp_routing_middleware = build_mcp_routing_middleware(
                 tools if tools is not None else self.tools,
                 deferred_setup,
-                top_k=auto_promote_top_k,
+                top_k=app_config.tool_search.auto_promote_top_k,
             )
         middleware_kwargs = {
             "app_config": app_config,
