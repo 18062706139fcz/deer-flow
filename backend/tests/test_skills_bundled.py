@@ -13,7 +13,15 @@ import pytest
 from deerflow.skills.validation import _validate_skill_frontmatter
 
 SKILLS_PUBLIC_DIR = Path(__file__).resolve().parents[2] / "skills" / "public"
-BUNDLED_SKILL_DIRS = sorted(p.parent for p in SKILLS_PUBLIC_DIR.rglob("SKILL.md"))
+
+
+def _is_eval_fixture_skill_md(path: Path) -> bool:
+    relative = path.relative_to(SKILLS_PUBLIC_DIR)
+    parts = relative.parts
+    return len(parts) >= 5 and parts[1] == "evals" and parts[2] == "fixtures"
+
+
+BUNDLED_SKILL_DIRS = sorted(p.parent for p in SKILLS_PUBLIC_DIR.rglob("SKILL.md") if not _is_eval_fixture_skill_md(p))
 
 
 @pytest.mark.parametrize(

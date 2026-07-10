@@ -248,7 +248,7 @@ def _scan_archive_member_metadata(info: zipfile.ZipInfo, normalized: str) -> lis
     if _is_symlink_member(info):
         findings.append(_finding("package-symlink", file=normalized, evidence=info.filename))
     parts = PurePosixPath(normalized).parts
-    if parts and parts[-1] == "SKILL.md" and len(parts) > 2:
+    if parts and parts[-1] == "SKILL.md" and len(parts) > 2 and not _is_eval_fixture_skill_md(PurePosixPath(normalized)):
         findings.append(_finding("package-nested-skill-md", file=normalized, evidence=normalized))
     return findings
 
@@ -256,7 +256,7 @@ def _scan_archive_member_metadata(info: zipfile.ZipInfo, normalized: str) -> lis
 def _scan_file_package_properties(rel_path: str, file_bytes: bytes, file_size: int) -> list[SecurityFinding]:
     findings: list[SecurityFinding] = []
     path = PurePosixPath(rel_path)
-    if path.name == "SKILL.md" and len(path.parts) > 1:
+    if path.name == "SKILL.md" and len(path.parts) > 1 and not _is_eval_fixture_skill_md(path):
         findings.append(_finding("package-nested-skill-md", file=rel_path, evidence=rel_path))
     if file_size > MAX_FILE_BYTES:
         findings.append(_finding("package-oversized-file", file=rel_path, evidence=f"{file_size} bytes"))
@@ -269,6 +269,14 @@ def _scan_file_package_properties(rel_path: str, file_bytes: bytes, file_size: i
     if _is_executable_binary(file_bytes[:8]):
         findings.append(_finding("package-executable-binary", file=rel_path, evidence=_binary_magic_evidence(file_bytes[:8])))
     return findings
+
+
+def _is_eval_fixture_skill_md(path: PurePosixPath) -> bool:
+    parts = path.parts
+    for index, part in enumerate(parts):
+        if part == "evals" and len(parts) > index + 3:
+            return parts[index + 1] == "fixtures" and parts[-1] == "SKILL.md"
+    return False
 
 
 def _scan_text_file(rel_path: str, text: str) -> list[SecurityFinding]:
