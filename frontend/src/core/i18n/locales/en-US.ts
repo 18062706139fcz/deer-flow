@@ -122,6 +122,8 @@ export const enUS: Translations = {
     inputPolishFailed: "Failed to polish input.",
     inputPolishUndo: "Undo polish",
     inputPolishCancel: "Cancel polishing",
+    voiceInputStartLabel: "Dictate with voice",
+    voiceInputStopLabel: "Stop voice input",
     voiceInputStart:
       "Dictate with voice. DeerFlow receives only transcribed text; audio is handled by your browser or system speech service.",
     voiceInputStop: "Stop voice input",

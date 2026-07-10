@@ -62,6 +62,19 @@ export type SpeechRecognitionResultListLike = {
   length: number;
 };
 
+const DEFAULT_SPEECH_RECOGNITION_LANGUAGE = "en-US";
+const SPEECH_RECOGNITION_LANGUAGE_ALLOWLIST = new Set([
+  "de",
+  "en",
+  "es",
+  "fr",
+  "it",
+  "ja",
+  "ko",
+  "pt",
+  "zh",
+]);
+
 export function getSpeechRecognitionConstructor(
   value: unknown = globalThis,
 ): SpeechRecognitionConstructor | null {
@@ -72,10 +85,22 @@ export function getSpeechRecognitionConstructor(
 }
 
 export function getSpeechRecognitionLanguage(locale: string): string {
-  if (locale.toLowerCase().startsWith("zh")) {
+  const normalized = normalizeBCP47Locale(locale);
+  const language = normalized.split("-")[0]?.toLowerCase();
+
+  if (language === "zh") {
     return "zh-CN";
   }
-  return "en-US";
+  if (language && SPEECH_RECOGNITION_LANGUAGE_ALLOWLIST.has(language)) {
+    return normalized;
+  }
+  return DEFAULT_SPEECH_RECOGNITION_LANGUAGE;
+}
+
+export function shouldRestartSpeechRecognition(
+  lastError: SpeechRecognitionErrorKind | null,
+): boolean {
+  return lastError === null || lastError === "no_speech";
 }
 
 export function readSpeechRecognitionTranscript(
@@ -140,5 +165,17 @@ export function mapSpeechRecognitionError(
       return "no_speech";
     default:
       return "unknown";
+  }
+}
+
+function normalizeBCP47Locale(locale: string): string {
+  const trimmed = locale.trim();
+  if (!trimmed) {
+    return DEFAULT_SPEECH_RECOGNITION_LANGUAGE;
+  }
+  try {
+    return Intl.getCanonicalLocales(trimmed)[0] ?? trimmed;
+  } catch {
+    return DEFAULT_SPEECH_RECOGNITION_LANGUAGE;
   }
 }

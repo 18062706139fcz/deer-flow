@@ -6,6 +6,7 @@ import {
   getSpeechRecognitionLanguage,
   mapSpeechRecognitionError,
   readSpeechRecognitionTranscript,
+  shouldRestartSpeechRecognition,
   type SpeechRecognitionConstructor,
 } from "@/core/voice-input/speech-recognition";
 
@@ -34,7 +35,11 @@ describe("speech recognition helpers", () => {
     expect(getSpeechRecognitionLanguage("zh-CN")).toBe("zh-CN");
     expect(getSpeechRecognitionLanguage("zh-Hans")).toBe("zh-CN");
     expect(getSpeechRecognitionLanguage("en-US")).toBe("en-US");
-    expect(getSpeechRecognitionLanguage("fr-FR")).toBe("en-US");
+    expect(getSpeechRecognitionLanguage("en-GB")).toBe("en-GB");
+    expect(getSpeechRecognitionLanguage("fr-FR")).toBe("fr-FR");
+    expect(getSpeechRecognitionLanguage("ja-JP")).toBe("ja-JP");
+    expect(getSpeechRecognitionLanguage("xx-YY")).toBe("en-US");
+    expect(getSpeechRecognitionLanguage("not a locale")).toBe("en-US");
   });
 
   it("combines final and interim transcripts with whitespace cleanup", () => {
@@ -78,6 +83,15 @@ describe("speech recognition helpers", () => {
     expect(mapSpeechRecognitionError("no-speech")).toBe("no_speech");
     expect(mapSpeechRecognitionError("aborted")).toBe("cancelled");
     expect(mapSpeechRecognitionError("bad-grammar")).toBe("unknown");
+  });
+
+  it("restarts only after browser auto-end conditions", () => {
+    expect(shouldRestartSpeechRecognition(null)).toBe(true);
+    expect(shouldRestartSpeechRecognition("no_speech")).toBe(true);
+    expect(shouldRestartSpeechRecognition("cancelled")).toBe(false);
+    expect(shouldRestartSpeechRecognition("permission_denied")).toBe(false);
+    expect(shouldRestartSpeechRecognition("network")).toBe(false);
+    expect(shouldRestartSpeechRecognition("unknown")).toBe(false);
   });
 });
 

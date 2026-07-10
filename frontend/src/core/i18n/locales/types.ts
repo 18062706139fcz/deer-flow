@@ -104,6 +104,8 @@ export interface Translations {
     inputPolishFailed: string;
     inputPolishUndo: string;
     inputPolishCancel: string;
+    voiceInputStartLabel: string;
+    voiceInputStopLabel: string;
     voiceInputStart: string;
     voiceInputStop: string;
     voiceInputListening: string;
