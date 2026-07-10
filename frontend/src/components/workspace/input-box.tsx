@@ -8,10 +8,12 @@ import {
   GraduationCapIcon,
   LightbulbIcon,
   Loader2Icon,
+  MicIcon,
   PaperclipIcon,
   PlusIcon,
   RocketIcon,
   SparklesIcon,
+  SquareIcon,
   TargetIcon,
   Undo2Icon,
   XIcon,
@@ -89,6 +91,15 @@ import {
   type UploadLimits,
   type UploadLimitViolation,
 } from "@/core/uploads";
+import {
+  appendSpeechTranscript,
+  getSpeechRecognitionConstructor,
+  getSpeechRecognitionLanguage,
+  mapSpeechRecognitionError,
+  readSpeechRecognitionTranscript,
+  type BrowserSpeechRecognition,
+  type SpeechRecognitionErrorKind,
+} from "@/core/voice-input/speech-recognition";
 import { isIMEComposing } from "@/lib/ime";
 import { cn } from "@/lib/utils";
 
@@ -326,6 +337,8 @@ export function InputBox({
     controller: null,
     sequence: 0,
   });
+  const voiceRecognitionRef = useRef<BrowserSpeechRecognition | null>(null);
+  const voiceBaseTextRef = useRef("");
   const promptHistoryIndexRef = useRef<number | null>(null);
   const promptHistoryDraftRef = useRef("");
 
@@ -336,6 +349,7 @@ export function InputBox({
   const [followupsHidden, setFollowupsHidden] = useState(false);
   const [followupsLoading, setFollowupsLoading] = useState(false);
   const [polishingInput, setPolishingInput] = useState(false);
+  const [voiceListening, setVoiceListening] = useState(false);
   const [inputPolishUndo, setInputPolishUndo] = useState<{
     originalText: string;
     rewrittenText: string;
@@ -349,6 +363,35 @@ export function InputBox({
   const lastGeneratedForAiIdRef = useRef<string | null>(null);
   const wasStreamingRef = useRef(false);
   const messagesRef = useRef(thread.messages);
+
+  const cleanupVoiceRecognition = useCallback(
+    (recognition: BrowserSpeechRecognition | null) => {
+      if (!recognition) {
+        return;
+      }
+      recognition.onend = null;
+      recognition.onerror = null;
+      recognition.onresult = null;
+      if (voiceRecognitionRef.current === recognition) {
+        voiceRecognitionRef.current = null;
+      }
+      setVoiceListening(false);
+    },
+    [],
+  );
+
+  const abortVoiceInput = useCallback(() => {
+    const recognition = voiceRecognitionRef.current;
+    if (!recognition) {
+      return;
+    }
+    cleanupVoiceRecognition(recognition);
+    try {
+      recognition.abort();
+    } catch {
+      // Browser implementations can throw when the recognizer already ended.
+    }
+  }, [cleanupVoiceRecognition]);
 
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [pendingSuggestion, setPendingSuggestion] = useState<string | null>(
@@ -852,6 +895,7 @@ export function InputBox({
         toast.info(t.inputBox.pleaseWaitStreaming);
         return Promise.reject(new Error("streaming"));
       }
+      abortVoiceInput();
       const messageWithSlashSkill = selectedSlashSkill
         ? {
             ...message,
@@ -896,6 +940,7 @@ export function InputBox({
       }
     },
     [
+      abortVoiceInput,
       handleCompactCommand,
       handleGoalCommand,
       onStop,
@@ -1003,6 +1048,140 @@ export function InputBox({
       (status === "streaming" ||
         slashSkillQuery !== null ||
         !canPolishInput(textInput.value ?? "")));
+  const speechRecognitionConstructor = useMemo(
+    () =>
+      typeof window === "undefined"
+        ? null
+        : getSpeechRecognitionConstructor(window),
+    [],
+  );
+  const voiceInputSupported = speechRecognitionConstructor !== null;
+
+  const getVoiceInputErrorMessage = useCallback(
+    (kind: SpeechRecognitionErrorKind) => {
+      switch (kind) {
+        case "permission_denied":
+          return t.inputBox.voiceInputPermissionDenied;
+        case "microphone_unavailable":
+          return t.inputBox.voiceInputMicrophoneUnavailable;
+        case "unsupported_language":
+          return t.inputBox.voiceInputUnsupportedLanguage;
+        case "network":
+          return t.inputBox.voiceInputNetworkError;
+        case "no_speech":
+          return t.inputBox.voiceInputNoSpeech;
+        case "cancelled":
+          return null;
+        default:
+          return t.inputBox.voiceInputFailed;
+      }
+    },
+    [
+      t.inputBox.voiceInputFailed,
+      t.inputBox.voiceInputMicrophoneUnavailable,
+      t.inputBox.voiceInputNetworkError,
+      t.inputBox.voiceInputNoSpeech,
+      t.inputBox.voiceInputPermissionDenied,
+      t.inputBox.voiceInputUnsupportedLanguage,
+    ],
+  );
+
+  const stopVoiceInput = useCallback(() => {
+    const recognition = voiceRecognitionRef.current;
+    if (!recognition) {
+      return;
+    }
+    try {
+      recognition.stop();
+    } catch {
+      cleanupVoiceRecognition(recognition);
+    }
+  }, [cleanupVoiceRecognition]);
+
+  const toggleVoiceInput = useCallback(() => {
+    if (voiceListening) {
+      stopVoiceInput();
+      return;
+    }
+    if (composerLocked) {
+      return;
+    }
+    if (!speechRecognitionConstructor) {
+      toast.error(t.inputBox.voiceInputUnsupported);
+      return;
+    }
+
+    abortInputPolishRequest();
+    setInputPolishUndo(null);
+    promptHistoryIndexRef.current = null;
+    promptHistoryDraftRef.current = "";
+
+    const recognition = new speechRecognitionConstructor();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = getSpeechRecognitionLanguage(locale);
+    recognition.maxAlternatives = 1;
+    voiceBaseTextRef.current = textInput.value ?? "";
+    voiceRecognitionRef.current = recognition;
+
+    recognition.onresult = (event) => {
+      const transcript = readSpeechRecognitionTranscript(event.results).text;
+      const nextValue = appendSpeechTranscript(
+        voiceBaseTextRef.current,
+        transcript,
+      );
+      textInput.setInput(nextValue);
+    };
+    recognition.onerror = (event) => {
+      const message = getVoiceInputErrorMessage(
+        mapSpeechRecognitionError(event.error),
+      );
+      if (message) {
+        toast.error(message);
+      }
+    };
+    recognition.onend = () => {
+      cleanupVoiceRecognition(recognition);
+    };
+
+    setVoiceListening(true);
+    try {
+      recognition.start();
+      requestAnimationFrame(() => {
+        if (selectedSlashSkill) {
+          focusContentEditableEnd(inlineSkillTextRef.current);
+        } else {
+          textareaRef.current?.focus();
+        }
+      });
+    } catch {
+      cleanupVoiceRecognition(recognition);
+      toast.error(t.inputBox.voiceInputFailed);
+    }
+  }, [
+    abortInputPolishRequest,
+    cleanupVoiceRecognition,
+    composerLocked,
+    getVoiceInputErrorMessage,
+    locale,
+    selectedSlashSkill,
+    speechRecognitionConstructor,
+    stopVoiceInput,
+    t.inputBox.voiceInputFailed,
+    t.inputBox.voiceInputUnsupported,
+    textInput,
+    voiceListening,
+  ]);
+
+  useEffect(() => {
+    if (composerLocked && voiceListening) {
+      stopVoiceInput();
+    }
+  }, [composerLocked, stopVoiceInput, voiceListening]);
+
+  useEffect(() => {
+    return () => abortVoiceInput();
+  }, [abortVoiceInput, threadId]);
 
   useEffect(() => {
     setSkillSuggestionIndex(0);
@@ -1282,19 +1461,25 @@ export function InputBox({
   );
 
   const handlePromptTextareaChange = useCallback(() => {
+    if (voiceListening) {
+      abortVoiceInput();
+    }
     abortInputPolishRequest();
     setInputPolishUndo(null);
     promptHistoryIndexRef.current = null;
     promptHistoryDraftRef.current = "";
-  }, [abortInputPolishRequest]);
+  }, [abortInputPolishRequest, abortVoiceInput, voiceListening]);
 
   const updateInlineSkillTextInput = useCallback(
     (element: HTMLElement) => {
+      if (voiceListening) {
+        abortVoiceInput();
+      }
       promptHistoryIndexRef.current = null;
       promptHistoryDraftRef.current = "";
       textInput.setInput(element.textContent ?? "");
     },
-    [textInput],
+    [abortVoiceInput, textInput, voiceListening],
   );
 
   useEffect(() => {
@@ -1731,6 +1916,12 @@ export function InputBox({
               disabled={composerLocked}
               uploadLimits={uploadLimits}
             />
+            <VoiceInputButton
+              disabled={composerLocked}
+              listening={voiceListening}
+              supported={voiceInputSupported}
+              onToggle={toggleVoiceInput}
+            />
             <Tooltip
               content={
                 polishingInput
@@ -2150,6 +2341,50 @@ export function InputBox({
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+function VoiceInputButton({
+  disabled,
+  listening,
+  supported,
+  onToggle,
+}: {
+  disabled?: boolean;
+  listening: boolean;
+  supported: boolean;
+  onToggle: () => void;
+}) {
+  const { t } = useI18n();
+  const tooltipContent = !supported
+    ? t.inputBox.voiceInputUnsupported
+    : listening
+      ? t.inputBox.voiceInputListening
+      : t.inputBox.voiceInputStart;
+  const label = listening
+    ? t.inputBox.voiceInputStop
+    : t.inputBox.voiceInputStart;
+
+  return (
+    <Tooltip content={<span className="block max-w-72">{tooltipContent}</span>}>
+      <PromptInputButton
+        aria-label={label}
+        aria-pressed={listening}
+        className={cn(
+          "px-2!",
+          listening && "text-primary bg-primary/10 hover:bg-primary/15",
+        )}
+        data-testid="voice-input-button"
+        disabled={(disabled ?? false) || !supported}
+        onClick={onToggle}
+      >
+        {listening ? (
+          <SquareIcon className="size-3 fill-current" />
+        ) : (
+          <MicIcon className="size-3" />
+        )}
+      </PromptInputButton>
+    </Tooltip>
   );
 }
 
