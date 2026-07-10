@@ -10,7 +10,7 @@ class NamedTool(Protocol):
     name: str
 
 
-SKILL_LOADING_TOOL_NAMES = frozenset({"read_file"})
+SKILL_LOADING_TOOL_NAMES = frozenset({"read_file", "review_skill_package"})
 
 
 def allowed_tool_names_for_skills(skills: list[Skill]) -> set[str] | None:
