@@ -61,10 +61,13 @@ def test_main_reviews_changed_public_skill_and_skips_deleted_skill_md(
     capsys,
 ) -> None:
     _write_skill(tmp_path, "alpha")
+    _write_skill(tmp_path, "alpha/evals/fixtures/blocked")
     diff_output = b"\0".join(
         [
             b"M",
             b"skills/public/alpha/SKILL.md",
+            b"M",
+            b"skills/public/alpha/evals/fixtures/blocked/SKILL.md",
             b"D",
             b"skills/public/deleted/SKILL.md",
             b"M",

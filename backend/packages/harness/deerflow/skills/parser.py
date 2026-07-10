@@ -38,6 +38,7 @@ def _format_yaml_error(skill_file: Path, exc: yaml.YAMLError, source: str) -> st
 
     return "\n".join(lines)
 
+
 def parse_allowed_tools(raw: object, skill_file: Path) -> tuple[str, ...] | None:
     """Parse the optional allowed-tools frontmatter field.
 

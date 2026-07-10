@@ -165,7 +165,12 @@ def select_skill_packages(changes: Sequence[ChangedPath], repo_root: Path) -> li
 
 def is_public_skill_md(path: PurePosixPath) -> bool:
     parts = path.parts
-    return len(parts) >= 4 and parts[0] == "skills" and parts[1] == "public" and parts[-1] == "SKILL.md"
+    return len(parts) >= 4 and parts[0] == "skills" and parts[1] == "public" and parts[-1] == "SKILL.md" and not is_eval_fixture_skill_md(path)
+
+
+def is_eval_fixture_skill_md(path: PurePosixPath) -> bool:
+    parts = path.parts
+    return len(parts) >= 7 and parts[3] == "evals" and parts[4] == "fixtures"
 
 
 def run_review(package: Path, repo_root: Path, python_executable: str) -> int:
