@@ -11,7 +11,12 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-PUBLIC_SKILL_MD_PATHSPEC = ":(glob)skills/public/**/SKILL.md"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+HARNESS_PATH = REPO_ROOT / "backend" / "packages" / "harness"
+if HARNESS_PATH.is_dir():
+    sys.path.insert(0, str(HARNESS_PATH))
+
+PUBLIC_SKILL_PACKAGE_PATHSPEC = ":(glob)skills/public/**"
 EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
 
@@ -30,20 +35,36 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"[skill-review] Diff: git diff {' '.join(diff_args)}")
 
     result = subprocess.run(
-        ["git", "diff", *diff_args, "--", PUBLIC_SKILL_MD_PATHSPEC],
+        ["git", "diff", *diff_args, "--", PUBLIC_SKILL_PACKAGE_PATHSPEC],
         cwd=repo_root,
         capture_output=True,
         check=False,
     )
     if result.returncode != 0:
-        sys.stderr.write("[skill-review] Failed to collect changed SKILL.md files.\n")
+        fallback_args = build_force_push_fallback_diff_args(args)
+        if fallback_args is None:
+            sys.stderr.write("[skill-review] Failed to collect changed public skill files.\n")
+            sys.stderr.write(result.stderr.decode("utf-8", errors="replace"))
+            return result.returncode
+        sys.stderr.write("[skill-review] Primary push diff failed; falling back to empty-tree comparison.\n")
         sys.stderr.write(result.stderr.decode("utf-8", errors="replace"))
-        return result.returncode
+        diff_args = fallback_args
+        print(f"[skill-review] Fallback diff: git diff {' '.join(diff_args)}")
+        result = subprocess.run(
+            ["git", "diff", *diff_args, "--", PUBLIC_SKILL_PACKAGE_PATHSPEC],
+            cwd=repo_root,
+            capture_output=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            sys.stderr.write("[skill-review] Failed to collect changed public skill files.\n")
+            sys.stderr.write(result.stderr.decode("utf-8", errors="replace"))
+            return result.returncode
 
     changes = parse_name_status(result.stdout)
     packages = select_skill_packages(changes, repo_root)
     if not packages:
-        print("[skill-review] No changed public SKILL.md files; skipping review.")
+        print("[skill-review] No changed public skill package files; skipping review.")
         return 0
 
     print(f"[skill-review] Reviewing {len(packages)} changed public skill package(s).")
@@ -112,6 +133,12 @@ def build_diff_args(args: argparse.Namespace) -> list[str]:
     return ["--name-status", "-z", before, after]
 
 
+def build_force_push_fallback_diff_args(args: argparse.Namespace) -> list[str] | None:
+    if not args.before or not args.after or is_zero_sha(str(args.before)):
+        return None
+    return ["--name-status", "-z", EMPTY_TREE_SHA, str(args.after)]
+
+
 def parse_name_status(output: bytes) -> list[ChangedPath]:
     parts = [part for part in output.split(b"\0") if part]
     changes: list[ChangedPath] = []
@@ -138,20 +165,18 @@ def select_skill_packages(changes: Sequence[ChangedPath], repo_root: Path) -> li
     seen: set[PurePosixPath] = set()
 
     for change in changes:
-        if not is_public_skill_md(change.path):
+        if not is_public_skill_package_path(change.path):
             continue
 
-        rel_skill_md = change.path
-        if change.status.startswith("D"):
-            print(f"[skill-review] Skipping deleted SKILL.md: {rel_skill_md}")
+        if change.status.startswith("D") and is_public_skill_md(change.path):
+            print(f"[skill-review] Skipping deleted SKILL.md: {change.path}")
             continue
 
-        skill_md = repo_root / rel_skill_md
-        if not skill_md.is_file():
-            print(f"[skill-review] Skipping missing SKILL.md: {rel_skill_md}")
+        package_rel = find_public_skill_package(change.path, repo_root)
+        if package_rel is None:
+            print(f"[skill-review] Skipping path outside public skill package: {change.path}")
             continue
 
-        package_rel = rel_skill_md.parent
         if package_rel in seen:
             print(f"[skill-review] Already queued package: {package_rel}")
             continue
@@ -165,12 +190,34 @@ def select_skill_packages(changes: Sequence[ChangedPath], repo_root: Path) -> li
 
 def is_public_skill_md(path: PurePosixPath) -> bool:
     parts = path.parts
-    return len(parts) >= 4 and parts[0] == "skills" and parts[1] == "public" and parts[-1] == "SKILL.md" and not is_eval_fixture_skill_md(path)
+    return len(parts) >= 4 and parts[0] == "skills" and parts[1] == "public" and parts[-1] == "SKILL.md" and not _is_eval_fixture_skill_md(path)
 
 
-def is_eval_fixture_skill_md(path: PurePosixPath) -> bool:
+def is_public_skill_package_path(path: PurePosixPath) -> bool:
     parts = path.parts
-    return len(parts) >= 7 and parts[3] == "evals" and parts[4] == "fixtures"
+    return len(parts) >= 3 and parts[0] == "skills" and parts[1] == "public"
+
+
+def find_public_skill_package(path: PurePosixPath, repo_root: Path) -> PurePosixPath | None:
+    if not is_public_skill_package_path(path):
+        return None
+
+    current = path.parent if path.name else path
+    while len(current.parts) >= 3:
+        skill_md_rel = current / "SKILL.md"
+        if not _is_eval_fixture_skill_md(skill_md_rel) and (repo_root / skill_md_rel).is_file():
+            return current
+        if len(current.parts) == 3:
+            return current
+        current = current.parent
+
+    return None
+
+
+def _is_eval_fixture_skill_md(path: PurePosixPath) -> bool:
+    from deerflow.skills.package_paths import is_eval_fixture_skill_md
+
+    return is_eval_fixture_skill_md(path)
 
 
 def run_review(package: Path, repo_root: Path, python_executable: str) -> int:
@@ -220,7 +267,7 @@ def review_env(repo_root: Path) -> dict[str, str]:
 
 
 def is_zero_sha(value: str) -> bool:
-    return bool(value) and set(value) == {"0"}
+    return len(value) == 40 and set(value) == {"0"}
 
 
 if __name__ == "__main__":

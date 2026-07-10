@@ -10,18 +10,13 @@ from pathlib import Path
 
 import pytest
 
+from deerflow.skills.package_paths import is_eval_fixture_skill_md
 from deerflow.skills.validation import _validate_skill_frontmatter
 
 SKILLS_PUBLIC_DIR = Path(__file__).resolve().parents[2] / "skills" / "public"
 
 
-def _is_eval_fixture_skill_md(path: Path) -> bool:
-    relative = path.relative_to(SKILLS_PUBLIC_DIR)
-    parts = relative.parts
-    return len(parts) >= 5 and parts[1] == "evals" and parts[2] == "fixtures"
-
-
-BUNDLED_SKILL_DIRS = sorted(p.parent for p in SKILLS_PUBLIC_DIR.rglob("SKILL.md") if not _is_eval_fixture_skill_md(p))
+BUNDLED_SKILL_DIRS = sorted(p.parent for p in SKILLS_PUBLIC_DIR.rglob("SKILL.md") if not is_eval_fixture_skill_md(p.relative_to(SKILLS_PUBLIC_DIR)))
 
 
 @pytest.mark.parametrize(

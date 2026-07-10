@@ -26,7 +26,7 @@ def test_main_skips_successfully_when_no_public_skill_changed(tmp_path: Path, mo
             "-z",
             "base...head",
             "--",
-            runner.PUBLIC_SKILL_MD_PATHSPEC,
+            runner.PUBLIC_SKILL_PACKAGE_PATHSPEC,
         ]
         assert kwargs["cwd"] == tmp_path
         assert kwargs["capture_output"] is True
@@ -34,7 +34,7 @@ def test_main_skips_successfully_when_no_public_skill_changed(tmp_path: Path, mo
         return _completed(command)
 
     def fail_review(*args, **kwargs):
-        raise AssertionError("review should not run when no public SKILL.md changed")
+        raise AssertionError("review should not run when no public skill package file changed")
 
     monkeypatch.setattr(runner.subprocess, "run", fake_run)
     monkeypatch.setattr(runner, "run_review", fail_review)
@@ -52,7 +52,7 @@ def test_main_skips_successfully_when_no_public_skill_changed(tmp_path: Path, mo
 
     output = capsys.readouterr().out
     assert exit_code == 0
-    assert "No changed public SKILL.md files; skipping review." in output
+    assert "No changed public skill package files; skipping review." in output
 
 
 def test_main_reviews_changed_public_skill_and_skips_deleted_skill_md(
@@ -111,6 +111,77 @@ def test_main_reviews_changed_public_skill_and_skips_deleted_skill_md(
     assert "All changed public skill packages passed review." in output
 
 
+def test_main_reviews_package_when_only_support_file_changed(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    _write_skill(tmp_path, "alpha")
+    diff_output = b"M\0skills/public/alpha/references/guide.md\0"
+    reviewed: list[str] = []
+
+    def fake_git_diff(command, **kwargs):
+        assert command[-1] == runner.PUBLIC_SKILL_PACKAGE_PATHSPEC
+        return _completed(command, stdout=diff_output)
+
+    def fake_review(package: Path, repo_root: Path, python_executable: str) -> int:
+        reviewed.append(package.relative_to(repo_root).as_posix())
+        return 0
+
+    monkeypatch.setattr(runner.subprocess, "run", fake_git_diff)
+    monkeypatch.setattr(runner, "run_review", fake_review)
+
+    exit_code = runner.main(
+        [
+            "--base-ref",
+            "base",
+            "--head-ref",
+            "head",
+            "--repo-root",
+            str(tmp_path),
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert reviewed == ["skills/public/alpha"]
+    assert "Queued package: skills/public/alpha" in output
+
+
+def test_main_maps_eval_fixture_changes_to_owner_package(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _write_skill(tmp_path, "skill-reviewer")
+    _write_skill(tmp_path, "skill-reviewer/evals/fixtures/blocked")
+    diff_output = b"M\0skills/public/skill-reviewer/evals/fixtures/blocked/SKILL.md\0"
+    reviewed: list[str] = []
+
+    def fake_git_diff(command, **kwargs):
+        return _completed(command, stdout=diff_output)
+
+    def fake_review(package: Path, repo_root: Path, python_executable: str) -> int:
+        reviewed.append(package.relative_to(repo_root).as_posix())
+        return 0
+
+    monkeypatch.setattr(runner.subprocess, "run", fake_git_diff)
+    monkeypatch.setattr(runner, "run_review", fake_review)
+
+    exit_code = runner.main(
+        [
+            "--base-ref",
+            "base",
+            "--head-ref",
+            "head",
+            "--repo-root",
+            str(tmp_path),
+        ]
+    )
+
+    assert exit_code == 0
+    assert reviewed == ["skills/public/skill-reviewer"]
+
+
 def test_main_exits_nonzero_when_review_cli_reports_error(tmp_path: Path, monkeypatch, capsys) -> None:
     _write_skill(tmp_path, "bad")
     diff_output = b"M\0skills/public/bad/SKILL.md\0"
@@ -156,3 +227,45 @@ def test_main_exits_nonzero_when_review_cli_reports_error(tmp_path: Path, monkey
     assert [call[0] for call in calls] == ["git", "test-python"]
     assert "Failed: skills/public/bad (exit 1)" in output
     assert "One or more skill reviews failed." in output
+
+
+def test_main_falls_back_to_empty_tree_when_push_before_is_missing(tmp_path: Path, monkeypatch, capsys) -> None:
+    _write_skill(tmp_path, "alpha")
+    diff_output = b"M\0skills/public/alpha/SKILL.md\0"
+    calls: list[list[str]] = []
+    reviewed: list[str] = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if len(calls) == 1:
+            return subprocess.CompletedProcess(command, 128, stdout=b"", stderr=b"fatal: bad object before")
+        return _completed(command, stdout=diff_output)
+
+    def fake_review(package: Path, repo_root: Path, python_executable: str) -> int:
+        reviewed.append(package.relative_to(repo_root).as_posix())
+        return 0
+
+    monkeypatch.setattr(runner.subprocess, "run", fake_run)
+    monkeypatch.setattr(runner, "run_review", fake_review)
+
+    exit_code = runner.main(
+        [
+            "--before",
+            "f" * 40,
+            "--after",
+            "a" * 40,
+            "--repo-root",
+            str(tmp_path),
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert reviewed == ["skills/public/alpha"]
+    assert calls[1][4:6] == [runner.EMPTY_TREE_SHA, "a" * 40]
+    assert "Fallback diff:" in output
+
+
+def test_is_zero_sha_requires_full_sha_length() -> None:
+    assert runner.is_zero_sha("0" * 40) is True
+    assert runner.is_zero_sha("0") is False

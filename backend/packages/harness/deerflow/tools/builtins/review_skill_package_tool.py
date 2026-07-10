@@ -126,10 +126,19 @@ def _ensure_local_target_allowed(path: Path) -> None:
     for root in allowed_roots:
         try:
             resolved.relative_to(root)
-            return
         except ValueError:
             continue
+        _ensure_local_target_is_package_or_archive(resolved)
+        return
     raise ValueError("Local review targets must be under the current workspace, /tmp, or the configured skills root")
+
+
+def _ensure_local_target_is_package_or_archive(path: Path) -> None:
+    if path.suffix == ".skill":
+        return
+    if path.is_dir() and (path / "SKILL.md").is_file():
+        return
+    raise ValueError("Local review targets must be .skill archives or directories containing a root SKILL.md")
 
 
 def _semantic_artifacts(snapshot: dict, *, include_content: IncludeContent) -> list[dict]:
@@ -148,7 +157,7 @@ def _semantic_artifacts(snapshot: dict, *, include_content: IncludeContent) -> l
         if len(content) > remaining:
             content = content[:remaining]
             truncated = True
-        artifacts.append({"path": path, "content": content, "truncated": truncated})
+        artifacts.append({"path": path, "content": content, "truncated": truncated, "untrusted_review_data": True})
         remaining -= len(content)
         if remaining <= 0:
             break

@@ -4,7 +4,6 @@ from pathlib import Path
 
 import yaml
 
-from .frontmatter import split_skill_markdown
 from .types import SKILL_MD_FILE, SecretRequirement, Skill, SkillCategory
 
 logger = logging.getLogger(__name__)
@@ -140,16 +139,13 @@ def parse_skill_file(skill_file: Path, category: SkillCategory, relative_path: P
             return None
         front_matter_text = front_matter_match.group(1)
         try:
-            yaml.safe_load(front_matter_text)
+            metadata = yaml.safe_load(front_matter_text)
         except yaml.YAMLError as exc:
             logger.error("%s", _format_yaml_error(skill_file, exc, front_matter_text))
             return None
-
-        parts, error = split_skill_markdown(content)
-        if error or parts is None:
-            logger.error("Invalid SKILL.md front-matter in %s: %s", skill_file, error or "invalid format")
+        if not isinstance(metadata, dict):
+            logger.error("Invalid SKILL.md front-matter in %s: Frontmatter must be a YAML dictionary", skill_file)
             return None
-        metadata = parts.metadata
 
         # Extract required fields.  Both must be non-empty strings.
         name = metadata.get("name")

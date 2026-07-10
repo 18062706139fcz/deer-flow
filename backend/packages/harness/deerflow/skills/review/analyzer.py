@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import re
 import tempfile
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 from deerflow.skills.frontmatter import ALLOWED_FRONTMATTER_PROPERTIES, split_skill_markdown
+from deerflow.skills.package_paths import is_eval_fixture_path, is_eval_fixture_skill_md
 from deerflow.skills.parser import parse_allowed_tools, parse_required_secrets
 from deerflow.skills.review.digest import compute_package_digest
 from deerflow.skills.review.eval_schema import analyze_eval_manifests
@@ -56,7 +58,7 @@ def analyze_skill_package(snapshot: dict[str, Any], *, profile: ProfileName = "d
     else:
         declared_name = _analyze_skill_md(str(root_skill.get("content") or ""), profile=profile, findings=findings)
 
-    for nested in sorted(path for path in skill_entries if path != "SKILL.md" and not path.startswith("evals/fixtures/")):
+    for nested in sorted(path for path in skill_entries if path != "SKILL.md" and not is_eval_fixture_skill_md(path)):
         findings.append(
             make_finding(
                 "structure.nested-skill-md",
@@ -301,7 +303,7 @@ def _add_agentskills_findings(metadata: dict[str, Any], declared_name: str | Non
 
 
 def _scan_with_skillscan(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
-    files = [entry for entry in snapshot.get("files", []) if entry.get("kind") == "text"]
+    files = [entry for entry in snapshot.get("files", []) if entry.get("kind") == "text" and not is_eval_fixture_path(str(entry.get("path") or ""))]
     if not files:
         return []
     with tempfile.TemporaryDirectory(prefix="skill-review-") as tmp:
@@ -314,8 +316,6 @@ def _scan_with_skillscan(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
         result = scan_skill_dir(root)
     findings: list[dict[str, Any]] = []
     for finding in result.get("findings", []):
-        if finding.get("rule_id") == "package-nested-skill-md" and str(finding.get("file") or "").startswith("evals/fixtures/"):
-            continue
         severity = SKILLSCAN_SEVERITY_MAP.get(str(finding.get("severity")), "warning")
         findings.append(
             make_finding(
@@ -346,8 +346,6 @@ def _scan_with_skillscan(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _valid_skill_name(name: str) -> bool:
-    import re
-
     return bool(re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", name)) and len(name) <= 64
 
 

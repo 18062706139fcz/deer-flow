@@ -7,12 +7,10 @@ from typing import Any
 
 from deerflow.skills.review.models import make_finding
 
-_EVAL_MANIFEST_NAMES = {"evals/evals.json", "evals/trigger_eval_set.json"}
-
 
 def analyze_eval_manifests(snapshot: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     files = {str(entry["path"]): entry for entry in snapshot.get("files", [])}
-    eval_files = [path for path in sorted(files) if path in _EVAL_MANIFEST_NAMES or path.startswith("evals/") and path.endswith(".json")]
+    eval_files = [path for path in sorted(files) if path.startswith("evals/") and path.endswith(".json")]
     findings: list[dict[str, Any]] = []
     aggregate = {
         "schema": None,

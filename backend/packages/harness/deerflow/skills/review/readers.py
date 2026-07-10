@@ -32,6 +32,7 @@ _TEXT_EXTENSIONS = {
     ".yaml",
     ".yml",
 }
+_ZIP_READ_CHUNK_BYTES = 1024 * 1024
 
 
 def _sha256(data: bytes) -> str:
@@ -46,6 +47,13 @@ def _decode_text(data: bytes, path: str) -> str | None:
         return data.decode("utf-8")
     except UnicodeDecodeError:
         return None
+
+
+def _truncate_utf8_bytes(content: str, max_bytes: int) -> tuple[str, bytes]:
+    data = content.encode("utf-8")
+    truncated = data[:max_bytes]
+    text = truncated.decode("utf-8", errors="ignore")
+    return text, text.encode("utf-8")
 
 
 def _subject(
@@ -94,8 +102,7 @@ def build_inline_snapshot(
                 "message": "Inline SKILL.md exceeds the per-file review limit",
             }
         )
-        content = content[: limits.max_file_bytes]
-        data = content.encode("utf-8", errors="ignore")
+        content, data = _truncate_utf8_bytes(content, limits.max_file_bytes)
 
     snapshot["files"].append(
         {
@@ -276,26 +283,46 @@ class ArchivePackageReader:
                     rel_path = self._normalize_archive_name(info.filename, snapshot)
                     if rel_path is None:
                         continue
-                    total_bytes += max(info.file_size, 0)
-                    if total_bytes > self.limits.max_total_bytes:
+
+                    declared_size = max(info.file_size, 0)
+                    if declared_size > self.limits.max_file_bytes:
+                        snapshot["truncated"] = True
+                        snapshot["files"].append({"path": rel_path, "kind": "binary", "size": declared_size, "sha256": "", "content": None})
+                        snapshot["reader_errors"].append({"code": "file_too_large", "path": rel_path, "message": "Archive member exceeds the per-file review limit"})
+                        continue
+
+                    remaining_total_bytes = self.limits.max_total_bytes - total_bytes
+                    if remaining_total_bytes <= 0:
                         snapshot["truncated"] = True
                         snapshot["reader_errors"].append({"code": "total_size_exceeded", "path": rel_path, "message": "Archive total size exceeds the review limit"})
                         break
-                    if info.file_size > self.limits.max_file_bytes:
+
+                    member_budget = min(self.limits.max_file_bytes, remaining_total_bytes)
+                    try:
+                        data, actual_size, limit_exceeded = _read_zip_member_bounded(zf, info, max_bytes=member_budget)
+                    except (OSError, RuntimeError, zipfile.BadZipFile) as exc:
+                        snapshot["reader_errors"].append({"code": "archive_member_read_failed", "path": rel_path, "message": str(exc)})
+                        continue
+
+                    if limit_exceeded:
                         snapshot["truncated"] = True
-                        snapshot["files"].append({"path": rel_path, "kind": "binary", "size": info.file_size, "sha256": "", "content": None})
-                        snapshot["reader_errors"].append({"code": "file_too_large", "path": rel_path, "message": "Archive member exceeds the per-file review limit"})
-                        continue
+                        if actual_size > self.limits.max_file_bytes:
+                            snapshot["files"].append({"path": rel_path, "kind": "binary", "size": actual_size, "sha256": "", "content": None})
+                            snapshot["reader_errors"].append({"code": "file_too_large", "path": rel_path, "message": "Archive member exceeds the per-file review limit"})
+                            continue
+                        snapshot["reader_errors"].append({"code": "total_size_exceeded", "path": rel_path, "message": "Archive total size exceeds the review limit"})
+                        break
+
+                    total_bytes += actual_size
                     if _zip_member_is_symlink(info):
-                        target = zf.read(info).decode("utf-8", errors="replace")
-                        snapshot["files"].append({"path": rel_path, "kind": "symlink", "size": 0, "sha256": _sha256(target.encode("utf-8")), "target": target})
+                        target = data.decode("utf-8", errors="replace")
+                        snapshot["files"].append({"path": rel_path, "kind": "symlink", "size": actual_size, "sha256": _sha256(data), "target": target})
                         continue
-                    data = zf.read(info)
                     text = _decode_text(data, rel_path)
                     entry: dict[str, Any] = {
                         "path": rel_path,
                         "kind": "text" if text is not None else "binary",
-                        "size": len(data),
+                        "size": actual_size,
                         "sha256": _sha256(data),
                     }
                     if text is not None:
@@ -305,6 +332,7 @@ class ArchivePackageReader:
             snapshot["reader_errors"].append({"code": "archive_read_failed", "path": None, "message": str(exc)})
 
         snapshot["files"] = sorted(snapshot["files"], key=lambda item: item["path"])
+        snapshot["reader_errors"] = sorted(snapshot["reader_errors"], key=lambda item: (str(item.get("path") or ""), str(item.get("code") or "")))
         return snapshot
 
     @staticmethod
@@ -319,6 +347,23 @@ class ArchivePackageReader:
 def _zip_member_is_symlink(info: zipfile.ZipInfo) -> bool:
     mode = info.external_attr >> 16
     return stat.S_ISLNK(mode)
+
+
+def _read_zip_member_bounded(zf: zipfile.ZipFile, info: zipfile.ZipInfo, *, max_bytes: int) -> tuple[bytes, int, bool]:
+    chunks: list[bytes] = []
+    actual_size = 0
+    with zf.open(info) as member:
+        while True:
+            read_size = min(_ZIP_READ_CHUNK_BYTES, max_bytes + 1 - actual_size)
+            if read_size <= 0:
+                return b"".join(chunks), actual_size, True
+            chunk = member.read(read_size)
+            if not chunk:
+                return b"".join(chunks), actual_size, False
+            actual_size += len(chunk)
+            if actual_size > max_bytes:
+                return b"".join(chunks), actual_size, True
+            chunks.append(chunk)
 
 
 class InstalledSkillReader(LocalDirectoryReader):

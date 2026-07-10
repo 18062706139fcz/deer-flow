@@ -6,6 +6,7 @@ import re
 from pathlib import PurePosixPath
 from typing import Any
 
+from deerflow.skills.package_paths import is_eval_fixture_path
 from deerflow.skills.review.models import make_finding, normalize_relative_path
 
 _MARKDOWN_LINK_RE = re.compile(r"!?\[[^\]]*]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
@@ -22,6 +23,8 @@ def build_resource_graph(snapshot: dict[str, Any]) -> tuple[dict[str, Any], list
     escaping: set[tuple[str, str]] = set()
 
     for path, entry in files.items():
+        if is_eval_fixture_path(path):
+            continue
         if entry.get("kind") != "text":
             continue
         content = str(entry.get("content") or "")
@@ -39,7 +42,7 @@ def build_resource_graph(snapshot: dict[str, Any]) -> tuple[dict[str, Any], list
     referenced = {target for _, target in edges}
     resource_paths = {path for path in files if PurePosixPath(path).parts and PurePosixPath(path).parts[0] in _RESOURCE_DIRS}
     orphans = sorted(resource_paths - referenced - {"evals/evals.json", "evals/trigger_eval_set.json"})
-    orphans = [path for path in orphans if not path.startswith("evals/fixtures/")]
+    orphans = [path for path in orphans if not is_eval_fixture_path(path)]
 
     findings: list[dict[str, Any]] = []
     for source, target in sorted(missing):

@@ -24,7 +24,7 @@ SEVERITY_RANK: dict[str, int] = {
 
 SKILLSCAN_SEVERITY_MAP: dict[str, Severity] = {
     "CRITICAL": "blocker",
-    "HIGH": "warning",
+    "HIGH": "error",
     "MEDIUM": "warning",
     "LOW": "info",
 }

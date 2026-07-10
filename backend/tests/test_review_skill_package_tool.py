@@ -32,6 +32,7 @@ def test_review_skill_package_inline_returns_review_subject_metadata():
     assert payload["facts"]["subject"]["declared_name"] == "demo-skill"
     assert "review_subject_entry" in message.additional_kwargs
     assert "skill_context_entry" not in message.additional_kwargs
+    assert payload["artifacts"][0]["untrusted_review_data"] is True
     assert message.artifact["facts"]["schema_version"] == "deerflow.skill-review.facts.v1"
 
 
@@ -67,3 +68,35 @@ def test_review_skill_package_rejects_unsafe_local_path():
     message = command.update["messages"][0]
     assert message.status == "error"
     assert "Local review targets must be under" in message.content
+
+
+def test_review_skill_package_rejects_local_directory_without_skill_md(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "notes.txt").write_text("workspace note", encoding="utf-8")
+
+    command = review_skill_package.func(
+        target=".",
+        runtime=_runtime(),
+    )
+
+    message = command.update["messages"][0]
+    assert message.status == "error"
+    assert "directories containing a root SKILL.md" in message.content
+
+
+def test_review_skill_package_allows_local_skill_package(tmp_path, monkeypatch):
+    package = tmp_path / "demo"
+    package.mkdir()
+    (package / "SKILL.md").write_text(_skill_content(), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    command = review_skill_package.func(
+        target="demo",
+        runtime=_runtime(),
+        include_content="facts-only",
+    )
+
+    message = command.update["messages"][0]
+    payload = json.loads(message.content)
+    assert message.status == "success"
+    assert payload["facts"]["subject"]["declared_name"] == "demo-skill"

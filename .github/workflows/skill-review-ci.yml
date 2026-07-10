@@ -4,7 +4,7 @@ on:
   push:
     branches: ["main", "2.0.x-dev"]
     paths:
-      - "skills/public/**/SKILL.md"
+      - "skills/public/**"
       - "backend/packages/harness/deerflow/skills/review/**"
       - "contracts/skill_review/**"
       - "scripts/review_changed_public_skills.py"
@@ -14,7 +14,7 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
-      - "skills/public/**/SKILL.md"
+      - "skills/public/**"
       - "backend/packages/harness/deerflow/skills/review/**"
       - "contracts/skill_review/**"
       - "scripts/review_changed_public_skills.py"

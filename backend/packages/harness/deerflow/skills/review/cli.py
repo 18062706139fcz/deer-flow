@@ -17,7 +17,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("target", help="Skill directory or .skill archive to review")
     parser.add_argument("--profile", choices=["deerflow", "agentskills"], default="deerflow")
     parser.add_argument("--format", choices=["json", "text"], default="json")
-    parser.add_argument("--fail-on", choices=["never", "warning", "error", "blocker"], default="never")
+    parser.add_argument(
+        "--fail-on",
+        choices=["never", "warning", "error", "blocker"],
+        default="never",
+        help="Exit non-zero when findings are at this severity or worse.",
+    )
     parser.add_argument("--max-files", type=int, default=DEFAULT_PACKAGE_LIMITS.max_files)
     parser.add_argument("--max-file-bytes", type=int, default=DEFAULT_PACKAGE_LIMITS.max_file_bytes)
     parser.add_argument("--max-total-bytes", type=int, default=DEFAULT_PACKAGE_LIMITS.max_total_bytes)
