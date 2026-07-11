@@ -65,8 +65,10 @@ Gateway API. Config schema and resolution order are documented in
 Skill quality review note:
 - `skills/public/skill-reviewer/` is the built-in read-only skill quality reviewer.
   It uses the harness-layer `review_skill_package` tool and contracts in
-  `contracts/skill_review/`; see [backend/AGENTS.md](backend/AGENTS.md) for the
-  non-activation, SkillScan, and `skill-creator` ownership boundaries.
+  `contracts/skill_review/`. Model-visible review data is compact and
+  tag-neutralized; full raw payloads stay in tool artifacts. See
+  [backend/AGENTS.md](backend/AGENTS.md) for the non-activation, SkillScan, and
+  `skill-creator` ownership boundaries.
 
 Scheduled-task note:
 - The scheduled-task MVP adds a workspace page at `/workspace/scheduled-tasks` plus a background scheduler service gated by `config.yaml -> scheduler.enabled`.

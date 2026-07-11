@@ -23,6 +23,11 @@ def main(argv: list[str] | None = None) -> int:
         default="never",
         help="Exit non-zero when findings are at this severity or worse.",
     )
+    parser.add_argument(
+        "--fail-on-incomplete",
+        action="store_true",
+        help="Exit non-zero when package completeness indicates content was not assessed.",
+    )
     parser.add_argument("--max-files", type=int, default=DEFAULT_PACKAGE_LIMITS.max_files)
     parser.add_argument("--max-file-bytes", type=int, default=DEFAULT_PACKAGE_LIMITS.max_file_bytes)
     parser.add_argument("--max-total-bytes", type=int, default=DEFAULT_PACKAGE_LIMITS.max_total_bytes)
@@ -38,15 +43,17 @@ def main(argv: list[str] | None = None) -> int:
     else:
         _print_text(facts)
 
-    return _exit_code(facts, args.fail_on)
+    return _exit_code(facts, args.fail_on, fail_on_incomplete=args.fail_on_incomplete)
 
 
 def _print_text(facts: dict[str, Any]) -> None:
     subject = facts.get("subject", {})
     summary = facts.get("summary", {})
+    completeness = facts.get("completeness", {})
     print(f"Subject: {subject.get('display_ref')}")
     print(f"Digest: {subject.get('package_digest')}")
     print(f"Summary: {summary.get('blockers')} blocker(s), {summary.get('errors')} error(s), {summary.get('warnings')} warning(s), {summary.get('infos')} info(s)")
+    print(f"Completeness: truncated={completeness.get('truncated')}, not_assessed={','.join(completeness.get('not_assessed') or []) or '(none)'}")
     for finding in facts.get("findings", []):
         location = finding.get("path") or "<package>"
         if finding.get("line") is not None:
@@ -54,7 +61,9 @@ def _print_text(facts: dict[str, Any]) -> None:
         print(f"- {finding.get('severity')} {finding.get('rule_id')} at {location}: {finding.get('message')}")
 
 
-def _exit_code(facts: dict[str, Any], fail_on: str) -> int:
+def _exit_code(facts: dict[str, Any], fail_on: str, *, fail_on_incomplete: bool = False) -> int:
+    if fail_on_incomplete and facts.get("completeness", {}).get("not_assessed"):
+        return 1
     if fail_on == "never":
         return 0
     threshold = SEVERITY_RANK[fail_on]

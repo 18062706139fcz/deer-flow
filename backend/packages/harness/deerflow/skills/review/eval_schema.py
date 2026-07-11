@@ -64,7 +64,7 @@ def analyze_eval_manifests(snapshot: dict[str, Any]) -> tuple[dict[str, Any], li
         aggregate["negative_trigger_cases"] += manifest["negative_trigger_cases"]
 
     if schemas:
-        aggregate["schema"] = sorted(schemas)[0] if len(schemas) == 1 else "mixed"
+        aggregate["schema"] = next(iter(schemas)) if len(schemas) == 1 else "mixed"
     aggregate["valid"] = valid
     return aggregate, findings
 

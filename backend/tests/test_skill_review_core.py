@@ -154,7 +154,10 @@ def test_archive_reader_rejects_traversal_and_records_symlinks(tmp_path):
     errors = {(error["code"], error["path"]) for error in snapshot["reader_errors"]}
     assert ("invalid_archive_path", "../escape.txt") in errors
     assert ("invalid_archive_path", "/absolute.txt") in errors
-    assert next(entry for entry in snapshot["files"] if entry["path"] == "links/outside")["kind"] == "symlink"
+    symlink = next(entry for entry in snapshot["files"] if entry["path"] == "links/outside")
+    assert symlink["kind"] == "symlink"
+    assert symlink["size"] == 0
+    assert symlink["target"] == "../outside"
 
 
 def test_archive_reader_caps_actual_decompressed_bytes(monkeypatch, tmp_path):
@@ -272,3 +275,27 @@ def test_cli_fail_on_error(tmp_path, capsys):
 
     assert exit_code == 1
     assert "structure.missing-description" in output
+
+
+def test_cli_fail_on_incomplete_package(tmp_path, capsys):
+    _write(tmp_path / "SKILL.md", _valid_skill())
+    _write(tmp_path / "references" / "large.md", "x" * 32)
+    max_total_bytes = (tmp_path / "SKILL.md").stat().st_size + 1
+
+    exit_code = review_cli_main(
+        [
+            str(tmp_path),
+            "--format",
+            "text",
+            "--fail-on",
+            "error",
+            "--fail-on-incomplete",
+            "--max-total-bytes",
+            str(max_total_bytes),
+        ]
+    )
+    output = capsys.readouterr().out
+
+    assert exit_code == 1
+    assert "Summary: 0 blocker(s), 0 error(s)" in output
+    assert "Completeness: truncated=True, not_assessed=full_package" in output

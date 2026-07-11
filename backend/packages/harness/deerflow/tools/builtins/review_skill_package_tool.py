@@ -68,11 +68,12 @@ def review_skill_package(
             "profile": profile,
             "scope": scope,
         }
+        content_payload = _tool_message_content_payload(payload)
         return Command(
             update={
                 "messages": [
                     ToolMessage(
-                        content=stable_json_dumps(payload),
+                        content=_neutralize_review_content(stable_json_dumps(content_payload)),
                         tool_call_id=tool_call_id,
                         name="review_skill_package",
                         additional_kwargs={"review_subject_entry": review_subject_entry},
@@ -139,6 +140,22 @@ def _ensure_local_target_is_package_or_archive(path: Path) -> None:
     if path.is_dir() and (path / "SKILL.md").is_file():
         return
     raise ValueError("Local review targets must be .skill archives or directories containing a root SKILL.md")
+
+
+def _tool_message_content_payload(payload: dict) -> dict:
+    """Keep model-visible review data compact; full raw renders stay in artifact."""
+    return {
+        "untrusted_review_data": payload["untrusted_review_data"],
+        "facts": payload["facts"],
+        "artifacts": payload["artifacts"],
+        "static_report": payload["static_report"],
+    }
+
+
+def _neutralize_review_content(content: str) -> str:
+    from deerflow.agents.middlewares.input_sanitization_middleware import neutralize_untrusted_tags
+
+    return neutralize_untrusted_tags(content)
 
 
 def _semantic_artifacts(snapshot: dict, *, include_content: IncludeContent) -> list[dict]:

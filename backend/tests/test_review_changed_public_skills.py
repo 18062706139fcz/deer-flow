@@ -201,6 +201,7 @@ def test_main_exits_nonzero_when_review_cli_reports_error(tmp_path: Path, monkey
             "text",
             "--fail-on",
             "error",
+            "--fail-on-incomplete",
         ]
         assert kwargs["cwd"] == tmp_path
         assert "backend/packages/harness" in kwargs["env"]["PYTHONPATH"]
@@ -268,4 +269,6 @@ def test_main_falls_back_to_empty_tree_when_push_before_is_missing(tmp_path: Pat
 
 def test_is_zero_sha_requires_full_sha_length() -> None:
     assert runner.is_zero_sha("0" * 40) is True
+    assert runner.is_zero_sha("0" * 64) is True
     assert runner.is_zero_sha("0") is False
+    assert runner.is_zero_sha("f" * 64) is False

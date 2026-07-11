@@ -316,7 +316,7 @@ class ArchivePackageReader:
                     total_bytes += actual_size
                     if _zip_member_is_symlink(info):
                         target = data.decode("utf-8", errors="replace")
-                        snapshot["files"].append({"path": rel_path, "kind": "symlink", "size": actual_size, "sha256": _sha256(data), "target": target})
+                        snapshot["files"].append({"path": rel_path, "kind": "symlink", "size": 0, "sha256": _sha256(data), "target": target})
                         continue
                     text = _decode_text(data, rel_path)
                     entry: dict[str, Any] = {

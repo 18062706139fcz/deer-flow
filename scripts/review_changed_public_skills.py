@@ -231,6 +231,7 @@ def run_review(package: Path, repo_root: Path, python_executable: str) -> int:
         "text",
         "--fail-on",
         "error",
+        "--fail-on-incomplete",
     ]
     log_command = [
         "python",
@@ -241,6 +242,7 @@ def run_review(package: Path, repo_root: Path, python_executable: str) -> int:
         "text",
         "--fail-on",
         "error",
+        "--fail-on-incomplete",
     ]
 
     print(f"[skill-review] Reviewing package: {package_rel}")
@@ -267,7 +269,7 @@ def review_env(repo_root: Path) -> dict[str, str]:
 
 
 def is_zero_sha(value: str) -> bool:
-    return len(value) == 40 and set(value) == {"0"}
+    return len(value) in {40, 64} and set(value) == {"0"}
 
 
 if __name__ == "__main__":
