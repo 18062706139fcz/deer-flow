@@ -80,6 +80,11 @@ async def _runs_column_meta(engine, column_name: str) -> dict:
     raise AssertionError(f"column {column_name!r} not found in runs")
 
 
+async def _runs_index_names(engine) -> set[str]:
+    async with engine.connect() as conn:
+        return await conn.run_sync(lambda c: {ix["name"] for ix in sa.inspect(c).get_indexes("runs")})
+
+
 async def _alembic_version(engine) -> str | None:
     async with engine.connect() as conn:
         row = await conn.execute(sa.text("SELECT version_num FROM alembic_version"))
@@ -122,8 +127,8 @@ async def _seed_legacy_missing_channel_tables(engine) -> None:
             await conn.execute(sa.text(f"DROP TABLE IF EXISTS {table}"))
 
 
-async def _seed_versioned_0004_eval_runs_missing_environment_fingerprint(engine) -> None:
-    """Build the drift found by live eval runs: version says 0004, column missing."""
+async def _seed_versioned_0005_eval_runs_missing_environment_fingerprint(engine) -> None:
+    """Build the drift found by live eval runs: version says 0005, column missing."""
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -178,7 +183,7 @@ async def _seed_versioned_0004_eval_runs_missing_environment_fingerprint(engine)
             )
         )
         await conn.execute(sa.text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
-        await conn.execute(sa.text("INSERT INTO alembic_version (version_num) VALUES ('0004_evaluations')"))
+        await conn.execute(sa.text("INSERT INTO alembic_version (version_num) VALUES ('0005_evaluations')"))
 
 
 # ---------------------------------------------------------------------------
@@ -210,6 +215,12 @@ async def test_empty_branch_creates_all_and_stamps_head(tmp_path: Path) -> None:
             assert required in tables, f"missing table: {required}"
         assert "token_usage_by_model" in await _runs_columns(engine)
         assert await _alembic_version(engine) == HEAD
+        # The partial unique index on (thread_id WHERE status IN pending/running)
+        # must exist on a fresh DB because the empty-branch stamps head without
+        # running migrations, so the index has to come from ``Base.metadata``.
+        indexes = await _runs_index_names(engine)
+        assert "uq_runs_thread_active" in indexes, indexes
+        assert "ix_runs_lease" in indexes, indexes
     finally:
         await engine.dispose()
 
@@ -441,19 +452,19 @@ def test_type_equivalent_returns_true_on_missing_info() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Versioned drift repair: a local DB may already be stamped at 0004 while its
-# ``eval_runs`` table came from an earlier in-flight 0004 shape that lacked
-# ``environment_fingerprint_json``. Startup must upgrade through 0005 and make
+# Versioned drift repair: a local DB may already be stamped at 0005 while its
+# ``eval_runs`` table came from an earlier in-flight 0005 shape that lacked
+# ``environment_fingerprint_json``. Startup must upgrade through 0006 and make
 # Gateway eval creation usable again instead of 500ing on insert.
 # ---------------------------------------------------------------------------
 
 
 @asyncio_test
-async def test_versioned_0004_eval_runs_missing_environment_fingerprint_upgrades(tmp_path: Path) -> None:
+async def test_versioned_0005_eval_runs_missing_environment_fingerprint_upgrades(tmp_path: Path) -> None:
     engine = create_async_engine(_url(tmp_path))
     try:
-        await _seed_versioned_0004_eval_runs_missing_environment_fingerprint(engine)
-        assert await _alembic_version(engine) == "0004_evaluations"
+        await _seed_versioned_0005_eval_runs_missing_environment_fingerprint(engine)
+        assert await _alembic_version(engine) == "0005_evaluations"
         assert "environment_fingerprint_json" not in await _eval_runs_columns(engine)
 
         await bootstrap_schema(engine, backend="sqlite")
@@ -469,7 +480,7 @@ async def test_versioned_0004_eval_runs_missing_environment_fingerprint_upgrades
 
 
 @asyncio_test
-async def test_0005_downgrade_preserves_0004_environment_fingerprint_column(tmp_path: Path) -> None:
+async def test_0006_downgrade_preserves_0005_environment_fingerprint_column(tmp_path: Path) -> None:
     from alembic import command as alembic_command
 
     engine = create_async_engine(_url(tmp_path))
@@ -479,9 +490,9 @@ async def test_0005_downgrade_preserves_0004_environment_fingerprint_column(tmp_
         assert "environment_fingerprint_json" in await _eval_runs_columns(engine)
 
         cfg = _get_alembic_config(engine)
-        await asyncio.to_thread(alembic_command.downgrade, cfg, "0004_evaluations")
+        await asyncio.to_thread(alembic_command.downgrade, cfg, "0005_evaluations")
 
-        assert await _alembic_version(engine) == "0004_evaluations"
+        assert await _alembic_version(engine) == "0005_evaluations"
         assert "environment_fingerprint_json" in await _eval_runs_columns(engine)
     finally:
         await engine.dispose()

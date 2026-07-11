@@ -282,10 +282,10 @@ flowchart TB
 
 迁移：
 
-- `0004_evaluations.py`
-- `0005_eval_run_environment_fingerprint.py`
+- `0005_evaluations.py`
+- `0006_eval_run_environment_fingerprint.py`
 
-`0005` 用于修复 schema drift：数据库 head 已到 `0004`，但 `eval_runs` 实际缺少 `environment_fingerprint_json` 字段时，能够继续安全升级。
+`0006` 用于修复 schema drift：数据库 head 已到 `0005`，但 `eval_runs` 实际缺少 `environment_fingerprint_json` 字段时，能够继续安全升级。
 
 ---
 

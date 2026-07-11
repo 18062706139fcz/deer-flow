@@ -1,7 +1,7 @@
 """evaluation persistence tables.
 
-Revision ID: 0004_evaluations
-Revises: 0003_scheduled_tasks
+Revision ID: 0005_evaluations
+Revises: 0004_run_ownership
 Create Date: 2026-07-11
 """
 
@@ -12,8 +12,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0004_evaluations"
-down_revision: str | Sequence[str] | None = "0003_scheduled_tasks"
+revision: str = "0005_evaluations"
+down_revision: str | Sequence[str] | None = "0004_run_ownership"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
