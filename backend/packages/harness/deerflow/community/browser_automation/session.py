@@ -130,6 +130,11 @@ _MANUAL_LIVE_FRAME_MIN_INTERVAL_S = 0.75
 _LIVE_FRAME_SETTLE_DELAYS_S = (0.8, 2.0)
 
 
+def _is_playwright_timeout_error(exc: Exception) -> bool:
+    """Recognize Playwright timeouts without requiring Playwright at import time."""
+    return exc.__class__.__name__ == "TimeoutError" and exc.__class__.__module__.startswith("playwright.")
+
+
 class _PlaywrightLoopThread:
     """A private asyncio event loop running on a dedicated daemon thread."""
 
@@ -340,8 +345,6 @@ class BrowserSession:
         return await self._snapshot_impl(page)
 
     async def _click(self, ref: int) -> PageSnapshot:
-        from playwright.async_api import TimeoutError as PlaywrightTimeoutError
-
         page = await self._ensure_page()
         selector = f'[data-df-ref="{ref}"]'
         base = page.locator(selector)
@@ -357,26 +360,28 @@ class BrowserSession:
         # Bring the target into view; harmless if it is already on-screen.
         try:
             await locator.scroll_into_view_if_needed(timeout=_CLICK_TIMEOUT_MS)
-        except PlaywrightTimeoutError:
-            pass
+        except Exception as exc:
+            if not _is_playwright_timeout_error(exc):
+                raise
 
         try:
             await locator.click(timeout=_CLICK_TIMEOUT_MS)
-        except PlaywrightTimeoutError as exc:
+        except Exception as exc:
+            if not _is_playwright_timeout_error(exc):
+                raise
             raise RuntimeError(f"element [{ref}] was not clickable within {_CLICK_TIMEOUT_MS // 1000}s; the page may have changed — call browser_snapshot and retry") from exc
 
         # SPA (client-side) navigations never fire a fresh load event, so this
         # settle wait is best-effort and must never block the snapshot.
         try:
             await page.wait_for_load_state("domcontentloaded", timeout=_POST_CLICK_LOAD_TIMEOUT_MS)
-        except PlaywrightTimeoutError:
-            pass
+        except Exception as exc:
+            if not _is_playwright_timeout_error(exc):
+                raise
 
         return await self._snapshot_impl(page)
 
     async def _type(self, ref: int, text: str, submit: bool) -> PageSnapshot:
-        from playwright.async_api import TimeoutError as PlaywrightTimeoutError
-
         page = await self._ensure_page()
         selector = f'[data-df-ref="{ref}"]'
         await page.fill(selector, text)
@@ -386,8 +391,9 @@ class BrowserSession:
             # fresh load event, so this must not block the snapshot for 30s.
             try:
                 await page.wait_for_load_state("domcontentloaded", timeout=_POST_CLICK_LOAD_TIMEOUT_MS)
-            except PlaywrightTimeoutError:
-                pass
+            except Exception as exc:
+                if not _is_playwright_timeout_error(exc):
+                    raise
         return await self._snapshot_impl(page)
 
     async def _get_text(self, max_chars: int) -> str:

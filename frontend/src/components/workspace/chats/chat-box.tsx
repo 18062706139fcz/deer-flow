@@ -154,31 +154,11 @@ const ChatBox: React.FC<{
   }, [browserEnabled, browserView]);
 
   const rightPanelContent = useMemo(() => {
-    if (renderedRightPanel === "sidecar" || renderedRightPanel === "browser") {
-      const browserActive = renderedRightPanel === "browser";
-      const shouldKeepBrowserMounted = browserViewOpen || browserActive;
-      return (
-        <div className="relative size-full min-h-0 min-w-0 overflow-hidden">
-          {shouldKeepBrowserMounted && (
-            <div
-              aria-hidden={!browserActive}
-              className={cn(
-                "absolute inset-0 min-h-0 min-w-0",
-                browserActive
-                  ? "z-10 opacity-100"
-                  : "pointer-events-none z-0 opacity-0",
-              )}
-            >
-              <BrowserViewPanel threadId={threadId} className="size-full" />
-            </div>
-          )}
-          {renderedRightPanel === "sidecar" && (
-            <div className="absolute inset-0 z-20 min-h-0 min-w-0">
-              <SidecarPanel />
-            </div>
-          )}
-        </div>
-      );
+    if (renderedRightPanel === "browser") {
+      return <BrowserViewPanel threadId={threadId} className="size-full" />;
+    }
+    if (renderedRightPanel === "sidecar") {
+      return <SidecarPanel />;
     }
     if (renderedRightPanel === "artifacts" && selectedArtifact) {
       return (
@@ -229,7 +209,6 @@ const ChatBox: React.FC<{
     return null;
   }, [
     renderedRightPanel,
-    browserViewOpen,
     selectedArtifact,
     threadId,
     artifacts,
@@ -283,48 +262,80 @@ const ChatBox: React.FC<{
   return (
     <div
       id={`${resizableIdBase}-panels`}
-      className="[container-type:inline-size] size-full min-h-0"
+      className={cn(
+        "[container-type:inline-size] size-full min-h-0",
+        activeRightPanel !== "browser" &&
+          "grid transition-[grid-template-columns] duration-[280ms] ease-out motion-reduce:transition-none",
+        activeRightPanel !== "browser" &&
+          (rightPanelOpen
+            ? "grid-cols-[minmax(0,1fr)_1px_minmax(0,40%)]"
+            : "grid-cols-[minmax(0,1fr)_0px_0px]"),
+      )}
     >
-      <ResizablePanelGroup
-        id={`${resizableIdBase}-group`}
-        orientation="horizontal"
-        className="size-full min-h-0"
-      >
-        <ResizablePanel
-          id={`${resizableIdBase}-chat`}
-          minSize="30%"
-          className="relative min-h-0 min-w-0"
+      {activeRightPanel === "browser" ? (
+        <ResizablePanelGroup
+          id={`${resizableIdBase}-group`}
+          orientation="horizontal"
+          className="size-full min-h-0"
         >
-          <div className="relative size-full min-h-0 min-w-0" id="chat">
+          <ResizablePanel
+            id={`${resizableIdBase}-chat`}
+            minSize="30%"
+            className="relative min-h-0 min-w-0"
+          >
+            <div className="relative size-full min-h-0 min-w-0" id="chat">
+              {children}
+            </div>
+          </ResizablePanel>
+          <ResizableHandle withHandle />
+          <ResizablePanel
+            id={`${resizableIdBase}-side`}
+            defaultSize="40%"
+            minSize="20%"
+            maxSize="75%"
+            className="min-h-0 min-w-0"
+          >
+            <aside
+              className="size-full min-h-0 min-w-0 overflow-hidden p-0"
+              id="artifacts"
+            >
+              {rightPanelContent}
+            </aside>
+          </ResizablePanel>
+        </ResizablePanelGroup>
+      ) : (
+        <>
+          <div className="relative min-h-0 min-w-0" id="chat">
             {children}
           </div>
-        </ResizablePanel>
-        {rightPanelOpen && (
-          <>
-            <ResizableHandle withHandle />
-            <ResizablePanel
-              id={`${resizableIdBase}-side`}
-              defaultSize="40%"
-              minSize="20%"
-              maxSize="75%"
-              className="min-h-0 min-w-0"
+          <div
+            id={`${resizableIdBase}-separator`}
+            aria-hidden="true"
+            className={cn(
+              "bg-border opacity-33 transition-opacity duration-200 ease-out motion-reduce:transition-none",
+              !rightPanelOpen && "pointer-events-none opacity-0",
+            )}
+          />
+          <aside
+            aria-hidden={!rightPanelOpen}
+            className={cn(
+              "min-h-0 min-w-0 overflow-hidden transition-opacity duration-[280ms] ease-out motion-reduce:transition-none",
+              !rightPanelOpen && "pointer-events-none opacity-0",
+            )}
+            id="artifacts"
+          >
+            <div
+              className={cn(
+                "ml-auto h-full w-[40cqw] transition-opacity duration-[280ms] ease-out motion-reduce:transition-none",
+                renderedRightPanel === "sidecar" ? "p-0" : "p-4",
+                rightPanelOpen ? "opacity-100" : "opacity-0",
+              )}
             >
-              <aside
-                className={cn(
-                  "size-full min-h-0 min-w-0 overflow-hidden",
-                  renderedRightPanel === "sidecar" ||
-                    renderedRightPanel === "browser"
-                    ? "p-0"
-                    : "p-4",
-                )}
-                id="artifacts"
-              >
-                {rightPanelContent}
-              </aside>
-            </ResizablePanel>
-          </>
-        )}
-      </ResizablePanelGroup>
+              {rightPanelContent}
+            </div>
+          </aside>
+        </>
+      )}
     </div>
   );
 };

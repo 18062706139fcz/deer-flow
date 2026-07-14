@@ -1043,8 +1043,10 @@ export function useThreadStream({
     client: getAPIClient(isMock),
     assistantId: "lead_agent",
     threadId: onStreamThreadId,
-    onThreadId(threadId) {
-      handleStreamStart(threadId);
+    onThreadId(createdThreadId) {
+      if (!threadIdRef.current) {
+        handleStreamStart(createdThreadId);
+      }
     },
     reconnectOnMount: true,
     fetchStateHistory: { limit: 1 },

@@ -23,6 +23,12 @@ from deerflow.community.browser_automation.session import (
     SnapshotElement,
 )
 
+PlaywrightTimeoutError = type(
+    "TimeoutError",
+    (TimeoutError,),
+    {"__module__": "playwright.async_api"},
+)
+
 
 def _runtime(thread_id: str | None = "thread-1", outputs_path: str | None = None):
     state = {"thread_data": {"outputs_path": outputs_path}} if outputs_path is not None else {"thread_data": {}}
@@ -343,8 +349,6 @@ async def test_click_tolerates_spa_navigation_without_load_event():
     ``wait_for_load_state`` must be swallowed so SPA navigations (which never emit
     a fresh load event) still yield the updated snapshot instead of raising.
     """
-    from playwright.async_api import TimeoutError as PlaywrightTimeoutError
-
     session = BrowserSession(
         MagicMock(),
         headless=True,
