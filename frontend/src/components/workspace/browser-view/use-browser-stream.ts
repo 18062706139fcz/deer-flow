@@ -50,7 +50,10 @@ export function useBrowserStream(
   threadId: string,
   enabled: boolean,
   seedUrl?: string,
-  onNavRejected?: (url: string | undefined, message: string | undefined) => void,
+  onNavRejected?: (
+    url: string | undefined,
+    message: string | undefined,
+  ) => void,
 ) {
   const [status, setStatus] = useState<BrowserStreamStatus>("idle");
   const [frameUrl, setFrameUrl] = useState<string | null>(null);

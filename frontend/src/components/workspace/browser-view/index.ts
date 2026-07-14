@@ -1,6 +1,10 @@
 export { BrowserViewPanel } from "./browser-view-panel";
 export { BrowserTrigger } from "./browser-trigger";
-export { navigateBrowser, browserStreamURL, type BrowserNavigateResult } from "./api";
+export {
+  navigateBrowser,
+  browserStreamURL,
+  type BrowserNavigateResult,
+} from "./api";
 export {
   useBrowserStream,
   type BrowserTab,

@@ -5,8 +5,6 @@ import {
   ArrowRightIcon,
   GlobeIcon,
   Loader2Icon,
-  MaximizeIcon,
-  MinimizeIcon,
   MonitorIcon,
   RadioIcon,
   XIcon,
@@ -33,9 +31,10 @@ export function BrowserViewPanel({
 }) {
   const browserView = useMaybeBrowserView();
   const frame = browserView?.latestFrame ?? null;
-  const imageUrl = frame ? resolveArtifactURL(frame.screenshot, threadId) : null;
+  const imageUrl = frame
+    ? resolveArtifactURL(frame.screenshot, threadId)
+    : null;
 
-  const [fullscreen, setFullscreen] = useState(false);
   const [urlInput, setUrlInput] = useState("");
   const [navigating, setNavigating] = useState(false);
   const [live, setLive] = useState(true);
@@ -242,8 +241,8 @@ export function BrowserViewPanel({
   const liveActive = live && status === "open";
   const liveConnecting = live && status === "connecting";
   const displayUrl = live
-    ? frameUrl ?? liveFallback?.frameUrl ?? imageUrl
-    : liveFallback?.frameUrl ?? imageUrl;
+    ? (frameUrl ?? liveFallback?.frameUrl ?? imageUrl)
+    : (liveFallback?.frameUrl ?? imageUrl);
 
   // React registers onWheel as a passive listener, so preventDefault() there is
   // ignored and the wheel scrolls the host chat page. Bind a native, non-passive
@@ -293,10 +292,10 @@ export function BrowserViewPanel({
       }
       wheelFrame ??= window.requestAnimationFrame(flushWheel);
     };
-      el.addEventListener("wheel", onWheel, {
-        capture: true,
-        passive: false,
-      });
+    el.addEventListener("wheel", onWheel, {
+      capture: true,
+      passive: false,
+    });
     return () => {
       el.removeEventListener("wheel", onWheel, { capture: true });
       if (wheelFrame !== null) {
@@ -309,8 +308,8 @@ export function BrowserViewPanel({
     <div
       ref={panelRef}
       className={cn(
-        "relative flex flex-col bg-background",
-        fullscreen ? "fixed inset-0 z-50" : "size-full",
+        "bg-background relative flex flex-col",
+        "size-full",
         className,
       )}
       tabIndex={live ? 0 : undefined}
@@ -328,7 +327,10 @@ export function BrowserViewPanel({
         }
         if ((event.ctrlKey || event.metaKey) && event.key.length === 1) {
           const key = event.key.toUpperCase();
-          sendInput({ type: "key", key: `${event.metaKey ? "Meta" : "Control"}+${key}` });
+          sendInput({
+            type: "key",
+            key: `${event.metaKey ? "Meta" : "Control"}+${key}`,
+          });
           event.preventDefault();
           event.stopPropagation();
           return;
@@ -339,9 +341,17 @@ export function BrowserViewPanel({
           event.preventDefault();
           event.stopPropagation();
         } else if (
-          ["Enter", "Backspace", "Tab", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Escape", "Delete"].includes(
-            event.key,
-          )
+          [
+            "Enter",
+            "Backspace",
+            "Tab",
+            "ArrowUp",
+            "ArrowDown",
+            "ArrowLeft",
+            "ArrowRight",
+            "Escape",
+            "Delete",
+          ].includes(event.key)
         ) {
           sendInput({ type: "key", key: event.key });
           event.preventDefault();
@@ -423,17 +433,7 @@ export function BrowserViewPanel({
           size="icon-sm"
           variant="ghost"
           className="shrink-0"
-          onClick={() => setFullscreen((prev) => !prev)}
-          title={fullscreen ? "Exit full screen" : "Full screen"}
-        >
-          {fullscreen ? <MinimizeIcon /> : <MaximizeIcon />}
-        </Button>
-        <Button
-          size="icon-sm"
-          variant="ghost"
-          className="shrink-0"
           onClick={() => {
-            setFullscreen(false);
             setLive(false);
             browserView?.close();
           }}
@@ -464,7 +464,9 @@ export function BrowserViewPanel({
             <ConversationEmptyState
               className="absolute inset-0 m-auto h-fit"
               icon={<MonitorIcon />}
-              title={live ? "Connecting to live browser…" : "No browser activity yet"}
+              title={
+                live ? "Connecting to live browser…" : "No browser activity yet"
+              }
               description={
                 live
                   ? "Waiting for the first live frame."

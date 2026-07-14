@@ -284,7 +284,13 @@ export function MessageList({
       }
       const meta = (
         message.additional_kwargs as
-          | { browser_view?: { screenshot?: string; url?: string; title?: string } }
+          | {
+              browser_view?: {
+                screenshot?: string;
+                url?: string;
+                title?: string;
+              };
+            }
           | undefined
       )?.browser_view;
       if (meta && typeof meta.screenshot === "string") {
