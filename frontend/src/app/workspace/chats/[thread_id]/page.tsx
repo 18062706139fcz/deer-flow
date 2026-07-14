@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { type PromptInputMessage } from "@/components/ai-elements/prompt-input";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { ArtifactTrigger } from "@/components/workspace/artifacts";
+import { BrowserTrigger } from "@/components/workspace/browser-view";
 import {
   ChatBox,
   useSpecificChatMode,
@@ -260,7 +261,7 @@ export default function ChatPage() {
         context={settings.context}
         isMock={isMock}
       >
-        <ChatBox threadId={threadId}>
+        <ChatBox threadId={threadId} browserEnabled={!isNewThread}>
           <div className="relative flex size-full min-h-0 justify-between">
             <header
               className={cn(
@@ -290,6 +291,7 @@ export default function ChatPage() {
                   }
                 />
                 <SidecarTrigger />
+                {!isNewThread && <BrowserTrigger />}
                 <ExportTrigger threadId={threadId} />
                 <ArtifactTrigger />
               </div>

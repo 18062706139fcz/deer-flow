@@ -16,6 +16,7 @@ from app.gateway.routers import (
     artifacts,
     assistants_compat,
     auth,
+    browser,
     channel_connections,
     channels,
     console,
@@ -297,6 +298,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             except Exception:
                 logger.exception("Failed to stop scheduled task service")
 
+        try:
+            from deerflow.community.browser_automation import get_browser_session_manager
+
+            closed = await asyncio.wait_for(
+                get_browser_session_manager().close_all_sessions(),
+                timeout=_SHUTDOWN_HOOK_TIMEOUT_SECONDS,
+            )
+            if closed:
+                logger.info("Closed %d browser session(s)", closed)
+        except TimeoutError:
+            logger.warning(
+                "Browser session shutdown exceeded %.1fs; proceeding with worker exit.",
+                _SHUTDOWN_HOOK_TIMEOUT_SECONDS,
+            )
+        except Exception:
+            logger.exception("Failed to close browser sessions")
+
     logger.info("Shutting down API Gateway")
 
 
@@ -445,6 +463,9 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
 
     # Artifacts API is mounted at /api/threads/{thread_id}/artifacts
     app.include_router(artifacts.router)
+
+    # Browser API is mounted at /api/threads/{thread_id}/browser
+    app.include_router(browser.router)
 
     # Uploads API is mounted at /api/threads/{thread_id}/uploads
     app.include_router(uploads.router)

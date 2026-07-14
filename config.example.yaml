@@ -631,6 +631,7 @@ tool_groups:
   - name: file:read
   - name: file:write
   - name: bash
+  - name: browser
 
 # ============================================================================
 # Tools Configuration
@@ -783,6 +784,58 @@ tools:
   #   # best_attempt: true                  # Continue with current page state if waits time out
   #   # allow_private_addresses: false      # SSRF guard: keep false in production. Set true ONLY to
   #   #                                     # capture internal/private targets (loopback, RFC1918, etc.)
+
+  # Agentic browser control (stateful navigate → observe → click/type loop).
+  # Unlike web_fetch/web_capture (read-only, stateless), these tools keep a live
+  # per-thread Playwright browser so the agent can interact with JavaScript-heavy
+  # pages, fill forms, and follow multi-step flows. Elements are addressed by the
+  # numeric [ref] index returned in each page snapshot.
+  #
+  # Requires the optional dependency, installed once per environment:
+  #   uv pip install 'deerflow-harness[browser]' && playwright install chromium
+  #
+  # Uncomment the whole block to enable. Shared tool config (headless, timeout_ms,
+  # viewport_width/height, allow_private_addresses) can be set on any entry; each
+  # tool reads its own config name, so repeat the keys you want to override.
+  # - name: browser_navigate
+  #   group: browser
+  #   use: deerflow.community.browser_automation.tools:browser_navigate_tool
+  #   headless: true                   # Set false only for local, trusted debugging
+  #   timeout_ms: 30000                # Per-action navigation/interaction timeout
+  #   viewport_width: 1280
+  #   viewport_height: 720
+  #   # allow_private_addresses: false # SSRF guard: keep false in production
+  #   # cdp_url: http://127.0.0.1:9222 # Attach to YOUR running Chrome (Codex-style)
+  #   #                                # instead of launching a private headless one.
+  #   #                                # Start Chrome with --remote-debugging-port=9222
+  #   #                                # so you watch the agent drive your real browser
+  #   #                                # with your real login sessions. Local/trusted only.
+  #   #                                # Chrome must be version-matched to the bundled
+  #   #                                # Playwright; a much newer Chrome can reject the
+  #   #                                # CDP handshake. If so, use headless: false to launch
+  #   #                                # Playwright's own visible browser instead.
+  # - name: browser_snapshot
+  #   group: browser
+  #   use: deerflow.community.browser_automation.tools:browser_snapshot_tool
+  # - name: browser_click
+  #   group: browser
+  #   use: deerflow.community.browser_automation.tools:browser_click_tool
+  # - name: browser_type
+  #   group: browser
+  #   use: deerflow.community.browser_automation.tools:browser_type_tool
+  # - name: browser_get_text
+  #   group: browser
+  #   use: deerflow.community.browser_automation.tools:browser_get_text_tool
+  #   max_chars: 8000                  # Truncation cap for browser_get_text output
+  # - name: browser_back
+  #   group: browser
+  #   use: deerflow.community.browser_automation.tools:browser_back_tool
+  # - name: browser_screenshot
+  #   group: browser
+  #   use: deerflow.community.browser_automation.tools:browser_screenshot_tool
+  # - name: browser_close
+  #   group: browser
+  #   use: deerflow.community.browser_automation.tools:browser_close_tool
 
   # Web fetch tool (uses Exa)
   # NOTE: Only one web_fetch provider can be active at a time.

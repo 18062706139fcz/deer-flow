@@ -71,6 +71,7 @@ import type { AgentThreadState } from "@/core/threads";
 import { cn } from "@/lib/utils";
 
 import { ArtifactFileList } from "../artifacts/artifact-file-list";
+import { useMaybeBrowserView } from "../browser-view";
 import { CopyButton } from "../copy-button";
 import { useMaybeSidecar } from "../sidecar/context";
 import { Tooltip } from "../tooltip";
@@ -273,6 +274,41 @@ export function MessageList({
     prevIsLoading.current = thread.isLoading;
   }, [thread.isLoading]);
   const messages = thread.messages;
+  const browserView = useMaybeBrowserView();
+  const pushBrowserFrame = browserView?.pushFrame;
+  const latestBrowserView = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const message = messages[i];
+      if (message?.type !== "tool") {
+        continue;
+      }
+      const meta = (
+        message.additional_kwargs as
+          | { browser_view?: { screenshot?: string; url?: string; title?: string } }
+          | undefined
+      )?.browser_view;
+      if (meta && typeof meta.screenshot === "string") {
+        return meta;
+      }
+    }
+    return null;
+  }, [messages]);
+  useEffect(() => {
+    // Only the primary chat surface drives the shared browser panel. The
+    // sidecar renders a different thread's messages against the same
+    // BrowserViewProvider; pushing its frames would make the panel resolve
+    // another thread's screenshot with the primary threadId (404 / wrong page).
+    if (sidecarSurface) {
+      return;
+    }
+    if (latestBrowserView?.screenshot && pushBrowserFrame) {
+      pushBrowserFrame({
+        screenshot: latestBrowserView.screenshot,
+        url: latestBrowserView.url,
+        title: latestBrowserView.title,
+      });
+    }
+  }, [latestBrowserView, pushBrowserFrame, sidecarSurface]);
   const groupedMessages = getMessageGroups(messages);
   const [regeneratingMessageId, setRegeneratingMessageId] = useState<
     string | null
@@ -994,6 +1030,7 @@ export function MessageList({
                 <MessageGroup
                   messages={group.messages}
                   isLoading={thread.isLoading}
+                  threadId={threadId}
                   tokenDebugSteps={tokenDebugSteps.filter((step) =>
                     group.messages.some(
                       (message) => message.id === step.messageId,

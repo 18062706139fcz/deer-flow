@@ -511,7 +511,14 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
             existing = list(existing)
         config["callbacks"] = [*existing, *tracing_callbacks]
 
-    skills_for_tool_policy = _load_enabled_skills_for_tool_policy(available_skills, app_config=resolved_app_config, user_id=resolved_user_id)
+    skills_for_discovery = _load_enabled_skills_for_tool_policy(available_skills, app_config=resolved_app_config, user_id=resolved_user_id)
+    # The default lead agent advertises installed skills for discovery, but an
+    # installed skill is not automatically active. Applying every enabled
+    # skill's allowed-tools globally can hide ordinary configured tools (for
+    # example browser_navigate) from unrelated chat requests. Keep allowlists as
+    # an explicit custom-agent/bootstrap/subagent constraint; default chat uses
+    # the normal configured toolset until a specific workflow owns execution.
+    skills_for_tool_policy = skills_for_discovery if agent_config is not None or is_bootstrap else []
 
     # Build skill search setup (deferred skill discovery).
     # Controlled by skills.deferred_discovery — independent from tool_search.enabled.
@@ -524,7 +531,7 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
         # Special bootstrap agent with minimal prompt for initial custom agent creation flow
         # Keep the bootstrap skill set intentionally narrow so agent creation
         # remains deterministic before the custom agent's own config exists.
-        bootstrap_skills = [s for s in skills_for_tool_policy if s.name in _BOOTSTRAP_SKILL_NAMES]
+        bootstrap_skills = [s for s in skills_for_discovery if s.name in _BOOTSTRAP_SKILL_NAMES]
         skill_setup = build_skill_search_setup(
             bootstrap_skills,
             enabled=skill_search_enabled,
@@ -571,10 +578,11 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
 
     # Custom agents can update their own SOUL.md / config via update_agent.
     # The default agent (no agent_name) does not see this tool.
-    # Build skill search setup from policy-filtered skills (same list used for
-    # tool-policy filtering), so describe_skill only exposes allowed skills.
+    # Build skill search setup from discovery skills. This is intentionally
+    # broader than the default chat tool policy: discovering a skill should not
+    # by itself activate that skill's allowed-tools allowlist.
     skill_setup = build_skill_search_setup(
-        skills_for_tool_policy,
+        skills_for_discovery,
         enabled=skill_search_enabled,
         container_base_path=container_base_path,
     )

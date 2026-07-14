@@ -1,0 +1,743 @@
+"""Stateful, loop-affine browser sessions backed by Playwright.
+
+Playwright's async objects (``Browser``/``BrowserContext``/``Page``) are affine
+to the event loop that created them. DeerFlow tools may be awaited on the
+Gateway loop, the TUI loop, or a fresh test loop, and a browser session must
+survive across turns of the same thread. To decouple Playwright's loop from the
+caller's loop, every Playwright operation runs on one private daemon event loop
+(same approach the BoxLite provider uses for its loop-affine box handles); async
+tools await the result via :func:`asyncio.wrap_future`.
+
+Playwright itself is an optional dependency — it is imported lazily inside the
+private loop so the core harness installs without it.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import base64
+import logging
+import threading
+import time
+from collections.abc import Callable, Coroutine
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, TypeVar
+
+if TYPE_CHECKING:
+    from playwright.async_api import Browser, BrowserContext, Page, Playwright
+
+logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
+
+# Element roles/tags treated as interactive when building a page snapshot. The
+# model addresses elements by the ``data-df-ref`` index this snapshot stamps, so
+# it never has to guess a CSS selector or hold a stale element handle.
+_SNAPSHOT_JS = r"""
+() => {
+  // Clear ref stamps from any previous snapshot first. GitHub-style SPAs keep
+  // stale (now-hidden) nodes in the DOM carrying old data-df-ref values; if we
+  // don't strip them, a later click selector like [data-df-ref="5"] can match
+  // the hidden leftover ahead of the current visible element in DOM order and
+  // time out waiting for it to become actionable.
+  for (const stale of document.querySelectorAll("[data-df-ref]")) {
+    stale.removeAttribute("data-df-ref");
+  }
+  const INTERACTIVE = new Set(["A", "BUTTON", "INPUT", "TEXTAREA", "SELECT"]);
+  const results = [];
+  let ref = 0;
+  const nodes = document.querySelectorAll(
+    "a, button, input, textarea, select, [role=button], [role=link], [role=tab], [role=checkbox], [onclick]"
+  );
+  for (const el of nodes) {
+    const rect = el.getBoundingClientRect();
+    const visible = rect.width > 0 && rect.height > 0 &&
+      window.getComputedStyle(el).visibility !== "hidden" &&
+      window.getComputedStyle(el).display !== "none";
+    if (!visible) continue;
+    ref += 1;
+    el.setAttribute("data-df-ref", String(ref));
+    const tag = el.tagName.toLowerCase();
+    const role = el.getAttribute("role") || "";
+    const type = el.getAttribute("type") || "";
+    let name = (el.getAttribute("aria-label") || el.getAttribute("name") ||
+      el.getAttribute("placeholder") || el.innerText || el.value || "").trim();
+    if (name.length > 120) name = name.slice(0, 120) + "…";
+    results.push({ ref, tag, role, type, name });
+    if (results.length >= 200) break;
+  }
+  return { url: location.href, title: document.title, elements: results };
+}
+"""
+
+
+_WHEEL_SCROLL_JS = r"""
+({ x, y, dx, dy }) => {
+  const root = document.scrollingElement || document.documentElement;
+  const candidates = [];
+  let node = document.elementFromPoint(x, y);
+
+  while (node && node !== document.documentElement) {
+    if (node instanceof Element) {
+      candidates.push(node);
+    }
+    node = node.parentElement;
+  }
+  candidates.push(root);
+
+  const canScroll = (el, axis, delta) => {
+    if (!delta || !el) {
+      return false;
+    }
+    const max =
+      axis === "y"
+        ? el.scrollHeight - el.clientHeight
+        : el.scrollWidth - el.clientWidth;
+    if (max <= 0) {
+      return false;
+    }
+    const current = axis === "y" ? el.scrollTop : el.scrollLeft;
+    return delta < 0 ? current > 0 : current < max;
+  };
+
+  for (const el of candidates) {
+    if (!canScroll(el, "y", dy) && !canScroll(el, "x", dx)) {
+      continue;
+    }
+    const beforeLeft = el.scrollLeft;
+    const beforeTop = el.scrollTop;
+    el.scrollBy({ left: dx, top: dy, behavior: "auto" });
+    return el.scrollLeft !== beforeLeft || el.scrollTop !== beforeTop;
+  }
+
+  const beforeX = window.scrollX;
+  const beforeY = window.scrollY;
+  window.scrollBy({ left: dx, top: dy, behavior: "auto" });
+  return window.scrollX !== beforeX || window.scrollY !== beforeY;
+}
+"""
+
+
+# Per-action timeout for clicks. Kept well under the session default (30s) so a
+# stale/invalid ref fails fast and the model can re-snapshot instead of blocking
+# the whole browsing loop (and tripping the agent loop-detection safety stop).
+_CLICK_TIMEOUT_MS = 8000
+# Short, best-effort settle wait after a click. SPA (client-side) navigations
+# never fire a fresh load event, so this must never block the action.
+_POST_CLICK_LOAD_TIMEOUT_MS = 3000
+_LIVE_FRAME_JPEG_QUALITY = 85
+_MANUAL_LIVE_FRAME_MIN_INTERVAL_S = 0.75
+_LIVE_FRAME_SETTLE_DELAYS_S = (0.8, 2.0)
+
+
+class _PlaywrightLoopThread:
+    """A private asyncio event loop running on a dedicated daemon thread."""
+
+    def __init__(self) -> None:
+        self._loop = asyncio.new_event_loop()
+        self._thread = threading.Thread(target=self._run, name="deerflow-browser-loop", daemon=True)
+        self._thread.start()
+
+    def _run(self) -> None:
+        asyncio.set_event_loop(self._loop)
+        self._loop.run_forever()
+
+    async def run(self, coro: Coroutine[Any, Any, T]) -> T:
+        """Schedule *coro* on the private loop and await it from any loop."""
+        future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+        return await asyncio.wrap_future(future)
+
+    def submit(self, coro: Coroutine[Any, Any, Any]) -> None:
+        """Schedule *coro* on the private loop without blocking the caller."""
+        future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+
+        def _log_failure(done: Any) -> None:
+            try:
+                done.result()
+            except Exception as exc:
+                logger.debug("browser background task failed: %s", exc)
+
+        future.add_done_callback(_log_failure)
+
+    def run_sync(self, coro: Coroutine[Any, Any, T], timeout: float | None = None) -> T:
+        future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+        return future.result(timeout=timeout)
+
+
+@dataclass
+class SnapshotElement:
+    ref: int
+    tag: str
+    role: str
+    type: str
+    name: str
+
+    def render(self) -> str:
+        label = self.role or self.tag
+        detail = f" type={self.type}" if self.type else ""
+        name = self.name or "(no text)"
+        return f"[{self.ref}] {label}{detail}: {name}"
+
+
+@dataclass
+class PageSnapshot:
+    url: str
+    title: str
+    elements: list[SnapshotElement] = field(default_factory=list)
+
+    def render(self) -> str:
+        lines = [f"URL: {self.url}", f"Title: {self.title}", ""]
+        if not self.elements:
+            lines.append("No interactive elements detected.")
+        else:
+            lines.append("Interactive elements (address them by [ref] number):")
+            lines.extend(el.render() for el in self.elements)
+        return "\n".join(lines)
+
+
+@dataclass
+class BrowserTab:
+    index: int
+    url: str
+    title: str
+    active: bool
+
+
+class BrowserSession:
+    """A single Playwright browser+page bound to the private loop."""
+
+    def __init__(
+        self,
+        loop: _PlaywrightLoopThread,
+        *,
+        headless: bool,
+        timeout_ms: int,
+        viewport: dict[str, int],
+        cdp_url: str | None = None,
+    ) -> None:
+        self._loop = loop
+        self._headless = headless
+        self._timeout_ms = timeout_ms
+        self._viewport = viewport
+        # When set, attach to an already-running Chrome via the DevTools
+        # Protocol (like Codex's "connect to your real browser") instead of
+        # launching a private headless instance. The user watches the agent
+        # drive their own visible browser, with their real login sessions.
+        self._cdp_url = cdp_url
+        self._connected_over_cdp = False
+        self._playwright: Playwright | None = None
+        self._browser: Browser | None = None
+        self._context: BrowserContext | None = None
+        self._page: Page | None = None
+        self._cdp: Any = None
+        # Live screencast state. When streaming, ``_on_frame`` is retained so the
+        # screencast can be re-bound to a new page — login/OAuth flows commonly
+        # open a popup or a fresh tab, and the user must see (and drive) it.
+        self._on_frame: Callable[[str], None] | None = None
+        # The page the live screencast's CDP session is currently bound to. Frames
+        # are captured from ``self._page`` (the live active page), but the CDP
+        # repaint signal is tied to a specific page; when the active page diverges
+        # from this one we must rebind so new-page repaints keep driving frames.
+        self._screencast_page: Page | None = None
+        # Guards against re-entrant rebinds: while (re)binding the screencast we
+        # may call _ensure_page (which routes through _set_active_page); without
+        # this flag that would schedule another rebind and recurse.
+        self._screencast_binding = False
+        self._last_manual_live_frame_at = 0.0
+        self._manual_live_frame_pending = False
+        self._settle_live_frames_pending = False
+        self._page_listener_bound = False
+
+    async def _ensure_page(self) -> Page:
+        if self._page is not None and not self._page.is_closed():
+            return self._page
+        from playwright.async_api import async_playwright
+
+        if self._playwright is None:
+            self._playwright = await async_playwright().start()
+
+        if self._cdp_url:
+            # Attach to the user's running Chrome (started with
+            # --remote-debugging-port). Reuse its default context + an existing
+            # tab: calling new_context()/new_page() on a CDP-attached real
+            # Chrome trips "Browser context management is not supported", so we
+            # adopt the tab Chrome already opened instead.
+            if self._browser is None or not self._browser.is_connected():
+                self._browser = await self._playwright.chromium.connect_over_cdp(self._cdp_url)
+                self._connected_over_cdp = True
+            self._context = self._browser.contexts[0] if self._browser.contexts else await self._browser.new_context()
+            self._context.set_default_timeout(self._timeout_ms)
+            existing = self._context.pages
+            self._set_active_page(existing[-1] if existing else await self._context.new_page())
+            self._bind_new_page_listener()
+            return self._page
+
+        if self._browser is None or not self._browser.is_connected():
+            self._browser = await self._playwright.chromium.launch(headless=self._headless)
+        # device_scale_factor=2 renders screenshots at retina density so the
+        # panel stays crisp when the image is scaled up to fill the view.
+        self._context = await self._browser.new_context(viewport=self._viewport, device_scale_factor=2)
+        self._context.set_default_timeout(self._timeout_ms)
+        self._set_active_page(await self._context.new_page())
+        self._bind_new_page_listener()
+        return self._page
+
+    def _set_active_page(self, page: Page) -> None:
+        """Adopt *page* as the active page and keep the live screencast on it.
+
+        Every path that changes the active page (initial/rebuilt page, popups and
+        new tabs, explicit tab switches) routes through here so the live stream can
+        never drift onto a stale page. The CDP screencast's repaint signal is bound
+        to one page; when the active page diverges from the one the screencast is
+        bound to, rebind it. Rebinding is scheduled with error handling so a
+        transient failure cannot leave the callback un-awaited and silently
+        swallowed (the previous fire-and-forget rebind could strand Live on the
+        old page — address bar / snapshot moved on, frames did not).
+        """
+        self._page = page
+        if self._on_frame is not None and not self._screencast_binding and page is not self._screencast_page:
+            asyncio.ensure_future(self._rebind_screencast_safe())
+
+    def _bind_new_page_listener(self) -> None:
+        """Follow popups/new tabs so auth flows stay visible and controllable.
+
+        Login and OAuth consent screens routinely open a popup or a fresh tab.
+        Without following it the user sees a frozen frame and cannot authorize.
+        On a new page we adopt it as the active page and, if a screencast is
+        running, re-bind it so the stream tracks the tab the user must act on.
+        """
+        if self._context is None or self._page_listener_bound:
+            return
+
+        def _on_new_page(page: Page) -> None:
+            self._set_active_page(page)
+
+        self._context.on("page", _on_new_page)
+        self._page_listener_bound = True
+
+    async def _rebind_screencast(self) -> None:
+        if self._on_frame is not None:
+            await self._start_screencast(self._on_frame)
+
+    async def _rebind_screencast_safe(self) -> None:
+        try:
+            await self._rebind_screencast()
+        except Exception as exc:
+            logger.debug("browser live screencast rebind failed: %s", exc)
+
+    async def _navigate(self, url: str) -> PageSnapshot:
+        page = await self._ensure_page()
+        await page.goto(url, wait_until="domcontentloaded")
+        return await self._snapshot_impl(page)
+
+    async def _snapshot_impl(self, page: Page) -> PageSnapshot:
+        data = await page.evaluate(_SNAPSHOT_JS)
+        elements = [SnapshotElement(ref=int(e["ref"]), tag=e["tag"], role=e["role"], type=e["type"], name=e["name"]) for e in data["elements"]]
+        return PageSnapshot(url=data["url"], title=data["title"], elements=elements)
+
+    async def _snapshot(self) -> PageSnapshot:
+        page = await self._ensure_page()
+        return await self._snapshot_impl(page)
+
+    async def _click(self, ref: int) -> PageSnapshot:
+        from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
+        page = await self._ensure_page()
+        selector = f'[data-df-ref="{ref}"]'
+        base = page.locator(selector)
+
+        # Fast-fail on a stale ref instead of blocking on the 30s session
+        # default: after a SPA re-render the ref may no longer exist, and the
+        # model should re-snapshot and retry rather than the browsing loop
+        # stalling until it trips the agent loop-detection safety stop.
+        if await base.count() == 0:
+            raise RuntimeError(f"element [{ref}] is no longer on the page; call browser_snapshot to get fresh refs")
+
+        locator = base.first
+        # Bring the target into view; harmless if it is already on-screen.
+        try:
+            await locator.scroll_into_view_if_needed(timeout=_CLICK_TIMEOUT_MS)
+        except PlaywrightTimeoutError:
+            pass
+
+        try:
+            await locator.click(timeout=_CLICK_TIMEOUT_MS)
+        except PlaywrightTimeoutError as exc:
+            raise RuntimeError(f"element [{ref}] was not clickable within {_CLICK_TIMEOUT_MS // 1000}s; the page may have changed — call browser_snapshot and retry") from exc
+
+        # SPA (client-side) navigations never fire a fresh load event, so this
+        # settle wait is best-effort and must never block the snapshot.
+        try:
+            await page.wait_for_load_state("domcontentloaded", timeout=_POST_CLICK_LOAD_TIMEOUT_MS)
+        except PlaywrightTimeoutError:
+            pass
+
+        return await self._snapshot_impl(page)
+
+    async def _type(self, ref: int, text: str, submit: bool) -> PageSnapshot:
+        from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
+        page = await self._ensure_page()
+        selector = f'[data-df-ref="{ref}"]'
+        await page.fill(selector, text)
+        if submit:
+            await page.press(selector, "Enter")
+            # Best-effort settle; a client-side search/submit may never fire a
+            # fresh load event, so this must not block the snapshot for 30s.
+            try:
+                await page.wait_for_load_state("domcontentloaded", timeout=_POST_CLICK_LOAD_TIMEOUT_MS)
+            except PlaywrightTimeoutError:
+                pass
+        return await self._snapshot_impl(page)
+
+    async def _get_text(self, max_chars: int) -> str:
+        page = await self._ensure_page()
+        text = await page.inner_text("body")
+        return text[:max_chars]
+
+    async def _screenshot_bytes(self, full_page: bool) -> bytes:
+        page = await self._ensure_page()
+        return await page.screenshot(full_page=full_page, type="png")
+
+    async def _live_frame(self) -> str:
+        page = await self._ensure_page()
+        shot = await page.screenshot(type="jpeg", quality=_LIVE_FRAME_JPEG_QUALITY)
+        return base64.b64encode(shot).decode("ascii")
+
+    async def _emit_live_frame(self) -> None:
+        if self._on_frame is None:
+            return
+        self._on_frame(await self._live_frame())
+        self._last_manual_live_frame_at = time.monotonic()
+
+    async def _delayed_live_frame(self, delay: float) -> None:
+        try:
+            await asyncio.sleep(delay)
+            await self._emit_live_frame()
+        finally:
+            self._manual_live_frame_pending = False
+
+    async def _settle_live_frames(self) -> None:
+        previous_delay = 0.0
+        try:
+            for delay in _LIVE_FRAME_SETTLE_DELAYS_S:
+                await asyncio.sleep(max(0.0, delay - previous_delay))
+                previous_delay = delay
+                await self._emit_live_frame()
+        finally:
+            self._settle_live_frames_pending = False
+
+    def _schedule_settle_live_frames(self) -> None:
+        if self._settle_live_frames_pending:
+            return
+        self._settle_live_frames_pending = True
+        asyncio.ensure_future(self._settle_live_frames())
+
+    async def _push_live_frame(self) -> None:
+        if self._on_frame is None:
+            return
+        elapsed = time.monotonic() - self._last_manual_live_frame_at
+        if elapsed >= _MANUAL_LIVE_FRAME_MIN_INTERVAL_S:
+            await self._emit_live_frame()
+        elif not self._manual_live_frame_pending:
+            self._manual_live_frame_pending = True
+            asyncio.ensure_future(self._delayed_live_frame(_MANUAL_LIVE_FRAME_MIN_INTERVAL_S - elapsed))
+        # One frame is often too early for SPAs: the URL may have changed while
+        # the page body is still rendering. Add a small, bounded settle burst
+        # instead of returning to continuous screencast.
+        self._schedule_settle_live_frames()
+
+    async def _back(self) -> PageSnapshot:
+        page = await self._ensure_page()
+        await page.go_back(wait_until="domcontentloaded")
+        return await self._snapshot_impl(page)
+
+    async def _current_url(self) -> str | None:
+        page = await self._ensure_page()
+        try:
+            return page.url
+        except Exception:
+            return None
+
+    async def _tabs(self) -> list[BrowserTab]:
+        await self._ensure_page()
+        if self._context is None:
+            return []
+        pages = [page for page in self._context.pages if not page.is_closed()]
+        tabs: list[BrowserTab] = []
+        for index, page in enumerate(pages):
+            try:
+                title = await page.title()
+            except Exception:
+                title = ""
+            try:
+                url = page.url
+            except Exception:
+                url = ""
+            tabs.append(BrowserTab(index=index, url=url, title=title, active=page == self._page))
+        return tabs
+
+    async def _activate_tab(self, index: int) -> None:
+        await self._ensure_page()
+        if self._context is None:
+            return
+        pages = [page for page in self._context.pages if not page.is_closed()]
+        if index < 0 or index >= len(pages):
+            return
+        target = pages[index]
+        await target.bring_to_front()
+        # This path is async, so rebind the screencast inline (awaited) rather
+        # than going through _set_active_page's scheduled rebind — that keeps the
+        # frame source aligned with the switched-to tab before this call returns.
+        self._page = target
+        if self._on_frame is not None and target is not self._screencast_page:
+            await self._rebind_screencast()
+
+    async def _close(self) -> None:
+        try:
+            await self._stop_screencast()
+            if self._connected_over_cdp:
+                # Attached to the user's real Chrome — never close their browser,
+                # context, or the tab we adopted. Just disconnect Playwright.
+                if self._browser is not None:
+                    await self._browser.close()
+            else:
+                if self._context is not None:
+                    await self._context.close()
+                if self._browser is not None:
+                    await self._browser.close()
+            if self._playwright is not None:
+                await self._playwright.stop()
+        finally:
+            self._playwright = None
+            self._browser = None
+            self._context = None
+            self._page = None
+            self._cdp = None
+            self._screencast_page = None
+            self._connected_over_cdp = False
+            self._on_frame = None
+            self._manual_live_frame_pending = False
+            self._settle_live_frames_pending = False
+            self._page_listener_bound = False
+
+    async def _start_screencast(self, on_frame: Callable[[str], None]) -> None:
+        """Start Live mode and send an initial JPEG frame.
+
+        This used to attach Chrome's CDP screencast and then turn every repaint
+        into a high-quality Playwright screenshot. That made GitHub-like pages
+        expensive to open because a mostly static panel still kept the headless
+        renderer/GPU busy. Live control now uses on-demand frames instead:
+        initial connect, browser tool completion, and user input all push a
+        throttled screenshot.
+        """
+        page = await self._ensure_page()
+        await self._stop_screencast()
+        self._on_frame = on_frame
+        self._screencast_page = page
+        await self._emit_live_frame()
+        self._schedule_settle_live_frames()
+
+    async def _stop_screencast(self, on_frame: Callable[[str], None] | None = None) -> None:
+        if on_frame is not None and self._on_frame is not on_frame:
+            return
+        self._on_frame = None
+        self._manual_live_frame_pending = False
+        self._settle_live_frames_pending = False
+        cdp = self._cdp
+        self._cdp = None
+        self._screencast_page = None
+        if cdp is None:
+            return
+        try:
+            await cdp.send("Page.stopScreencast")
+        except Exception:
+            pass
+        try:
+            await cdp.detach()
+        except Exception:
+            pass
+
+    async def _dispatch_input(self, event: dict) -> None:
+        page = await self._ensure_page()
+        vw = self._viewport.get("width", 1280)
+        vh = self._viewport.get("height", 720)
+        etype = event.get("type")
+        if etype in {"click", "move", "down", "up"}:
+            x = float(event.get("nx", 0)) * vw
+            y = float(event.get("ny", 0)) * vh
+            if etype == "click":
+                await page.mouse.click(x, y)
+            elif etype == "move":
+                await page.mouse.move(x, y)
+            elif etype == "down":
+                await page.mouse.move(x, y)
+                await page.mouse.down()
+            elif etype == "up":
+                await page.mouse.up()
+        elif etype == "wheel":
+            dx = float(event.get("dx", 0))
+            dy = float(event.get("dy", 0))
+            nx = event.get("nx")
+            ny = event.get("ny")
+            x = vw / 2
+            y = vh / 2
+            if nx is not None and ny is not None:
+                try:
+                    x = max(0.0, min(1.0, float(nx))) * vw
+                    y = max(0.0, min(1.0, float(ny))) * vh
+                    await page.mouse.move(x, y)
+                except (TypeError, ValueError) as e:
+                    logger.debug("invalid browser wheel coordinates: %s", e)
+            try:
+                handled = bool(await page.evaluate(_WHEEL_SCROLL_JS, {"x": x, "y": y, "dx": dx, "dy": dy}))
+            except Exception as e:
+                logger.debug("browser js scroll failed: %s", e)
+                handled = False
+            if not handled:
+                await page.mouse.wheel(dx, dy)
+        elif etype == "key":
+            key = event.get("key")
+            if key:
+                await page.keyboard.press(key)
+        elif etype == "text":
+            text = event.get("text")
+            if text:
+                await page.keyboard.type(text)
+        elif etype == "navigate":
+            url = event.get("url")
+            if url:
+                await page.goto(url, wait_until="domcontentloaded")
+        elif etype == "back":
+            await page.go_back(wait_until="domcontentloaded")
+        elif etype == "forward":
+            await page.go_forward(wait_until="domcontentloaded")
+        elif etype == "activate_tab":
+            index = event.get("index")
+            if isinstance(index, int) and not isinstance(index, bool):
+                await self._activate_tab(index)
+        if etype != "move":
+            await self._push_live_frame()
+
+    # Public API — each marshals onto the private loop.
+    async def navigate(self, url: str) -> PageSnapshot:
+        return await self._loop.run(self._navigate(url))
+
+    async def snapshot(self) -> PageSnapshot:
+        return await self._loop.run(self._snapshot())
+
+    async def click(self, ref: int) -> PageSnapshot:
+        return await self._loop.run(self._click(ref))
+
+    async def type_text(self, ref: int, text: str, submit: bool = False) -> PageSnapshot:
+        return await self._loop.run(self._type(ref, text, submit))
+
+    async def get_text(self, max_chars: int = 8000) -> str:
+        return await self._loop.run(self._get_text(max_chars))
+
+    async def screenshot_bytes(self, full_page: bool = False) -> bytes:
+        return await self._loop.run(self._screenshot_bytes(full_page))
+
+    async def live_frame(self) -> str:
+        return await self._loop.run(self._live_frame())
+
+    async def push_live_frame(self) -> None:
+        await self._loop.run(self._push_live_frame())
+
+    def schedule_live_frames(self) -> None:
+        self._loop.submit(self._push_live_frame())
+
+    async def back(self) -> PageSnapshot:
+        return await self._loop.run(self._back())
+
+    async def current_url(self) -> str | None:
+        return await self._loop.run(self._current_url())
+
+    async def tabs(self) -> list[BrowserTab]:
+        return await self._loop.run(self._tabs())
+
+    async def start_screencast(self, on_frame: Callable[[str], None]) -> None:
+        await self._loop.run(self._start_screencast(on_frame))
+
+    async def stop_screencast(self, on_frame: Callable[[str], None] | None = None) -> None:
+        await self._loop.run(self._stop_screencast(on_frame))
+
+    async def dispatch_input(self, event: dict) -> None:
+        await self._loop.run(self._dispatch_input(event))
+
+    async def close(self) -> None:
+        await self._loop.run(self._close())
+
+
+class BrowserSessionManager:
+    """Process-local registry of per-thread browser sessions."""
+
+    def __init__(self) -> None:
+        self._loop: _PlaywrightLoopThread | None = None
+        self._sessions: dict[str, BrowserSession] = {}
+        self._lock = threading.Lock()
+
+    def _ensure_loop(self) -> _PlaywrightLoopThread:
+        if self._loop is None:
+            self._loop = _PlaywrightLoopThread()
+        return self._loop
+
+    def get_session(
+        self,
+        thread_id: str | None,
+        *,
+        headless: bool = True,
+        timeout_ms: int = 30000,
+        viewport: dict[str, int] | None = None,
+        cdp_url: str | None = None,
+    ) -> BrowserSession:
+        key = thread_id or "default"
+        with self._lock:
+            session = self._sessions.get(key)
+            if session is None:
+                session = BrowserSession(
+                    self._ensure_loop(),
+                    headless=headless,
+                    timeout_ms=timeout_ms,
+                    viewport=viewport or {"width": 1280, "height": 720},
+                    cdp_url=cdp_url,
+                )
+                self._sessions[key] = session
+            return session
+
+    async def close_session(self, thread_id: str | None) -> bool:
+        key = thread_id or "default"
+        with self._lock:
+            session = self._sessions.pop(key, None)
+        if session is None:
+            return False
+        await session.close()
+        return True
+
+    async def close_all_sessions(self) -> int:
+        with self._lock:
+            sessions = list(self._sessions.values())
+            self._sessions.clear()
+        for session in sessions:
+            await session.close()
+        return len(sessions)
+
+
+_manager: BrowserSessionManager | None = None
+_manager_lock = threading.Lock()
+
+
+def get_browser_session_manager() -> BrowserSessionManager:
+    global _manager
+    if _manager is None:
+        with _manager_lock:
+            if _manager is None:
+                _manager = BrowserSessionManager()
+    return _manager
+
+
+def reset_browser_session_manager() -> None:
+    """Test hook: drop the process-local manager without closing sessions."""
+    global _manager
+    with _manager_lock:
+        _manager = None
