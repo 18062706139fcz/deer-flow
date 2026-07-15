@@ -1,0 +1,21 @@
+frontend/tests/e2e/integrations.spec.ts
+  s_78ce8cdd2b48c9::t_3b2d55e12caad4 52-58,113
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "3465113436b6a2bbc55232e9fd482f2de0c4eb9b",
+  "prompts": {},
+  "sessions": {
+    "s_78ce8cdd2b48c9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f64ba-b751-7881-9b3e-e21862e877b2",
+        "model": "unknown"
+      },
+      "human_author": "ryker <2279549769@qq.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
