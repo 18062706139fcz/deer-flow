@@ -801,10 +801,13 @@ export const enUS: Translations = {
         runtimeVersionMismatch:
           "Skill pack version differs from the Gateway runtime lark-cli; admin reinstall attempts to update the managed Gateway CLI and realign the skill pack",
         authNotConfigured: "Not connected",
+        authConfigured: "Credentials configured (not live-verified)",
+        authConfiguredFor: (user) =>
+          `${user} · credentials configured (not live-verified)`,
         connect: "Connect Lark",
         authStarting: "Opening connection link...",
         checkingConnection: "Checking connection...",
-        connectedAction: "Connected",
+        connectedAction: "Reconnect Lark",
         requestPermissions: "Request permissions",
         alreadyConnected:
           "Lark is already connected. If authorization expires, refresh the status and reconnect.",
@@ -948,9 +951,12 @@ export const enUS: Translations = {
         cliNextTitle: "Install Gateway CLI",
         cliNextDescription:
           "The skill pack is installed, but the Gateway cannot find lark-cli. Admin reinstall attempts to download the managed Gateway CLI; offline deployments can use an image with @larksuite/cli built in.",
-        connectedTitle: "Lark is connected",
+        configuredTitle: "Lark credentials are configured locally",
+        configuredDescription:
+          "Credentials are present, but their current validity has not been checked with Lark. Reconnect to refresh and live-verify authorization.",
+        connectedTitle: "Lark authorization is live-verified",
         connectedDescription:
-          "The current user is authorized. If authorization expires later, refreshing the status will allow reconnection.",
+          "The current user's authorization was verified with Lark during this connection flow. Reconnect whenever you need to refresh it or add permissions.",
         authNextTitle: "Complete browser authorization next",
         authNextDescription:
           "Click “Connect Lark”; DeerFlow checks the current status first and opens browser authorization only when disconnected or expired.",

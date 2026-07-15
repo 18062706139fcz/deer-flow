@@ -14,6 +14,7 @@ export interface LarkAuthProbe {
     | "error";
   message: string | null;
   user: string | null;
+  verified: boolean;
 }
 
 export interface LarkIntegrationStatus {
@@ -83,6 +84,7 @@ export interface LarkConfigCompleteResponse {
 
 export interface LarkAuthCompleteRequest {
   device_code: string;
+  wait_timeout_seconds?: number;
 }
 
 export interface LarkAuthCompleteResponse {

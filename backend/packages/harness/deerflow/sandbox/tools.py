@@ -316,8 +316,7 @@ def _resolve_skills_path(path: str) -> str:
 
     relative = path[len(skills_container) :].lstrip("/")
 
-    # Per-user custom and managed integration skills: resolve to user-specific
-    # directories.
+    # Per-user custom and globally managed integration skills.
     # ``skill_manage_tool`` writes custom skills to the per-user directory,
     # and ``LocalSandboxProvider._build_thread_path_mappings`` mounts
     # ``/mnt/skills/custom`` to that same per-user dir.  Without this
@@ -339,21 +338,19 @@ def _resolve_skills_path(path: str) -> str:
 
     if relative == "integrations" or relative.startswith("integrations/"):
         from deerflow.config.paths import get_paths
-        from deerflow.runtime.user_context import get_effective_user_id
 
-        user_id = get_effective_user_id()
         paths = get_paths()
-        user_integrations_dir = paths.user_integration_skills_dir(user_id)
+        integrations_dir = paths.integration_skills_dir()
         integrations_relative = relative[len("integrations") :].lstrip("/")
         if not integrations_relative:
-            return str(user_integrations_dir)
+            return str(integrations_dir)
         # Defense-in-depth: even though _reject_path_traversal runs upstream for
-        # sandbox callers, confirm the resolved path stays within the user's
+        # sandbox callers, confirm the resolved path stays within the global
         # integration dir so a lexical ``../`` cannot escape it here.
-        resolved = (user_integrations_dir / integrations_relative).resolve()
-        if not resolved.is_relative_to(user_integrations_dir.resolve()):
+        resolved = (integrations_dir / integrations_relative).resolve()
+        if not resolved.is_relative_to(integrations_dir.resolve()):
             raise PermissionError("Access denied: path traversal detected")
-        return str(user_integrations_dir / integrations_relative)
+        return str(integrations_dir / integrations_relative)
 
     return _join_path_preserving_style(skills_host, relative)
 
@@ -810,13 +807,13 @@ def mask_local_paths_in_output(output: str, thread_data: ThreadDataState | None)
 
         user_id = get_effective_user_id()
         user_custom_dir = get_paths().user_custom_skills_dir(user_id)
-        user_integrations_dir = get_paths().user_integration_skills_dir(user_id)
+        integrations_dir = get_paths().integration_skills_dir()
         if user_custom_dir.exists():
             skills_container = _get_skills_container_path()
             sources.append((str(user_custom_dir), f"{skills_container}/custom"))
-        if user_integrations_dir.exists():
+        if integrations_dir.exists():
             skills_container = _get_skills_container_path()
-            sources.append((str(user_integrations_dir), f"{skills_container}/integrations"))
+            sources.append((str(integrations_dir), f"{skills_container}/integrations"))
     except Exception:
         pass
 

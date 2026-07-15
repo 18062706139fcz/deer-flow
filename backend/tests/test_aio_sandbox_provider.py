@@ -2,6 +2,7 @@
 
 import asyncio
 import importlib
+import stat
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -106,6 +107,8 @@ def test_get_lark_cli_runtime_mounts_uses_user_auth_dirs(tmp_path, monkeypatch):
     lark_cli = importlib.import_module("deerflow.integrations.lark_cli")
     monkeypatch.setattr(aio_mod, "get_paths", lambda: Paths(base_dir=tmp_path))
     monkeypatch.setattr(aio_mod, "get_effective_user_id", lambda: "default")
+    runtime_dir = tmp_path / "integrations" / "lark-cli" / "sandbox-cli"
+    runtime_dir.mkdir(parents=True)
 
     mounts = aio_mod.AioSandboxProvider._get_lark_cli_runtime_mounts(user_id="alice")
     container_paths = {container_path: (host_path, read_only) for host_path, container_path, read_only in mounts}
@@ -118,6 +121,33 @@ def test_get_lark_cli_runtime_mounts_uses_user_auth_dirs(tmp_path, monkeypatch):
         str(tmp_path / "users" / "alice" / "integrations" / "lark-cli" / "data"),
         False,
     )
+    assert stat.S_IMODE((tmp_path / "users" / "alice" / "integrations" / "lark-cli" / "config").stat().st_mode) == 0o700
+    assert stat.S_IMODE((tmp_path / "users" / "alice" / "integrations" / "lark-cli" / "data").stat().st_mode) == 0o700
+    assert container_paths["/mnt/integrations/lark-cli/runtime"] == (
+        str(runtime_dir),
+        True,
+    )
+
+
+def test_get_user_skill_mounts_share_global_integrations_but_isolate_custom_skills(tmp_path, monkeypatch):
+    aio_mod = importlib.import_module("deerflow.community.aio_sandbox.aio_sandbox_provider")
+    skills_root = tmp_path / "skills"
+    (skills_root / "public").mkdir(parents=True)
+    config = SimpleNamespace(
+        skills=SimpleNamespace(
+            get_skills_path=lambda: skills_root,
+            container_path="/mnt/skills",
+        )
+    )
+    monkeypatch.setattr(aio_mod, "get_app_config", lambda: config)
+    monkeypatch.setattr(aio_mod, "get_paths", lambda: Paths(base_dir=tmp_path / "home"))
+
+    alice = {container: host for host, container, _read_only in aio_mod.AioSandboxProvider._get_user_skill_mounts(user_id="alice")}
+    bob = {container: host for host, container, _read_only in aio_mod.AioSandboxProvider._get_user_skill_mounts(user_id="bob")}
+
+    assert alice["/mnt/skills/custom"] != bob["/mnt/skills/custom"]
+    assert alice["/mnt/skills/integrations"] == bob["/mnt/skills/integrations"]
+    assert alice["/mnt/skills/integrations"] == str(tmp_path / "home" / "integrations" / "skills")
 
 
 def test_join_host_path_preserves_windows_drive_letter_style():

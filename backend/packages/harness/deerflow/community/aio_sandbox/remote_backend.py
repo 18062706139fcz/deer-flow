@@ -35,6 +35,7 @@ _PROVISIONER_EXTRA_MOUNT_PATHS = {
     "/mnt/skills/integrations",
     "/mnt/integrations/lark-cli/config",
     "/mnt/integrations/lark-cli/data",
+    "/mnt/integrations/lark-cli/runtime",
 }
 
 

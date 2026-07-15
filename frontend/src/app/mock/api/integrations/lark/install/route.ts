@@ -18,7 +18,7 @@ export function POST() {
       skills_installed: installedSkills.length,
       installed_skills: installedSkills,
       enabled_skills: installedSkills,
-      install_path: "/mock/users/default/skills/integrations/lark-cli",
+      install_path: "/mock/integrations/skills/lark-cli",
       cli: {
         available: true,
         path: "/usr/bin/lark-cli",
@@ -29,6 +29,7 @@ export function POST() {
         status: "not_configured",
         message: "lark-cli auth is not configured",
         user: null,
+        verified: false,
       },
     },
   });

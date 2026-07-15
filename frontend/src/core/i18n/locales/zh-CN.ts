@@ -771,10 +771,12 @@ export const zhCN: Translations = {
         runtimeVersionMismatch:
           "技能包版本与 Gateway 运行时 lark-cli 不一致；管理员重新安装会尝试更新 managed Gateway CLI 并重新对齐技能包",
         authNotConfigured: "尚未连接",
+        authConfigured: "凭证已配置（未实时验证）",
+        authConfiguredFor: (user) => `${user} · 凭证已配置（未实时验证）`,
         connect: "连接飞书",
         authStarting: "正在打开连接链接...",
         checkingConnection: "正在检查连接状态...",
-        connectedAction: "已连接",
+        connectedAction: "重新连接飞书",
         requestPermissions: "申请新权限",
         alreadyConnected:
           "飞书已连接，无需重复授权。如果授权已过期，刷新状态后可重新连接。",
@@ -906,9 +908,12 @@ export const zhCN: Translations = {
         cliNextTitle: "需要安装 Gateway CLI",
         cliNextDescription:
           "技能包已安装，但 Gateway 找不到 lark-cli。管理员重新安装集成会尝试下载 managed Gateway CLI；离线部署可使用内置 @larksuite/cli 的镜像。",
-        connectedTitle: "飞书已连接",
+        configuredTitle: "飞书凭证已在本地配置",
+        configuredDescription:
+          "当前只确认本地存在凭证，尚未向飞书实时验证有效性。重新连接可刷新并实时验证授权。",
+        connectedTitle: "飞书授权已实时验证",
         connectedDescription:
-          "当前用户已完成授权。如果后续授权过期，刷新状态后会重新允许连接。",
+          "本次连接流程已向飞书验证当前用户授权。需要刷新授权或追加权限时，可重新连接。",
         authNextTitle: "下一步完成浏览器授权",
         authNextDescription:
           "点击“连接飞书”后，DeerFlow 会先检查当前状态；未连接或授权过期时会拉起浏览器授权。",

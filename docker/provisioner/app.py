@@ -79,13 +79,14 @@ if SANDBOX_SERVICE_TYPE not in {"NodePort", "ClusterIP"}:
 SAFE_THREAD_ID_PATTERN = r"^[A-Za-z0-9_\-]+$"
 SAFE_USER_ID_PATTERN = r"^[A-Za-z0-9_\-]+$"
 DEFAULT_USER_ID = "default"
-MAX_EXTRA_MOUNTS = 8
+MAX_EXTRA_MOUNTS = 9
 ALLOWED_EXTRA_MOUNT_PATHS = {
     "/mnt/acp-workspace",
     "/mnt/skills/custom",
     "/mnt/skills/integrations",
     "/mnt/integrations/lark-cli/config",
     "/mnt/integrations/lark-cli/data",
+    "/mnt/integrations/lark-cli/runtime",
 }
 
 # Path to the kubeconfig *inside* the provisioner container.

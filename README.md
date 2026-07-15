@@ -642,17 +642,27 @@ Users can explicitly activate an enabled skill for a single turn by starting the
 
 When you install `.skill` archives through the Gateway, DeerFlow accepts standard optional frontmatter metadata such as `version`, `author`, and `compatibility` instead of rejecting otherwise valid external skills.
 
-Managed integrations can install read-only skill packs for a user without mixing
-them into custom skills. The Lark/Feishu CLI integration is available under
-`Settings → Integrations → Lark / Feishu CLI`; it installs the official
-`lark-*` skills into the user's managed integration directory and checks whether
-`lark-cli` is available in the Gateway runtime. After installation, users can
-click **Connect Lark** to open a browser authorization link; no terminal
-authorization is required. The same UI can request additional permission domains
-such as Calendar, Docs, or Drive, or a specific OAuth scope reported by
-`lark-cli`. If an agent hits missing Lark authorization during a conversation,
-the managed `lark-shared` guidance points the user back to the same settings
-entry with `?settings=integrations`.
+Managed integrations install shared read-only skill packs without mixing them
+into custom skills. The Lark/Feishu CLI integration is available under
+`Settings → Integrations → Lark / Feishu CLI`; an administrator installs or
+upgrades the official `lark-*` pack once under
+`{DEER_FLOW_HOME}/integrations/skills/lark-cli`, and every user discovers that
+same pack with an independent enabled state. Each user's app configuration and
+OAuth data remain isolated under
+`{DEER_FLOW_HOME}/users/{user_id}/integrations/lark-cli/{config,data}`. These
+secret directories are restricted to `0700`, regular credential files to
+`0600`, and symlinks are rejected.
+
+After installation, users can click **Connect Lark** to open a browser
+authorization link; no terminal authorization is required. The same UI can
+request additional permission domains such as Calendar, Docs, or Drive, or a
+specific OAuth scope reported by `lark-cli`. A cheap status refresh only
+inspects the local credential tree, so the UI reports **Credentials configured
+(not live-verified)** until an explicit browser completion performs live token
+verification. The action then remains **Reconnect Lark** so users can replace
+or extend authorization. If an agent hits missing Lark authorization during a
+conversation, the managed `lark-shared` guidance points the user back to the
+same settings entry with `?settings=integrations`.
 
 Installing the Lark skill pack resolves the latest official `larksuite/cli`
 release from GitHub and downloads that version's skills at install time, so the
@@ -664,8 +674,17 @@ and point `DEER_FLOW_LARK_CLI_SKILLS_ARCHIVE` at the local file. Integrity does
 not depend on a pinned archive byte hash (GitHub does not guarantee stable
 source-archive bytes); instead the download is restricted to the official GitHub
 host, every archive member passes structural safety guards, and a content hash
-of the installed skills is recorded so content changes are auditable across
-reinstalls.
+of the effective installed skill tree (including DeerFlow's injected shared
+guidance) is recorded so content changes are auditable across reinstalls.
+
+When `sandbox.use` selects the AIO provider, the same install also downloads the
+official Linux amd64 and arm64 CLI release archives, verifies their published
+SHA-256 checksums, safely extracts one executable per architecture, and mounts
+the resulting runtime read-only at `/mnt/integrations/lark-cli/runtime`. An
+architecture-selecting launcher in that mount makes `lark-cli` available in the
+sandbox `PATH`. Air-gapped AIO deployments can pre-stage a symlink-free runtime
+tree containing `bin/lark-cli` plus both `linux-{amd64,arm64}/lark-cli` files and
+set `DEER_FLOW_LARK_CLI_SANDBOX_RUNTIME_DIR` to that directory.
 Skill installs and agent-managed skill edits run through **SkillScan**, a native deterministic safety scanner before the LLM-based skill scanner. Phase 1 runs offline with no Semgrep/OpenGrep dependency, blocks high-confidence `CRITICAL` findings such as private keys or shell execution, and passes warning findings to the LLM scanner for contextual review. Set `skill_scan.enabled: false` in `config.yaml` to disable only the deterministic analyzers; safe archive extraction and the LLM scanner still run.
 
 DeerFlow also ships with **skill-reviewer**, a public skill for read-only skill quality review. It uses the built-in `review_skill_package` tool to inspect installed skills, local packages, archives, or pasted `SKILL.md` content without activating the target skill, binding its secrets, executing its scripts, or installing it. The tool returns a compact, tag-neutralized JSON payload to the model context and keeps the full raw review payload in the tool artifact for programmatic consumers. The deterministic review core reuses DeerFlow parsing and SkillScan facts, emits versioned JSON contracts under `contracts/skill_review/`, and can be run from the backend CLI:

@@ -61,11 +61,8 @@ export function useCompleteLarkAuthorization() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: completeLarkAuthorization,
-    onSuccess: async (result) => {
+    onSuccess: (result) => {
       queryClient.setQueryData(larkIntegrationQueryKey, result.status);
-      await queryClient.invalidateQueries({
-        queryKey: larkIntegrationQueryKey,
-      });
     },
   });
 }

@@ -11,7 +11,7 @@ const status = {
   skills_installed: 0,
   installed_skills: [],
   enabled_skills: [],
-  install_path: "/mock/users/default/skills/integrations/lark-cli",
+  install_path: "/mock/integrations/skills/lark-cli",
   cli: {
     available: false,
     path: null,
@@ -22,6 +22,7 @@ const status = {
     status: "unavailable",
     message: "lark-cli is not installed on the Gateway",
     user: null,
+    verified: false,
   },
 };
 

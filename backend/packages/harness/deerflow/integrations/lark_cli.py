@@ -1,7 +1,7 @@
 """Managed Lark/Feishu CLI integration support.
 
-The integration installs the official ``lark-*`` AI-agent skills into the
-current user's read-only managed integration skill directory. It deliberately
+The integration installs the official ``lark-*`` AI-agent skills into a
+global read-only managed integration skill directory. It deliberately
 does not use the ordinary custom-skill archive path: this is a trusted,
 versioned first-party integration package, not user-authored mutable content.
 
@@ -22,9 +22,10 @@ upgrades, and pinning conflicts with tracking latest). Instead:
   fallback (no external URL injection);
 * every archive member passes structural guards (zip-slip / symlink /
   executable-binary / size / required-skill completeness / ``SKILL.md`` parse);
-* a **content** SHA-256 over the extracted skill tree is recorded in the
-  manifest, so a reinstall whose skill content changed is detectable/auditable
-  even when GitHub re-packs identical content with different archive bytes.
+* a **content** SHA-256 over the extracted skill tree, after DeerFlow's shared
+  guidance is injected, is recorded in the manifest, so a reinstall whose
+  effective skill content changed is detectable/auditable even when GitHub
+  re-packs identical content with different archive bytes.
 
 Runtime coupling: the npm-installed ``lark-cli`` binary version is pinned in
 ``backend/Dockerfile`` (``ARG LARK_CLI_NPM_VERSION``) and
@@ -43,6 +44,7 @@ diverge.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import logging
 import os
@@ -50,18 +52,27 @@ import posixpath
 import re
 import shutil
 import subprocess
+import tarfile
 import tempfile
+import threading
 import time
 import urllib.parse
 import urllib.request
 import zipfile
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows fallback
+    fcntl = None  # type: ignore[assignment]
+    import msvcrt
+
 from deerflow.config.app_config import AppConfig
-from deerflow.config.paths import get_paths
+from deerflow.config.paths import Paths, get_paths
 from deerflow.skills.installer import is_executable_binary_prefix, is_symlink_member, is_unsafe_zip_member
 from deerflow.skills.parser import parse_skill_file
 from deerflow.skills.permissions import make_skill_tree_sandbox_readable
@@ -78,16 +89,24 @@ LARK_CLI_NPM_PACKAGE = "@larksuite/cli"
 LARK_CLI_GITHUB_REPO = "larksuite/cli"
 LARK_CLI_LATEST_RELEASE_API = f"https://api.github.com/repos/{LARK_CLI_GITHUB_REPO}/releases/latest"
 LARK_CLI_SOURCE_ARCHIVE_ENV = "DEER_FLOW_LARK_CLI_SKILLS_ARCHIVE"
+LARK_CLI_SANDBOX_RUNTIME_SOURCE_ENV = "DEER_FLOW_LARK_CLI_SANDBOX_RUNTIME_DIR"
 LARK_CLI_DOWNLOAD_TIMEOUT_SECONDS = 60
 LARK_CLI_NPM_INSTALL_TIMEOUT_SECONDS = 180
 LARK_HTTP_TIMEOUT_SECONDS = 20
 LARK_CONFIG_POLL_TIMEOUT_SECONDS = 45
+LARK_AUTH_COMPLETE_DEFAULT_WAIT_SECONDS = 45
+LARK_AUTH_COMPLETE_MIN_WAIT_SECONDS = 5
+LARK_AUTH_COMPLETE_MAX_WAIT_SECONDS = 45
 LARK_CLI_LATEST_VERSION_TTL_SECONDS = 3600
 LARK_CLI_MAX_ARCHIVE_BYTES = 128 * 1024 * 1024
 LARK_CLI_MAX_EXTRACTED_BYTES = 256 * 1024 * 1024
+LARK_CLI_MAX_RUNTIME_ASSET_BYTES = 128 * 1024 * 1024
 LARK_CLI_MANIFEST_FILE = ".deerflow-lark-cli-manifest.json"
 LARK_CLI_SANDBOX_CONFIG_DIR = "/mnt/integrations/lark-cli/config"
 LARK_CLI_SANDBOX_DATA_DIR = "/mnt/integrations/lark-cli/data"
+LARK_CLI_SANDBOX_RUNTIME_DIR = "/mnt/integrations/lark-cli/runtime"
+LARK_CLI_LINUX_ARCHES = ("amd64", "arm64")
+LARK_CLI_RUNTIME_MANIFEST_FILE = ".deerflow-lark-cli-runtime.json"
 _VERSION_TAG_RE = re.compile(r"v?\d+\.\d+\.\d+")
 _DEERFLOW_LARK_SHARED_GUIDANCE_MARKER = "<!-- deerflow-lark-cli-auth-guidance-v2 -->"
 _DEERFLOW_LARK_SHARED_GUIDANCE_LEGACY_MARKERS = ("<!-- deerflow-lark-cli-auth-guidance-v1 -->",)
@@ -123,6 +142,8 @@ LARK_SKILL_NAMES: tuple[str, ...] = (
     "lark-workflow-standup-report",
 )
 LARK_SKILL_NAME_SET = frozenset(LARK_SKILL_NAMES)
+_LARK_INSTALL_THREAD_LOCK = threading.Lock()
+_LARK_RUNTIME_INSTALL_THREAD_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -138,6 +159,7 @@ class LarkAuthProbe:
     status: str
     message: str | None = None
     user: str | None = None
+    verified: bool = False
 
 
 @dataclass(frozen=True)
@@ -200,9 +222,13 @@ class LarkAuthCompleteResult:
     message: str
 
 
-def lark_integration_root(user_id: str) -> Path:
-    """Return the user-scoped root for managed Lark skills."""
-    return get_paths().user_integration_skills_dir(user_id) / INTEGRATION_ID
+def lark_integration_root(_user_id: str | None = None) -> Path:
+    """Return the shared root for globally installed managed Lark skills.
+
+    ``_user_id`` is accepted temporarily for source compatibility with the
+    pre-global-install API; it does not influence the shared package path.
+    """
+    return get_paths().integration_skills_dir() / INTEGRATION_ID
 
 
 def lark_manifest_path(user_id: str) -> Path:
@@ -217,9 +243,252 @@ def lark_cli_data_dir(user_id: str) -> Path:
     return get_paths().user_dir(user_id) / "integrations" / INTEGRATION_ID / "data"
 
 
+def ensure_lark_cli_credential_tree(user_id: str, *, paths: Paths | None = None) -> None:
+    """Make the user's secret-bearing Lark CLI tree owner-only.
+
+    The CLI writes plaintext app secrets and OAuth tokens beneath this tree.
+    Reject links before changing modes so a compromised tree cannot redirect a
+    chmod or subsequent CLI write outside the user's integration directory.
+    """
+    paths = paths or get_paths()
+    root = paths.user_dir(user_id) / "integrations" / INTEGRATION_ID
+    if root.is_symlink():
+        raise ValueError(f"Lark CLI credential path must not be a symlink: {root}")
+    root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    root.chmod(0o700)
+    for required in (root / "config", root / "data"):
+        if required.is_symlink():
+            raise ValueError(f"Lark CLI credential path must not be a symlink: {required}")
+        required.mkdir(parents=True, exist_ok=True, mode=0o700)
+    for path in root.rglob("*"):
+        if path.is_symlink():
+            raise ValueError(f"Lark CLI credential path must not be a symlink: {path}")
+        if path.is_dir():
+            path.chmod(0o700)
+        elif path.is_file():
+            path.chmod(0o600)
+        else:
+            raise ValueError(f"Unsupported file type in Lark CLI credential tree: {path}")
+
+
 def lark_cli_managed_gateway_dir() -> Path:
     """Gateway-scoped DeerFlow-managed lark-cli install root."""
     return get_paths().base_dir / "integrations" / INTEGRATION_ID / "gateway-cli"
+
+
+def lark_cli_managed_sandbox_dir() -> Path:
+    """Gateway-visible source directory mounted into Linux AIO sandboxes."""
+    return get_paths().base_dir / "integrations" / INTEGRATION_ID / "sandbox-cli"
+
+
+def _lark_cli_release_asset_name(version: str, arch: str) -> str:
+    tag = _normalize_lark_cli_version_tag(version)
+    if tag is None:
+        raise ValueError(f"Invalid Lark CLI version tag: {version!r}")
+    if arch not in LARK_CLI_LINUX_ARCHES:
+        raise ValueError(f"Unsupported Lark CLI Linux architecture: {arch!r}")
+    return f"lark-cli-{tag.removeprefix('v')}-linux-{arch}.tar.gz"
+
+
+def _lark_cli_release_asset_url(version: str, asset_name: str) -> str:
+    tag = _normalize_lark_cli_version_tag(version)
+    if tag is None:
+        raise ValueError(f"Invalid Lark CLI version tag: {version!r}")
+    quoted_asset = urllib.parse.quote(asset_name, safe="")
+    return f"https://github.com/{LARK_CLI_GITHUB_REPO}/releases/download/{tag}/{quoted_asset}"
+
+
+def _download_lark_release_asset(version: str, asset_name: str, *, max_bytes: int = LARK_CLI_MAX_RUNTIME_ASSET_BYTES) -> bytes:
+    """Download one official release asset with a strict size bound."""
+    request = urllib.request.Request(
+        _lark_cli_release_asset_url(version, asset_name),
+        headers={"Accept": "application/octet-stream", "User-Agent": "deer-flow"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=LARK_CLI_DOWNLOAD_TIMEOUT_SECONDS) as response:
+            chunks: list[bytes] = []
+            total = 0
+            while chunk := response.read(1024 * 1024):
+                total += len(chunk)
+                if total > max_bytes:
+                    raise ValueError(f"Lark CLI release asset {asset_name!r} is too large.")
+                chunks.append(chunk)
+    except ValueError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - network boundary
+        raise ValueError(f"Could not download official Lark CLI release asset {asset_name!r} for {version}.") from exc
+    return b"".join(chunks)
+
+
+def _release_checksums(raw: bytes) -> dict[str, str]:
+    checksums: dict[str, str] = {}
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("Lark CLI release checksums are not valid UTF-8.") from exc
+    for line in text.splitlines():
+        parts = line.strip().split()
+        if len(parts) < 2 or not re.fullmatch(r"[0-9a-fA-F]{64}", parts[0]):
+            continue
+        checksums[parts[-1].lstrip("*")] = parts[0].lower()
+    return checksums
+
+
+def _extract_lark_cli_runtime_binary(archive: bytes, destination: Path) -> None:
+    """Safely extract the single CLI executable from an official tar archive."""
+    candidate: bytes | None = None
+    total = 0
+    try:
+        with tarfile.open(fileobj=io.BytesIO(archive), mode="r:*") as tf:
+            for member in tf.getmembers():
+                normalized = posixpath.normpath(member.name.replace("\\", "/"))
+                parts = PurePosixPath(normalized).parts
+                if normalized.startswith("/") or ".." in parts or member.issym() or member.islnk() or not (member.isdir() or member.isfile()):
+                    raise ValueError(f"Unsafe Lark CLI runtime archive member: {member.name}")
+                if member.isfile():
+                    total += member.size
+                    if total > LARK_CLI_MAX_RUNTIME_ASSET_BYTES:
+                        raise ValueError("Lark CLI runtime archive expands beyond the allowed size.")
+                    if PurePosixPath(normalized).name == "lark-cli":
+                        extracted = tf.extractfile(member)
+                        if extracted is None or candidate is not None:
+                            raise ValueError("Lark CLI runtime archive must contain exactly one lark-cli executable.")
+                        candidate = extracted.read()
+    except tarfile.TarError as exc:
+        raise ValueError("Lark CLI runtime archive is not a valid tar archive.") from exc
+    if not candidate:
+        raise ValueError("Lark CLI runtime archive does not contain a lark-cli executable.")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_bytes(candidate)
+    destination.chmod(0o755)
+
+
+def _write_lark_cli_sandbox_launcher(staging: Path) -> None:
+    launcher = staging / "bin" / "lark-cli"
+    launcher.parent.mkdir(parents=True, exist_ok=True)
+    launcher.write_text(
+        """#!/bin/sh
+set -eu
+case "$(uname -m)" in
+  x86_64|amd64) arch=amd64 ;;
+  aarch64|arm64) arch=arm64 ;;
+  *) echo "Unsupported sandbox architecture: $(uname -m)" >&2; exit 126 ;;
+esac
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+exec "$script_dir/../linux-$arch/lark-cli" "$@"
+""",
+        encoding="utf-8",
+    )
+    launcher.chmod(0o755)
+
+
+def _validate_lark_cli_sandbox_runtime(root: Path) -> None:
+    if root.is_symlink() or not root.is_dir():
+        raise ValueError("Managed Lark CLI sandbox runtime root must be a regular directory, not a symlink.")
+    for path in root.rglob("*"):
+        if path.is_symlink():
+            raise ValueError(f"Managed Lark CLI sandbox runtime must not contain a symlink: {path}")
+        if not (path.is_dir() or path.is_file()):
+            raise ValueError(f"Managed Lark CLI sandbox runtime contains an unsupported file type: {path}")
+    for relative in (Path("bin/lark-cli"), *(Path(f"linux-{arch}/lark-cli") for arch in LARK_CLI_LINUX_ARCHES)):
+        candidate = root / relative
+        if not candidate.is_file():
+            raise ValueError(f"Managed Lark CLI sandbox runtime is missing a regular file: {relative}")
+        if candidate.stat().st_mode & 0o111 == 0:
+            raise ValueError(f"Managed Lark CLI sandbox runtime file is not executable: {relative}")
+
+
+def _read_json_object_file(path: Path) -> dict[str, Any] | None:
+    if not path.is_file():
+        return None
+    try:
+        parsed = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+@contextmanager
+def _exclusive_install_lock(lock_path: Path, thread_lock):
+    """Hold one advisory file lock plus its in-process counterpart."""
+    with thread_lock, lock_path.open("a+b") as lock_file:
+        lock_file.seek(0, os.SEEK_END)
+        if lock_file.tell() == 0:
+            lock_file.write(b"\0")
+            lock_file.flush()
+        lock_file.seek(0)
+        if fcntl is not None:
+            fcntl.flock(lock_file, fcntl.LOCK_EX)
+        else:  # pragma: no cover - Windows fallback
+            msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+        try:
+            yield
+        finally:
+            lock_file.seek(0)
+            if fcntl is not None:
+                fcntl.flock(lock_file, fcntl.LOCK_UN)
+            else:  # pragma: no cover - Windows fallback
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+
+
+def _ensure_managed_sandbox_lark_cli(version: str) -> Path:
+    """Install verified official Linux binaries for AIO sandbox execution."""
+    tag = _normalize_lark_cli_version_tag(version)
+    if tag is None:
+        raise ValueError(f"Invalid Lark CLI version tag: {version!r}")
+    target = lark_cli_managed_sandbox_dir()
+    parent = target.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    with _exclusive_install_lock(parent / ".sandbox-cli.install.lock", _LARK_RUNTIME_INSTALL_THREAD_LOCK):
+        return _ensure_managed_sandbox_lark_cli_locked(tag, target, parent)
+
+
+def _ensure_managed_sandbox_lark_cli_locked(tag: str, target: Path, parent: Path) -> Path:
+    manifest = _read_json_object_file(target / LARK_CLI_RUNTIME_MANIFEST_FILE)
+    if manifest and manifest.get("version") == tag:
+        _validate_lark_cli_sandbox_runtime(target)
+        return target
+
+    staging = Path(tempfile.mkdtemp(prefix=".installing-sandbox-cli-", dir=str(parent)))
+    backup: Path | None = None
+    try:
+        source_override = os.getenv(LARK_CLI_SANDBOX_RUNTIME_SOURCE_ENV)
+        if source_override:
+            source = Path(source_override)
+            _validate_lark_cli_sandbox_runtime(source)
+            shutil.copytree(source, staging, dirs_exist_ok=True, symlinks=False)
+        else:
+            checksums = _release_checksums(_download_lark_release_asset(tag, "checksums.txt", max_bytes=1024 * 1024))
+            for arch in LARK_CLI_LINUX_ARCHES:
+                asset_name = _lark_cli_release_asset_name(tag, arch)
+                archive = _download_lark_release_asset(tag, asset_name)
+                expected = checksums.get(asset_name)
+                actual = hashlib.sha256(archive).hexdigest()
+                if expected is None or actual != expected:
+                    raise ValueError(f"Lark CLI release asset checksum mismatch: {asset_name}")
+                _extract_lark_cli_runtime_binary(archive, staging / f"linux-{arch}" / "lark-cli")
+            _write_lark_cli_sandbox_launcher(staging)
+
+        _validate_lark_cli_sandbox_runtime(staging)
+        (staging / LARK_CLI_RUNTIME_MANIFEST_FILE).write_text(
+            json.dumps({"version": tag}, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        if target.exists():
+            backup = parent / f".replacing-sandbox-cli-{os.getpid()}"
+            if backup.exists():
+                shutil.rmtree(backup, ignore_errors=True)
+            target.rename(backup)
+        staging.rename(target)
+        if backup is not None:
+            shutil.rmtree(backup, ignore_errors=True)
+        return target
+    except Exception:
+        if backup is not None and backup.exists() and not target.exists():
+            backup.rename(target)
+        raise
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
 
 
 def _lark_cli_managed_bin_dir() -> Path:
@@ -247,8 +516,7 @@ def lark_cli_env_overlay(user_id: str, *, sandbox_paths: bool = False) -> dict[s
     else:
         config_dir = lark_cli_config_dir(user_id)
         data_dir = lark_cli_data_dir(user_id)
-        config_dir.mkdir(parents=True, exist_ok=True)
-        data_dir.mkdir(parents=True, exist_ok=True)
+        ensure_lark_cli_credential_tree(user_id)
     overlay = {
         "LARKSUITE_CLI_CONFIG_DIR": str(config_dir),
         "LARKSUITE_CLI_DATA_DIR": str(data_dir),
@@ -257,6 +525,8 @@ def lark_cli_env_overlay(user_id: str, *, sandbox_paths: bool = False) -> dict[s
     }
     if not sandbox_paths and _lark_cli_managed_path() is not None:
         overlay["PATH"] = f"{_lark_cli_managed_bin_dir()}{os.pathsep}{os.environ.get('PATH', '')}"
+    elif sandbox_paths:
+        overlay["PATH"] = f"{LARK_CLI_SANDBOX_RUNTIME_DIR}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
     return overlay
 
 
@@ -344,7 +614,19 @@ def probe_lark_auth(user_id: str, *, verify: bool = False) -> LarkAuthProbe:
                 user = str(user_info.get("userName") or user_info.get("openId") or "") or None
         if user is None and data.get("userName"):
             user = str(data["userName"])
-    return LarkAuthProbe(status="authenticated", user=user, message="lark-cli auth is configured")
+    if verify:
+        return LarkAuthProbe(
+            status="authenticated",
+            user=user,
+            message="Lark/Feishu authorization is live-verified.",
+            verified=True,
+        )
+    return LarkAuthProbe(
+        status="authenticated",
+        user=user,
+        message="Lark/Feishu credentials are configured locally but not live-verified.",
+        verified=False,
+    )
 
 
 def get_lark_integration_status(
@@ -418,6 +700,7 @@ def _resolve_runtime_lark_cli_version() -> str:
 
 
 def read_lark_app_config(user_id: str) -> dict[str, str | bool | None]:
+    ensure_lark_cli_credential_tree(user_id)
     config_path = lark_cli_config_dir(user_id) / "config.json"
     if not config_path.is_file():
         return {"configured": False, "app_id": None, "brand": None}
@@ -477,6 +760,11 @@ def install_lark_integration(
             except OSError:
                 pass
 
+    if _uses_aio_sandbox(config):
+        installed_manifest = _read_manifest(lark_integration_root()) or {}
+        sandbox_version = str(installed_manifest.get("version") or resolved_version or FALLBACK_LARK_CLI_VERSION)
+        _ensure_managed_sandbox_lark_cli(sandbox_version)
+
     status = get_lark_integration_status(user_id, config)
     content_changed = previous_content_sha is not None and previous_content_sha != content_sha
     message = f"Installed {len(installed_skills)} Lark/Feishu skills."
@@ -488,6 +776,14 @@ def install_lark_integration(
         status=status,
         message=message,
     )
+
+
+def _uses_aio_sandbox(config: AppConfig) -> bool:
+    sandbox = getattr(config, "sandbox", None)
+    use = getattr(sandbox, "use", None)
+    if use is None and isinstance(sandbox, dict):
+        use = sandbox.get("use")
+    return isinstance(use, str) and "aio_sandbox" in use.lower()
 
 
 def start_lark_config(user_id: str, *, brand: str = "feishu") -> LarkConfigStartResult:
@@ -594,17 +890,25 @@ def start_lark_auth(
     )
 
 
-def complete_lark_auth(user_id: str, config: AppConfig, *, device_code: str) -> LarkAuthCompleteResult:
+def complete_lark_auth(
+    user_id: str,
+    config: AppConfig,
+    *,
+    device_code: str,
+    wait_timeout_seconds: int = LARK_AUTH_COMPLETE_DEFAULT_WAIT_SECONDS,
+) -> LarkAuthCompleteResult:
     """Complete a Lark device authorization flow after the user approves it."""
     device_code = device_code.strip()
     if not device_code:
         raise ValueError("device_code is required.")
+    if not LARK_AUTH_COMPLETE_MIN_WAIT_SECONDS <= wait_timeout_seconds <= LARK_AUTH_COMPLETE_MAX_WAIT_SECONDS:
+        raise ValueError(f"wait_timeout_seconds must be between {LARK_AUTH_COMPLETE_MIN_WAIT_SECONDS} and {LARK_AUTH_COMPLETE_MAX_WAIT_SECONDS}.")
 
     path = _require_lark_cli_path()
     _run_lark_cli_json(
         [path, "auth", "login", "--device-code", device_code, "--json"],
         user_id=user_id,
-        timeout=45,
+        timeout=wait_timeout_seconds,
         allow_empty_success=True,
     )
     status = get_lark_integration_status(user_id, config, verify_auth=True)
@@ -799,17 +1103,20 @@ def _tenant_brand(result: dict[str, Any]) -> str | None:
 def _save_lark_app_config_with_cli(user_id: str, *, app_id: str, app_secret: str, brand: str) -> None:
     path = _require_lark_cli_path()
     try:
-        result = subprocess.run(
-            [path, "config", "init", "--app-id", app_id, "--app-secret-stdin", "--brand", _normalize_lark_brand(brand)],
-            input=app_secret + "\n",
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=15,
-            env=lark_cli_env(user_id),
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise TimeoutError("Timed out while saving Lark connection setup.") from exc
+        try:
+            result = subprocess.run(
+                [path, "config", "init", "--app-id", app_id, "--app-secret-stdin", "--brand", _normalize_lark_brand(brand)],
+                input=app_secret + "\n",
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=15,
+                env=lark_cli_env(user_id),
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise TimeoutError("Timed out while saving Lark connection setup.") from exc
+    finally:
+        ensure_lark_cli_credential_tree(user_id)
     if result.returncode != 0:
         raw = (result.stderr or result.stdout or "").strip()
         parsed = _parse_json_object(raw)
@@ -825,16 +1132,22 @@ def _run_lark_cli_json(
     allow_empty_success: bool = False,
 ) -> dict[str, Any]:
     try:
-        result = subprocess.run(
-            args,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            env=lark_cli_env(user_id),
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise TimeoutError("Timed out waiting for Lark/Feishu authorization. Complete authorization in the browser, then try again.") from exc
+        try:
+            result = subprocess.run(
+                args,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                env=lark_cli_env(user_id),
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise TimeoutError("Timed out waiting for Lark/Feishu authorization. Complete authorization in the browser, then try again.") from exc
+    finally:
+        # OAuth commands may create new plaintext token files after the
+        # pre-command environment guard has run. Re-harden every file even on
+        # timeout or CLI failure before returning control to the Gateway.
+        ensure_lark_cli_credential_tree(user_id)
 
     stdout = (result.stdout or "").strip()
     stderr = (result.stderr or "").strip()
@@ -1007,11 +1320,12 @@ def _download_lark_archive(version: str) -> Path:
 
 
 def _content_sha256(root: Path, skill_names: set[str]) -> str:
-    """SHA-256 over the extracted skill tree contents (not the archive bytes).
+    """SHA-256 over effective installed skill contents (not archive bytes).
 
-    Stable across GitHub re-packs of identical content; changes only when the
-    skill files themselves change. Hashes each file's relative path and bytes in
-    sorted order so it is deterministic.
+    The caller computes this after injecting DeerFlow's shared guidance, so the
+    digest covers both official extracted files and the guidance users/agents
+    actually read. It remains stable across GitHub re-packs of identical
+    content. Paths and bytes are hashed in sorted order for determinism.
     """
     digest = hashlib.sha256()
     for skill_name in sorted(skill_names):
@@ -1048,8 +1362,25 @@ def _install_lark_skills_from_archive(user_id: str, archive_path: Path, *, versi
     if not archive_path.is_file():
         raise FileNotFoundError(f"Lark CLI skills archive not found: {archive_path}")
 
-    parent = get_paths().user_integration_skills_dir(user_id)
+    parent = get_paths().integration_skills_dir()
     parent.mkdir(parents=True, exist_ok=True)
+    with _lark_install_lock(parent):
+        return _install_lark_skills_from_archive_locked(archive_path, parent, version=version)
+
+
+@contextmanager
+def _lark_install_lock(parent: Path):
+    """Serialize the cross-process atomic replacement of the global pack."""
+    with _exclusive_install_lock(parent / ".lark-cli.install.lock", _LARK_INSTALL_THREAD_LOCK):
+        yield
+
+
+def _install_lark_skills_from_archive_locked(
+    archive_path: Path,
+    parent: Path,
+    *,
+    version: str | None = None,
+) -> tuple[tuple[str, ...], str]:
     target = parent / INTEGRATION_ID
     staging_parent = Path(tempfile.mkdtemp(prefix=".installing-lark-cli-", dir=str(parent)))
     staging_target = staging_parent / INTEGRATION_ID

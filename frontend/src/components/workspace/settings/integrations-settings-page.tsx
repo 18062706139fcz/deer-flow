@@ -97,6 +97,8 @@ const LARK_AUTH_DOMAINS: LarkAuthDomain[] = [
   "all",
 ];
 
+const AUTOMATIC_LARK_AUTH_WAIT_SECONDS = 8;
+
 function splitScopes(value: string) {
   return value
     .split(/[\s,]+/)
@@ -149,7 +151,8 @@ function LarkIntegrationCard() {
   const connectBusy =
     startConfig.isPending || completeConfig.isPending || startAuth.isPending;
   const connectActionBusy = connectBusy || isCheckingConnection;
-  const isConnected = data?.auth.status === "authenticated";
+  const credentialsConfigured = data?.auth.status === "authenticated";
+  const isConnected = credentialsConfigured && data?.auth.verified === true;
   const trimmedCustomAuthScope = customAuthScope.trim();
   const hasAdditionalPermissionRequest =
     selectedAuthDomains.length > 0 || trimmedCustomAuthScope.length > 0;
@@ -323,14 +326,6 @@ function LarkIntegrationCard() {
     try {
       const refreshed = await refetch();
       const latestStatus = refreshed.data ?? data;
-      if (
-        latestStatus.auth.status === "authenticated" &&
-        !hasAdditionalPermissionRequest
-      ) {
-        closePendingBrowserWindow(browserWindow);
-        toast.info(t.settings.integrations.lark.alreadyConnected);
-        return;
-      }
       startConnectionFlow(latestStatus, browserWindow);
     } catch (err) {
       closePendingBrowserWindow(browserWindow);
@@ -349,7 +344,12 @@ function LarkIntegrationCard() {
         ? undefined
         : { id: authToastIdRef.current };
     completeAuth.mutate(
-      { device_code: deviceCode },
+      {
+        device_code: deviceCode,
+        ...(automatic
+          ? { wait_timeout_seconds: AUTOMATIC_LARK_AUTH_WAIT_SECONDS }
+          : {}),
+      },
       {
         onSuccess: (result) => {
           // react-query still fires this after the dialog unmounts; bail so we
@@ -367,7 +367,6 @@ function LarkIntegrationCard() {
             authToastIdRef.current = null;
             setPendingFlow(null);
             browserWindowRef.current = null;
-            void refetch();
             return;
           }
           toast.info(
@@ -470,9 +469,9 @@ function LarkIntegrationCard() {
     ? t.settings.integrations.lark.checkingConnection
     : connectBusy
       ? t.settings.integrations.lark.authStarting
-      : isConnected && hasAdditionalPermissionRequest
+      : credentialsConfigured && hasAdditionalPermissionRequest
         ? t.settings.integrations.lark.requestPermissions
-        : isConnected
+        : credentialsConfigured
           ? t.settings.integrations.lark.connectedAction
           : t.settings.integrations.lark.connect;
 
@@ -549,10 +548,16 @@ function LarkIntegrationCard() {
               />
               <StatusItem
                 label={t.settings.integrations.lark.auth}
-                ok={data.auth.status === "authenticated"}
+                ok={isConnected}
                 value={
                   data.auth.status === "authenticated"
-                    ? (data.auth.user ?? t.settings.integrations.connected)
+                    ? data.auth.verified
+                      ? (data.auth.user ?? t.settings.integrations.connected)
+                      : data.auth.user
+                        ? t.settings.integrations.lark.authConfiguredFor(
+                            data.auth.user,
+                          )
+                        : t.settings.integrations.lark.authConfigured
                     : t.settings.integrations.lark.authNotConfigured
                 }
               />
@@ -584,6 +589,7 @@ function LarkIntegrationCard() {
               installed={data.installed}
               cliReady={data.cli.available}
               connected={isConnected}
+              credentialsConfigured={credentialsConfigured}
             />
             {data.installed && data.cli.available && (
               <div className="rounded-lg border p-3">
@@ -790,10 +796,12 @@ function IntegrationNextStep({
   installed,
   cliReady,
   connected,
+  credentialsConfigured,
 }: {
   installed: boolean;
   cliReady: boolean;
   connected: boolean;
+  credentialsConfigured: boolean;
 }) {
   const { t } = useI18n();
   if (!installed) {
@@ -823,6 +831,17 @@ function IntegrationNextStep({
         <AlertTitle>{t.settings.integrations.lark.connectedTitle}</AlertTitle>
         <AlertDescription>
           {t.settings.integrations.lark.connectedDescription}
+        </AlertDescription>
+      </Alert>
+    );
+  }
+  if (credentialsConfigured) {
+    return (
+      <Alert>
+        <CheckCircle2Icon />
+        <AlertTitle>{t.settings.integrations.lark.configuredTitle}</AlertTitle>
+        <AlertDescription>
+          {t.settings.integrations.lark.configuredDescription}
         </AlertDescription>
       </Alert>
     );

@@ -257,7 +257,7 @@ export function mockLangGraphAPI(page: Page, options?: MockAPIOptions) {
     skills_installed: 0,
     installed_skills: [] as string[],
     enabled_skills: [] as string[],
-    install_path: "/tmp/deer-flow/users/default/skills/integrations/lark-cli",
+    install_path: "/tmp/deer-flow/integrations/skills/lark-cli",
     cli: {
       available: false,
       path: null as string | null,
@@ -268,6 +268,7 @@ export function mockLangGraphAPI(page: Page, options?: MockAPIOptions) {
       status: "unavailable",
       message: "lark-cli is not installed on the Gateway" as string | null,
       user: null as string | null,
+      verified: false,
     },
   };
 
@@ -1094,8 +1095,7 @@ export function mockLangGraphAPI(page: Page, options?: MockAPIOptions) {
         skills_installed: 3,
         installed_skills: ["lark-doc", "lark-im", "lark-shared"],
         enabled_skills: ["lark-doc", "lark-im", "lark-shared"],
-        install_path:
-          "/tmp/deer-flow/users/default/skills/integrations/lark-cli",
+        install_path: "/tmp/deer-flow/integrations/skills/lark-cli",
         cli: {
           available: true,
           path: "/usr/bin/lark-cli",
@@ -1106,6 +1106,7 @@ export function mockLangGraphAPI(page: Page, options?: MockAPIOptions) {
           status: "not_configured",
           message: "lark-cli auth is not configured",
           user: null,
+          verified: false,
         },
       };
       return route.fulfill({
@@ -1151,6 +1152,7 @@ export function mockLangGraphAPI(page: Page, options?: MockAPIOptions) {
           status: "not_authorized",
           message: "Lark user authorization is not configured",
           user: null,
+          verified: false,
         },
       };
       return route.fulfill({
@@ -1189,8 +1191,9 @@ export function mockLangGraphAPI(page: Page, options?: MockAPIOptions) {
         ...larkIntegrationStatus,
         auth: {
           status: "authenticated",
-          message: "lark-cli auth is configured",
+          message: "Lark/Feishu authorization is live-verified.",
           user: "Alice",
+          verified: true,
         },
       };
       return route.fulfill({

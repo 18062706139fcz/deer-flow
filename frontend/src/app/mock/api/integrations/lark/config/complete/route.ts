@@ -15,7 +15,7 @@ export function POST() {
       skills_installed: 4,
       installed_skills: ["lark-doc", "lark-im", "lark-shared", "lark-sheets"],
       enabled_skills: ["lark-doc", "lark-im", "lark-shared", "lark-sheets"],
-      install_path: "/mock/users/default/skills/integrations/lark-cli",
+      install_path: "/mock/integrations/skills/lark-cli",
       cli: {
         available: true,
         path: "/usr/bin/lark-cli",
@@ -26,6 +26,7 @@ export function POST() {
         status: "not_authorized",
         message: "Lark user authorization is not configured",
         user: null,
+        verified: false,
       },
     },
   });

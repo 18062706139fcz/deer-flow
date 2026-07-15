@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+import hashlib
+import inspect
+import io
 import json
+import multiprocessing
 import re
 import shutil
 import stat
 import subprocess
+import tarfile
+import threading
+import time
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
@@ -42,6 +50,16 @@ def _make_lark_cli_source_zip(tmp_path: Path, *, omit_skill: str | None = None, 
     return archive
 
 
+def _make_lark_cli_binary_tar(payload: bytes, *, member_name: str = "lark-cli") -> bytes:
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as tf:
+        info = tarfile.TarInfo(member_name)
+        info.mode = 0o755
+        info.size = len(payload)
+        tf.addfile(info, io.BytesIO(payload))
+    return buffer.getvalue()
+
+
 def _assert_lark_root_missing(user_id: str) -> None:
     root = lark_cli.lark_integration_root(user_id)
     assert not root.exists()
@@ -61,7 +79,188 @@ def _patch_paths(monkeypatch, base_dir: Path) -> None:
     monkeypatch.setattr(paths_module, "_paths", Paths(base_dir=base_dir))
 
 
-def test_install_lark_integration_installs_readonly_user_scoped_skills(monkeypatch, tmp_path):
+def test_sandbox_lark_cli_env_prepends_managed_linux_runtime() -> None:
+    overlay = lark_cli.lark_cli_env_overlay("alice", sandbox_paths=True)
+
+    assert overlay["PATH"].split(":", 1)[0] == "/mnt/integrations/lark-cli/runtime/bin"
+    assert overlay["LARKSUITE_CLI_CONFIG_DIR"] == "/mnt/integrations/lark-cli/config"
+    assert overlay["LARKSUITE_CLI_DATA_DIR"] == "/mnt/integrations/lark-cli/data"
+
+
+def test_managed_sandbox_runtime_verifies_and_installs_linux_archives(monkeypatch, tmp_path) -> None:
+    assert hasattr(lark_cli, "_ensure_managed_sandbox_lark_cli"), "managed sandbox runtime installer is missing"
+    _patch_paths(monkeypatch, tmp_path / "home")
+    archives = {
+        "lark-cli-1.0.65-linux-amd64.tar.gz": _make_lark_cli_binary_tar(b"amd64-binary"),
+        "lark-cli-1.0.65-linux-arm64.tar.gz": _make_lark_cli_binary_tar(b"arm64-binary"),
+    }
+    checksums = "".join(f"{hashlib.sha256(payload).hexdigest()}  {name}\n" for name, payload in archives.items()).encode()
+    assets = {"checksums.txt": checksums, **archives}
+
+    monkeypatch.setattr(lark_cli, "_download_lark_release_asset", lambda _version, name, **_kwargs: assets[name])
+
+    runtime = lark_cli._ensure_managed_sandbox_lark_cli("v1.0.65")
+
+    assert (runtime / "linux-amd64" / "lark-cli").read_bytes() == b"amd64-binary"
+    assert (runtime / "linux-arm64" / "lark-cli").read_bytes() == b"arm64-binary"
+    assert stat.S_IMODE((runtime / "linux-amd64" / "lark-cli").stat().st_mode) == 0o755
+    launcher = (runtime / "bin" / "lark-cli").read_text(encoding="utf-8")
+    assert "uname -m" in launcher
+    assert "x86_64" in launcher and "aarch64" in launcher
+
+
+def test_managed_sandbox_runtime_rejects_checksum_mismatch(monkeypatch, tmp_path) -> None:
+    assert hasattr(lark_cli, "_ensure_managed_sandbox_lark_cli"), "managed sandbox runtime installer is missing"
+    _patch_paths(monkeypatch, tmp_path / "home")
+    archives = {
+        "lark-cli-1.0.65-linux-amd64.tar.gz": _make_lark_cli_binary_tar(b"amd64-binary"),
+        "lark-cli-1.0.65-linux-arm64.tar.gz": _make_lark_cli_binary_tar(b"arm64-binary"),
+    }
+    bad_checksums = "".join(f"{'0' * 64}  {name}\n" for name in archives).encode()
+    assets = {"checksums.txt": bad_checksums, **archives}
+    monkeypatch.setattr(lark_cli, "_download_lark_release_asset", lambda _version, name, **_kwargs: assets[name])
+
+    with pytest.raises(ValueError, match="checksum"):
+        lark_cli._ensure_managed_sandbox_lark_cli("v1.0.65")
+
+    assert not lark_cli.lark_cli_managed_sandbox_dir().exists()
+
+
+def test_managed_sandbox_runtime_rejects_unsafe_tar_member(monkeypatch, tmp_path) -> None:
+    assert hasattr(lark_cli, "_ensure_managed_sandbox_lark_cli"), "managed sandbox runtime installer is missing"
+    _patch_paths(monkeypatch, tmp_path / "home")
+    unsafe = _make_lark_cli_binary_tar(b"binary", member_name="../lark-cli")
+    safe = _make_lark_cli_binary_tar(b"binary")
+    archives = {
+        "lark-cli-1.0.65-linux-amd64.tar.gz": unsafe,
+        "lark-cli-1.0.65-linux-arm64.tar.gz": safe,
+    }
+    checksums = "".join(f"{hashlib.sha256(payload).hexdigest()}  {name}\n" for name, payload in archives.items()).encode()
+    assets = {"checksums.txt": checksums, **archives}
+    monkeypatch.setattr(lark_cli, "_download_lark_release_asset", lambda _version, name, **_kwargs: assets[name])
+
+    with pytest.raises(ValueError, match="Unsafe Lark CLI runtime archive member"):
+        lark_cli._ensure_managed_sandbox_lark_cli("v1.0.65")
+
+
+def test_managed_sandbox_runtime_accepts_prestaged_airgapped_tree(monkeypatch, tmp_path) -> None:
+    _patch_paths(monkeypatch, tmp_path / "home")
+    source = tmp_path / "pre-staged"
+    for arch in ("amd64", "arm64"):
+        binary = source / f"linux-{arch}" / "lark-cli"
+        binary.parent.mkdir(parents=True)
+        binary.write_bytes(f"{arch}-binary".encode())
+        binary.chmod(0o755)
+    launcher = source / "bin" / "lark-cli"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+    launcher.chmod(0o755)
+    monkeypatch.setenv(lark_cli.LARK_CLI_SANDBOX_RUNTIME_SOURCE_ENV, str(source))
+    monkeypatch.setattr(
+        lark_cli,
+        "_download_lark_release_asset",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("air-gapped install must not download")),
+    )
+
+    runtime = lark_cli._ensure_managed_sandbox_lark_cli("v1.0.65")
+
+    assert (runtime / "linux-amd64" / "lark-cli").read_bytes() == b"amd64-binary"
+    assert (runtime / "linux-arm64" / "lark-cli").read_bytes() == b"arm64-binary"
+
+
+def test_managed_sandbox_runtime_rejects_any_symlink_in_prestaged_tree(monkeypatch, tmp_path) -> None:
+    _patch_paths(monkeypatch, tmp_path / "home")
+    source = tmp_path / "pre-staged"
+    for arch in ("amd64", "arm64"):
+        binary = source / f"linux-{arch}" / "lark-cli"
+        binary.parent.mkdir(parents=True)
+        binary.write_bytes(f"{arch}-binary".encode())
+        binary.chmod(0o755)
+    launcher = source / "bin" / "lark-cli"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+    launcher.chmod(0o755)
+    outside = tmp_path / "outside-secret"
+    outside.write_text("must-not-be-copied", encoding="utf-8")
+    try:
+        (source / "extra-link").symlink_to(outside)
+    except OSError as exc:
+        pytest.skip(f"symlinks are not available: {exc}")
+    monkeypatch.setenv(lark_cli.LARK_CLI_SANDBOX_RUNTIME_SOURCE_ENV, str(source))
+
+    with pytest.raises(ValueError, match="symlink"):
+        lark_cli._ensure_managed_sandbox_lark_cli("v1.0.65")
+
+    assert not lark_cli.lark_cli_managed_sandbox_dir().exists()
+
+
+def test_managed_sandbox_runtime_rejects_non_executable_prestaged_binary(monkeypatch, tmp_path) -> None:
+    _patch_paths(monkeypatch, tmp_path / "home")
+    source = tmp_path / "pre-staged"
+    for arch in ("amd64", "arm64"):
+        binary = source / f"linux-{arch}" / "lark-cli"
+        binary.parent.mkdir(parents=True)
+        binary.write_bytes(f"{arch}-binary".encode())
+        binary.chmod(0o755)
+    (source / "linux-arm64" / "lark-cli").chmod(0o644)
+    launcher = source / "bin" / "lark-cli"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+    launcher.chmod(0o755)
+    monkeypatch.setenv(lark_cli.LARK_CLI_SANDBOX_RUNTIME_SOURCE_ENV, str(source))
+
+    with pytest.raises(ValueError, match="executable"):
+        lark_cli._ensure_managed_sandbox_lark_cli("v1.0.65")
+
+    assert not lark_cli.lark_cli_managed_sandbox_dir().exists()
+
+
+def test_concurrent_managed_sandbox_runtime_installs_serialize_replacement(monkeypatch, tmp_path) -> None:
+    _patch_paths(monkeypatch, tmp_path / "home")
+    source = tmp_path / "pre-staged"
+    for arch in ("amd64", "arm64"):
+        binary = source / f"linux-{arch}" / "lark-cli"
+        binary.parent.mkdir(parents=True)
+        binary.write_bytes(f"{arch}-binary".encode())
+        binary.chmod(0o755)
+    launcher = source / "bin" / "lark-cli"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+    launcher.chmod(0o755)
+    monkeypatch.setenv(lark_cli.LARK_CLI_SANDBOX_RUNTIME_SOURCE_ENV, str(source))
+
+    real_validate = lark_cli._validate_lark_cli_sandbox_runtime
+    start = threading.Barrier(2)
+    state_lock = threading.Lock()
+    active = 0
+    max_active = 0
+
+    def _slow_validate(root):
+        nonlocal active, max_active
+        with state_lock:
+            active += 1
+            max_active = max(max_active, active)
+        try:
+            time.sleep(0.15)
+            return real_validate(root)
+        finally:
+            with state_lock:
+                active -= 1
+
+    def _install():
+        start.wait()
+        return lark_cli._ensure_managed_sandbox_lark_cli("v1.0.65")
+
+    monkeypatch.setattr(lark_cli, "_validate_lark_cli_sandbox_runtime", _slow_validate)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = [future.result(timeout=5) for future in [pool.submit(_install) for _ in range(2)]]
+
+    assert results[0] == results[1] == lark_cli.lark_cli_managed_sandbox_dir()
+    assert max_active == 1
+    assert not list(results[0].parent.glob(".replacing-sandbox-cli-*"))
+
+
+def test_install_lark_integration_installs_one_readonly_pack_for_all_users(monkeypatch, tmp_path):
     reset_skill_storage()
     _patch_paths(monkeypatch, tmp_path / "home")
     skills_root = tmp_path / "skills"
@@ -79,6 +278,8 @@ def test_install_lark_integration_installs_readonly_user_scoped_skills(monkeypat
     assert "lark-doc" in result.installed_skills
     assert result.status.installed is True
     root = lark_cli.lark_integration_root("alice")
+    assert root == lark_cli.lark_integration_root("bob")
+    assert root == tmp_path / "home" / "integrations" / "skills" / "lark-cli"
     assert (root / "lark-doc" / "SKILL.md").is_file()
     assert (root / lark_cli.LARK_CLI_MANIFEST_FILE).is_file()
     shared_content = (root / "lark-shared" / "SKILL.md").read_text(encoding="utf-8")
@@ -92,6 +293,37 @@ def test_install_lark_integration_installs_readonly_user_scoped_skills(monkeypat
     assert lark_doc.category == SkillCategory.INTEGRATION
     assert lark_doc.get_container_file_path("/mnt/skills") == "/mnt/skills/integrations/lark-cli/lark-doc/SKILL.md"
     assert lark_doc.enabled is True
+
+    bob_storage = UserScopedSkillStorage("bob", host_path=str(skills_root), app_config=config)
+    bob_lark_doc = next(skill for skill in bob_storage.load_skills(enabled_only=False) if skill.name == "lark-doc")
+    assert bob_lark_doc.category == SkillCategory.INTEGRATION
+    assert bob_lark_doc.skill_file == root / "lark-doc" / "SKILL.md"
+    reset_skill_storage()
+
+
+def test_aio_install_provisions_matching_linux_sandbox_runtime(monkeypatch, tmp_path) -> None:
+    reset_skill_storage()
+    _patch_paths(monkeypatch, tmp_path / "home")
+    skills_root = tmp_path / "skills"
+    (skills_root / "public").mkdir(parents=True)
+    (skills_root / "custom").mkdir()
+    config = _config(skills_root)
+    config.sandbox = SimpleNamespace(use="deerflow.community.aio_sandbox:AioSandboxProvider")
+    archive = _make_lark_cli_source_zip(tmp_path)
+    provisioned_versions: list[str] = []
+
+    monkeypatch.setattr(lark_cli, "probe_lark_cli", lambda: lark_cli.LarkCliProbe(available=True, path="/usr/bin/lark-cli", version="v1.0.65"))
+    monkeypatch.setattr(lark_cli, "probe_lark_auth", lambda _user_id, **_kwargs: lark_cli.LarkAuthProbe(status="not_configured", message="not configured"))
+    monkeypatch.setattr(
+        lark_cli,
+        "_ensure_managed_sandbox_lark_cli",
+        lambda version: provisioned_versions.append(version) or lark_cli.lark_cli_managed_sandbox_dir(),
+    )
+
+    result = lark_cli.install_lark_integration("alice", config, source_archive=archive)
+
+    assert result.success is True
+    assert provisioned_versions == ["v1.0.65"]
     reset_skill_storage()
 
 
@@ -121,9 +353,95 @@ def test_install_lark_integration_is_idempotent_across_reinstalls(monkeypatch, t
     assert not stray.exists()
     # No leftover backup/staging dirs beside the target after a reinstall.
     parent = root.parent
-    leftovers = [p.name for p in parent.iterdir() if p.name != lark_cli.INTEGRATION_ID]
+    leftovers = [p.name for p in parent.iterdir() if p.name not in {lark_cli.INTEGRATION_ID, ".lark-cli.install.lock"}]
     assert leftovers == []
     reset_skill_storage()
+
+
+@pytest.mark.parametrize("_attempt", range(5))
+def test_concurrent_lark_skill_reinstalls_serialize_atomic_replacement(monkeypatch, tmp_path, _attempt) -> None:
+    _patch_paths(monkeypatch, tmp_path / "home")
+    archive = _make_lark_cli_source_zip(tmp_path)
+    real_extract = lark_cli._extract_lark_skills
+    start = threading.Barrier(2)
+    state_lock = threading.Lock()
+    active = 0
+    max_active = 0
+
+    def _slow_extract(zf, destination):
+        nonlocal active, max_active
+        with state_lock:
+            active += 1
+            max_active = max(max_active, active)
+        try:
+            time.sleep(0.15)
+            return real_extract(zf, destination)
+        finally:
+            with state_lock:
+                active -= 1
+
+    def _install():
+        start.wait()
+        return lark_cli._install_lark_skills_from_archive("alice", archive, version="v1.0.65")
+
+    monkeypatch.setattr(lark_cli, "_extract_lark_skills", _slow_extract)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(_install) for _ in range(2)]
+        results = [future.result(timeout=5) for future in futures]
+
+    assert results[0] == results[1]
+    assert max_active == 1
+    root = lark_cli.lark_integration_root()
+    assert (root / "lark-doc" / "SKILL.md").is_file()
+    assert not list(root.parent.glob(".replacing-lark-cli-*"))
+
+
+@pytest.mark.skipif(
+    "fork" not in multiprocessing.get_all_start_methods() or lark_cli.fcntl is None,
+    reason="requires POSIX fork and fcntl",
+)
+def test_concurrent_lark_skill_reinstalls_serialize_across_processes(monkeypatch, tmp_path) -> None:
+    _patch_paths(monkeypatch, tmp_path / "home")
+    archive = _make_lark_cli_source_zip(tmp_path)
+    real_extract = lark_cli._extract_lark_skills
+    context = multiprocessing.get_context("fork")
+    start = context.Barrier(2)
+    active = context.Value("i", 0)
+    max_active = context.Value("i", 0)
+    results = context.Queue()
+
+    def _slow_extract(zf, destination):
+        with active.get_lock(), max_active.get_lock():
+            active.value += 1
+            max_active.value = max(max_active.value, active.value)
+        try:
+            time.sleep(0.2)
+            return real_extract(zf, destination)
+        finally:
+            with active.get_lock():
+                active.value -= 1
+
+    def _install():
+        try:
+            start.wait(timeout=5)
+            installed, digest = lark_cli._install_lark_skills_from_archive("alice", archive, version="v1.0.65")
+            results.put((installed, digest, None))
+        except BaseException as exc:  # noqa: BLE001 - propagate child failure
+            results.put((None, None, repr(exc)))
+
+    monkeypatch.setattr(lark_cli, "_extract_lark_skills", _slow_extract)
+    processes = [context.Process(target=_install) for _ in range(2)]
+    for process in processes:
+        process.start()
+    for process in processes:
+        process.join(timeout=10)
+
+    assert [process.exitcode for process in processes] == [0, 0]
+    child_results = [results.get(timeout=2) for _ in processes]
+    assert all(error is None for _installed, _digest, error in child_results), child_results
+    assert child_results[0][:2] == child_results[1][:2]
+    assert max_active.value == 1
+    assert not list(lark_cli.lark_integration_root().parent.glob(".replacing-lark-cli-*"))
 
 
 def test_install_lark_integration_succeeds_when_backup_cleanup_fails(monkeypatch, tmp_path):
@@ -165,7 +483,7 @@ def test_install_lark_integration_succeeds_when_backup_cleanup_fails(monkeypatch
     # No non-ignoring rmtree is relied upon on the success path, and no leftover
     # backup dir remains beside the target after the reinstall.
     assert forced_raises["count"] == 0
-    leftovers = [p.name for p in root.parent.iterdir() if p.name != lark_cli.INTEGRATION_ID]
+    leftovers = [p.name for p in root.parent.iterdir() if p.name not in {lark_cli.INTEGRATION_ID, ".lark-cli.install.lock"}]
     assert leftovers == []
     reset_skill_storage()
 
@@ -486,6 +804,79 @@ def test_lark_cli_env_from_runtime_exposes_settings_auth_to_lark_commands(monkey
     assert env["LARKSUITE_CLI_DATA_DIR"].endswith("users/alice/integrations/lark-cli/data")
 
 
+def test_lark_cli_env_hardens_existing_credential_tree(monkeypatch, tmp_path) -> None:
+    _patch_paths(monkeypatch, tmp_path / "home")
+    config_dir = lark_cli.lark_cli_config_dir("alice")
+    data_dir = lark_cli.lark_cli_data_dir("alice")
+    config_dir.mkdir(parents=True)
+    data_dir.mkdir(parents=True)
+    secret_file = config_dir / "config.json"
+    token_file = data_dir / "auth.json"
+    secret_file.write_text('{"appSecret":"secret"}', encoding="utf-8")
+    token_file.write_text('{"token":"secret"}', encoding="utf-8")
+    config_dir.chmod(0o755)
+    data_dir.chmod(0o777)
+    secret_file.chmod(0o644)
+    token_file.chmod(0o666)
+
+    lark_cli.lark_cli_env_overlay("alice")
+
+    assert stat.S_IMODE(config_dir.stat().st_mode) == 0o700
+    assert stat.S_IMODE(data_dir.stat().st_mode) == 0o700
+    assert stat.S_IMODE(secret_file.stat().st_mode) == 0o600
+    assert stat.S_IMODE(token_file.stat().st_mode) == 0o600
+
+
+def test_lark_cli_env_rejects_symlinks_in_credential_tree(monkeypatch, tmp_path) -> None:
+    _patch_paths(monkeypatch, tmp_path / "home")
+    config_dir = lark_cli.lark_cli_config_dir("alice")
+    config_dir.mkdir(parents=True)
+    outside = tmp_path / "outside-secret"
+    outside.write_text("secret", encoding="utf-8")
+    try:
+        (config_dir / "config.json").symlink_to(outside)
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(f"symlinks are not available: {exc}")
+
+    with pytest.raises(ValueError, match="symlink"):
+        lark_cli.lark_cli_env_overlay("alice")
+
+
+def test_save_lark_app_config_rehardens_files_written_by_cli(monkeypatch, tmp_path) -> None:
+    _patch_paths(monkeypatch, tmp_path / "home")
+    monkeypatch.setattr(lark_cli, "_require_lark_cli_path", lambda: "/usr/bin/lark-cli")
+
+    def _run(args, **kwargs):
+        config_file = Path(kwargs["env"]["LARKSUITE_CLI_CONFIG_DIR"]) / "config.json"
+        config_file.write_text('{"appSecret":"secret"}', encoding="utf-8")
+        config_file.chmod(0o644)
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(lark_cli.subprocess, "run", _run)
+
+    lark_cli._save_lark_app_config_with_cli("alice", app_id="cli_app", app_secret="secret", brand="feishu")
+
+    config_file = lark_cli.lark_cli_config_dir("alice") / "config.json"
+    assert stat.S_IMODE(config_file.stat().st_mode) == 0o600
+
+
+def test_lark_cli_json_rehardens_auth_files_written_by_cli(monkeypatch, tmp_path) -> None:
+    _patch_paths(monkeypatch, tmp_path / "home")
+
+    def _run(args, **kwargs):
+        token_file = Path(kwargs["env"]["LARKSUITE_CLI_DATA_DIR"]) / "auth.json"
+        token_file.write_text('{"token":"secret"}', encoding="utf-8")
+        token_file.chmod(0o644)
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout="{}", stderr="")
+
+    monkeypatch.setattr(lark_cli.subprocess, "run", _run)
+
+    lark_cli._run_lark_cli_json(["/usr/bin/lark-cli", "auth", "login"], user_id="alice", timeout=5)
+
+    token_file = lark_cli.lark_cli_data_dir("alice") / "auth.json"
+    assert stat.S_IMODE(token_file.stat().st_mode) == 0o600
+
+
 def test_lark_cli_env_from_runtime_uses_container_paths_for_sandbox_lark_commands():
     runtime = SimpleNamespace(context={"user_id": "alice"})
 
@@ -501,6 +892,54 @@ def test_lark_cli_env_from_runtime_ignores_non_lark_commands(tmp_path, monkeypat
     runtime = SimpleNamespace(context={"user_id": "alice"})
 
     assert _lark_cli_env_from_runtime(runtime, "echo hello", sandbox_paths=False) is None
+
+
+def test_lark_auth_probe_distinguishes_local_configuration_from_live_verification(monkeypatch, tmp_path) -> None:
+    assert "verified" in lark_cli.LarkAuthProbe.__dataclass_fields__
+    _patch_paths(monkeypatch, tmp_path / "home")
+    config_file = lark_cli.lark_cli_config_dir("alice") / "config.json"
+    config_file.parent.mkdir(parents=True)
+    config_file.write_text(
+        json.dumps(
+            {
+                "currentApp": "cli_app",
+                "apps": [
+                    {
+                        "name": "cli_app",
+                        "appId": "cli_app",
+                        "appSecret": "secret",
+                        "brand": "feishu",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    calls: list[list[str]] = []
+
+    monkeypatch.setattr(lark_cli, "_resolve_lark_cli_path", lambda: "/usr/bin/lark-cli")
+
+    def _run(args, **_kwargs):
+        calls.append(args)
+        return subprocess.CompletedProcess(
+            args=args,
+            returncode=0,
+            stdout='{"identities":{"user":{"userName":"Alice"}}}',
+            stderr="",
+        )
+
+    monkeypatch.setattr(lark_cli.subprocess, "run", _run)
+
+    configured = lark_cli.probe_lark_auth("alice", verify=False)
+    live_verified = lark_cli.probe_lark_auth("alice", verify=True)
+
+    assert configured.status == "authenticated"
+    assert configured.verified is False
+    assert "not live-verified" in (configured.message or "")
+    assert live_verified.verified is True
+    assert "live-verified" in (live_verified.message or "")
+    assert calls[0] == ["/usr/bin/lark-cli", "auth", "status", "--json"]
+    assert calls[1] == ["/usr/bin/lark-cli", "auth", "status", "--json", "--verify"]
 
 
 def test_complete_lark_auth_polls_device_code_and_returns_status(monkeypatch, tmp_path):
@@ -556,6 +995,61 @@ def test_complete_lark_auth_polls_device_code_and_returns_status(monkeypatch, tm
         "timeout": 45,
         "allow_empty_success": True,
     }
+
+
+def test_complete_lark_auth_accepts_short_automatic_poll_timeout(monkeypatch, tmp_path) -> None:
+    assert "wait_timeout_seconds" in inspect.signature(lark_cli.complete_lark_auth).parameters
+    _patch_paths(monkeypatch, tmp_path / "home")
+    config = _config(tmp_path / "skills")
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(lark_cli, "_require_lark_cli_path", lambda: "/usr/bin/lark-cli")
+    monkeypatch.setattr(
+        lark_cli,
+        "_run_lark_cli_json",
+        lambda _args, **kwargs: captured.update(kwargs) or {},
+    )
+    monkeypatch.setattr(
+        lark_cli,
+        "get_lark_integration_status",
+        lambda _user_id, _config, **_kwargs: lark_cli.LarkIntegrationStatus(
+            installed=True,
+            version="v1.0.65",
+            manifest_version="v1.0.65",
+            latest_available_version=None,
+            runtime_version_mismatch=False,
+            app_configured=True,
+            app_id="cli_mock",
+            app_brand="feishu",
+            skills_expected=27,
+            skills_installed=27,
+            installed_skills=("lark-doc",),
+            enabled_skills=("lark-doc",),
+            install_path="/tmp/lark",
+            cli=lark_cli.LarkCliProbe(available=True),
+            auth=lark_cli.LarkAuthProbe(status="authenticated", user="Alice"),
+        ),
+    )
+
+    result = lark_cli.complete_lark_auth(
+        "alice",
+        config,
+        device_code="device-code",
+        wait_timeout_seconds=8,
+    )
+
+    assert result.success is True
+    assert captured["timeout"] == 8
+
+
+def test_auth_complete_request_bounds_poll_timeout() -> None:
+    model = integrations_router.LarkAuthCompleteRequest(device_code="device-code", wait_timeout_seconds=8)
+    assert "wait_timeout_seconds" in type(model).model_fields
+    assert model.wait_timeout_seconds == 8
+    with pytest.raises(ValueError):
+        integrations_router.LarkAuthCompleteRequest(device_code="device-code", wait_timeout_seconds=4)
+    with pytest.raises(ValueError):
+        integrations_router.LarkAuthCompleteRequest(device_code="device-code", wait_timeout_seconds=46)
 
 
 def test_start_lark_config_returns_app_registration_url(monkeypatch, tmp_path):
@@ -878,13 +1372,13 @@ def test_lark_auth_start_route_passes_explicit_recommend(monkeypatch, tmp_path):
 def test_lark_auth_complete_route_polls_device_code(monkeypatch, tmp_path):
     config = _config(tmp_path / "skills")
     app = _make_app(system_role="user", config=config)
+    captured_kwargs = {}
 
-    monkeypatch.setattr(
-        integrations_router,
-        "complete_lark_auth",
-        lambda _user_id, _config, *, device_code: lark_cli.LarkAuthCompleteResult(
+    def _complete_auth(_user_id, _config, **kwargs):
+        captured_kwargs.update(kwargs)
+        return lark_cli.LarkAuthCompleteResult(
             success=True,
-            message=f"completed {device_code}",
+            message=f"completed {kwargs['device_code']}",
             status=lark_cli.LarkIntegrationStatus(
                 installed=True,
                 version="v1.0.65",
@@ -900,10 +1394,11 @@ def test_lark_auth_complete_route_polls_device_code(monkeypatch, tmp_path):
                 enabled_skills=("lark-doc",),
                 install_path="/tmp/lark",
                 cli=lark_cli.LarkCliProbe(available=True),
-                auth=lark_cli.LarkAuthProbe(status="authenticated", user="Alice"),
+                auth=lark_cli.LarkAuthProbe(status="authenticated", user="Alice", verified=True),
             ),
-        ),
-    )
+        )
+
+    monkeypatch.setattr(integrations_router, "complete_lark_auth", _complete_auth)
 
     with TestClient(app) as client:
         response = client.post("/api/integrations/lark/auth/complete", json={"device_code": "device-code"})
@@ -911,3 +1406,5 @@ def test_lark_auth_complete_route_polls_device_code(monkeypatch, tmp_path):
     assert response.status_code == 200
     assert response.json()["success"] is True
     assert response.json()["status"]["auth"]["status"] == "authenticated"
+    assert response.json()["status"]["auth"]["verified"] is True
+    assert captured_kwargs == {"device_code": "device-code", "wait_timeout_seconds": 45}

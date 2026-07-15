@@ -5,9 +5,12 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.gateway.deps import get_config, require_admin_user
-from deerflow.agents.lead_agent.prompt import refresh_user_skills_system_prompt_cache_async
+from deerflow.agents.lead_agent.prompt import refresh_skills_system_prompt_cache_async
 from deerflow.config.app_config import AppConfig
 from deerflow.integrations.lark_cli import (
+    LARK_AUTH_COMPLETE_DEFAULT_WAIT_SECONDS,
+    LARK_AUTH_COMPLETE_MAX_WAIT_SECONDS,
+    LARK_AUTH_COMPLETE_MIN_WAIT_SECONDS,
     LarkAuthCompleteResult,
     LarkAuthProbe,
     LarkAuthStartResult,
@@ -43,6 +46,7 @@ class LarkAuthProbeResponse(BaseModel):
     status: str = Field(..., description="Auth status: authenticated, not_configured, unavailable, or error")
     message: str | None = Field(None, description="Human-readable status detail")
     user: str | None = Field(None, description="Authenticated Lark/Feishu user display value when available")
+    verified: bool = Field(False, description="Whether this status came from a live token verification")
 
 
 class LarkIntegrationStatusResponse(BaseModel):
@@ -112,6 +116,12 @@ class LarkAuthStartResponse(BaseModel):
 
 class LarkAuthCompleteRequest(BaseModel):
     device_code: str = Field(..., description="Device code returned by auth/start")
+    wait_timeout_seconds: int = Field(
+        default=LARK_AUTH_COMPLETE_DEFAULT_WAIT_SECONDS,
+        ge=LARK_AUTH_COMPLETE_MIN_WAIT_SECONDS,
+        le=LARK_AUTH_COMPLETE_MAX_WAIT_SECONDS,
+        description="Maximum seconds for this device-code poll; automatic UI polling uses a shorter wait",
+    )
 
 
 class LarkAuthCompleteResponse(BaseModel):
@@ -134,6 +144,7 @@ def _auth_probe_to_response(probe: LarkAuthProbe) -> LarkAuthProbeResponse:
         status=probe.status,
         message=probe.message,
         user=probe.user,
+        verified=probe.verified,
     )
 
 
@@ -217,9 +228,8 @@ async def get_lark_status(config: AppConfig = Depends(get_config)) -> LarkIntegr
 async def install_lark(request: Request, config: AppConfig = Depends(get_config)) -> LarkInstallResponse:
     await require_admin_user(request, detail=_ADMIN_REQUIRED_DETAIL)
     try:
-        user_id = get_effective_user_id()
-        result = await asyncio.to_thread(install_lark_integration, user_id, config)
-        await refresh_user_skills_system_prompt_cache_async(user_id)
+        result = await asyncio.to_thread(install_lark_integration, get_effective_user_id(), config)
+        await refresh_skills_system_prompt_cache_async()
         return _install_to_response(result)
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -306,6 +316,7 @@ async def complete_lark_browser_auth(body: LarkAuthCompleteRequest, config: AppC
             get_effective_user_id(),
             config,
             device_code=body.device_code,
+            wait_timeout_seconds=body.wait_timeout_seconds,
         )
         return _auth_complete_to_response(result)
     except FileNotFoundError as e:

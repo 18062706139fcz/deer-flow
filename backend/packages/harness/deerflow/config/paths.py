@@ -249,14 +249,14 @@ class Paths:
         """
         return self.user_skills_dir(user_id) / "custom"
 
-    def user_integration_skills_dir(self, user_id: str) -> Path:
-        """Per-user managed integration skills directory.
+    def integration_skills_dir(self) -> Path:
+        """Globally installed managed integration skills.
 
-        Layout: `{base_dir}/users/{user_id}/skills/integrations/{provider}/{skill}/`.
-        These skills are installed by first-party integration flows and are read-only
-        to users and agents.
+        Layout: ``{base_dir}/integrations/skills/{provider}/{skill}/``. The
+        package contents are shared and read-only; credentials and enabled
+        state remain user-scoped elsewhere under ``users/{user_id}``.
         """
-        return self.user_skills_dir(user_id) / "integrations"
+        return self.base_dir / "integrations" / "skills"
 
     def thread_dir(self, thread_id: str, *, user_id: str | None = None) -> Path:
         """
@@ -351,9 +351,9 @@ class Paths:
         """Host path for a user's custom skills directory, preserving Windows path syntax."""
         return _join_host_path(self._host_base_dir_str(), "users", _validate_user_id(user_id), "skills", "custom")
 
-    def host_user_integration_skills_dir(self, user_id: str) -> str:
-        """Host path for a user's managed integration skills directory."""
-        return _join_host_path(self._host_base_dir_str(), "users", _validate_user_id(user_id), "skills", "integrations")
+    def host_integration_skills_dir(self) -> str:
+        """Host path for globally installed managed integration skills."""
+        return _join_host_path(self._host_base_dir_str(), "integrations", "skills")
 
     def host_user_integration_config_dir(self, user_id: str, integration_id: str) -> str:
         """Host path for a user's managed integration runtime config directory."""

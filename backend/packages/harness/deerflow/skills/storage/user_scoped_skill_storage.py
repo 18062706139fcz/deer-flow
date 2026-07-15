@@ -83,7 +83,7 @@ class UserScopedSkillStorage(LocalSkillStorage):
         self._user_id = _validate_user_id(user_id)
         paths = get_paths()
         self._user_custom_root: Path = paths.user_custom_skills_dir(self._user_id)
-        self._user_integrations_root: Path = paths.user_integration_skills_dir(self._user_id)
+        self._integrations_root: Path = paths.integration_skills_dir()
         self._user_skills_root: Path = paths.user_skills_dir(self._user_id)
         self._global_custom_root: Path = self._host_root / SkillCategory.CUSTOM.value
         self._skill_states_file: Path = self._user_skills_root / "_skill_states.json"
@@ -258,7 +258,7 @@ class UserScopedSkillStorage(LocalSkillStorage):
         is_global_custom_fallback = (self._global_custom_root / normalized_name / SKILL_MD_FILE).exists()
         if is_global_public:
             raise ValueError(f"'{name}' is a built-in skill. Use the skill_manage tool to create your own version — it will shadow the built-in one.")
-        is_integration = any((candidate / SKILL_MD_FILE).exists() for candidate in self._user_integrations_root.glob(f"*/{normalized_name}") if candidate.is_dir())
+        is_integration = any((candidate / SKILL_MD_FILE).exists() for candidate in self._integrations_root.glob(f"*/{normalized_name}") if candidate.is_dir())
         if is_global_custom_fallback:
             raise ValueError(f"'{name}' is a legacy shared skill (not editable). To customise it, create your own version with the same name — it will shadow the shared one.")
         if is_integration:
@@ -275,8 +275,9 @@ class UserScopedSkillStorage(LocalSkillStorage):
                     continue
                 yield SkillCategory.PUBLIC, public_path, Path(current_root) / SKILL_MD_FILE
 
-        # 2. Managed integration skills: per-user, read-only.
-        integration_path = self._user_integrations_root
+        # 2. Managed integration skills: globally installed, read-only. Their
+        # enabled state is still merged from this user's _skill_states.json.
+        integration_path = self._integrations_root
         if integration_path.exists() and integration_path.is_dir():
             for current_root, dir_names, file_names in os.walk(integration_path, followlinks=True):
                 dir_names[:] = sorted(name for name in dir_names if not name.startswith("."))

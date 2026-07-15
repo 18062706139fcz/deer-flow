@@ -259,11 +259,11 @@ def test_mask_local_paths_no_thread_data_still_masks_skills() -> None:
         assert "/mnt/skills/a/b.md" in masked
 
 
-def test_mask_local_paths_hides_user_integration_skill_paths(tmp_path: Path) -> None:
+def test_mask_local_paths_hides_global_integration_skill_paths(tmp_path: Path) -> None:
     from deerflow.config.paths import Paths
 
     paths = Paths(base_dir=tmp_path)
-    integration_dir = paths.user_integration_skills_dir("alice") / "lark-cli" / "lark-doc"
+    integration_dir = tmp_path / "integrations" / "skills" / "lark-cli" / "lark-doc"
     integration_dir.mkdir(parents=True)
     output = f"Reading: {integration_dir / 'SKILL.md'}"
 
@@ -399,11 +399,11 @@ def test_extract_skill_name_from_integration_skill_path() -> None:
         assert _extract_skill_name_from_skills_path("/mnt/skills/integrations/lark-cli") is None
 
 
-def test_resolve_skills_path_resolves_user_integration_skills(tmp_path: Path) -> None:
+def test_resolve_skills_path_resolves_global_integration_skills(tmp_path: Path) -> None:
     from deerflow.config.paths import Paths
 
     paths = Paths(base_dir=tmp_path)
-    expected = paths.user_integration_skills_dir("alice") / "lark-cli" / "lark-doc" / "SKILL.md"
+    expected = tmp_path / "integrations" / "skills" / "lark-cli" / "lark-doc" / "SKILL.md"
     with (
         patch("deerflow.sandbox.tools._get_skills_container_path", return_value="/mnt/skills"),
         patch("deerflow.sandbox.tools._get_skills_host_path", return_value="/home/user/deer-flow/skills"),

@@ -38,7 +38,7 @@ from deerflow.community.warm_pool_lifecycle import (
 from deerflow.config import get_app_config
 from deerflow.config.paths import VIRTUAL_PATH_PREFIX, get_paths, join_host_path
 from deerflow.integrations.lark_cli import INTEGRATION_ID as LARK_CLI_INTEGRATION_ID
-from deerflow.integrations.lark_cli import LARK_CLI_SANDBOX_CONFIG_DIR, LARK_CLI_SANDBOX_DATA_DIR
+from deerflow.integrations.lark_cli import LARK_CLI_SANDBOX_CONFIG_DIR, LARK_CLI_SANDBOX_DATA_DIR, LARK_CLI_SANDBOX_RUNTIME_DIR, ensure_lark_cli_credential_tree
 from deerflow.runtime.user_context import get_effective_user_id
 from deerflow.sandbox.sandbox import Sandbox
 from deerflow.sandbox.sandbox_provider import SandboxProvider
@@ -437,10 +437,10 @@ class AioSandboxProvider(WarmPoolLifecycleMixin[SandboxInfo], SandboxProvider):
             effective_user_id = AioSandboxProvider._effective_acquire_user_id(user_id)
             skills_container_path = config.skills.container_path
             paths.user_custom_skills_dir(effective_user_id).mkdir(parents=True, exist_ok=True)
-            paths.user_integration_skills_dir(effective_user_id).mkdir(parents=True, exist_ok=True)
+            paths.integration_skills_dir().mkdir(parents=True, exist_ok=True)
             return [
                 (paths.host_user_custom_skills_dir(effective_user_id), f"{skills_container_path}/custom", True),
-                (paths.host_user_integration_skills_dir(effective_user_id), f"{skills_container_path}/integrations", True),
+                (paths.host_integration_skills_dir(), f"{skills_container_path}/integrations", True),
             ]
         except Exception as e:
             logger.warning(f"Could not setup user skill mounts: {e}")
@@ -460,14 +460,21 @@ class AioSandboxProvider(WarmPoolLifecycleMixin[SandboxInfo], SandboxProvider):
         try:
             paths = get_paths()
             effective_user_id = AioSandboxProvider._effective_acquire_user_id(user_id)
-            config_dir = paths.user_dir(effective_user_id) / "integrations" / LARK_CLI_INTEGRATION_ID / "config"
-            data_dir = paths.user_dir(effective_user_id) / "integrations" / LARK_CLI_INTEGRATION_ID / "data"
-            config_dir.mkdir(parents=True, exist_ok=True)
-            data_dir.mkdir(parents=True, exist_ok=True)
-            return [
+            ensure_lark_cli_credential_tree(effective_user_id, paths=paths)
+            mounts = [
                 (paths.host_user_integration_config_dir(effective_user_id, LARK_CLI_INTEGRATION_ID), LARK_CLI_SANDBOX_CONFIG_DIR, False),
                 (paths.host_user_integration_data_dir(effective_user_id, LARK_CLI_INTEGRATION_ID), LARK_CLI_SANDBOX_DATA_DIR, False),
             ]
+            runtime_dir = paths.base_dir / "integrations" / LARK_CLI_INTEGRATION_ID / "sandbox-cli"
+            if runtime_dir.is_dir():
+                mounts.append(
+                    (
+                        join_host_path(str(paths.host_base_dir), "integrations", LARK_CLI_INTEGRATION_ID, "sandbox-cli"),
+                        LARK_CLI_SANDBOX_RUNTIME_DIR,
+                        True,
+                    )
+                )
+            return mounts
         except Exception as e:
             logger.warning(f"Could not setup Lark CLI runtime mounts: {e}")
             return []

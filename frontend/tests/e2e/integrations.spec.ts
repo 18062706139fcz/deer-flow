@@ -48,6 +48,25 @@ test.describe("Integrations settings", () => {
   }) => {
     mockLangGraphAPI(page);
     let authStartRequest: unknown;
+    const authCompleteRequests: unknown[] = [];
+    await page.route("**/api/integrations/lark/auth/complete", async (route) => {
+      authCompleteRequests.push(route.request().postDataJSON());
+      await route.fallback();
+    });
+    await page.route("**/api/integrations/lark/config/start", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          verification_url: "about:blank",
+          device_code: "mock-config-device-code",
+          expires_in: 600,
+          interval: 5,
+          user_code: "config",
+          brand: "feishu",
+        }),
+      });
+    });
     await page.route("**/api/integrations/lark/auth/start", async (route) => {
       authStartRequest = route.request().postDataJSON();
       await route.fulfill({
@@ -89,7 +108,7 @@ test.describe("Integrations settings", () => {
       .fill("calendar:calendar.event:read");
     await dialog.getByRole("button", { name: "Connect Lark" }).click();
     await expect(
-      dialog.getByText("https://open.feishu.cn/page/cli?user_code=config"),
+      dialog.getByText("about:blank"),
     ).toBeVisible();
     await expect(dialog.getByText(/app configuration/i)).toHaveCount(0);
 
@@ -106,20 +125,24 @@ test.describe("Integrations settings", () => {
         scope: "calendar:calendar.event:read",
       });
 
+    await expect
+      .poll(() => authCompleteRequests)
+      .toContainEqual({
+        device_code: "mock-device-code",
+        wait_timeout_seconds: 8,
+      });
     await expect(
-      page.getByText("Lark/Feishu authorization completed."),
+      dialog.getByText("Lark authorization is live-verified"),
     ).toBeVisible();
-    await expect(dialog.getByText("Lark is connected")).toBeVisible();
     await expect(
       page.getByText("Authorization page opened. Waiting for completion..."),
     ).toHaveCount(0);
 
     await dialog.getByRole("button", { name: "Calendar" }).click();
     await dialog.getByLabel("Exact OAuth scope").fill("");
-    await dialog.getByRole("button", { name: "Connected" }).click();
-    await expect(page.getByText(/Lark is already connected/)).toBeVisible();
+    await dialog.getByRole("button", { name: "Reconnect Lark" }).click();
     await expect(
       dialog.getByText("https://open.feishu.cn/auth/mock-device"),
-    ).toHaveCount(0);
+    ).toBeVisible();
   });
 });
