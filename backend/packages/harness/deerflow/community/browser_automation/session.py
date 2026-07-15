@@ -131,6 +131,12 @@ _LIVE_FRAME_JPEG_QUALITY = 85
 _MANUAL_LIVE_FRAME_MIN_INTERVAL_S = 0.75
 _LIVE_FRAME_SETTLE_DELAYS_S = (0.8, 2.0)
 
+# Bound per-thread Chromium accumulation on a long-running multi-user gateway.
+# Sessions unused past the idle timeout are lazily evicted on the next
+# get_session call, and the LRU session is closed once the cap is exceeded.
+_DEFAULT_MAX_SESSIONS = 32
+_DEFAULT_IDLE_TIMEOUT_S = 30 * 60.0
+
 
 def _is_playwright_timeout_error(exc: Exception) -> bool:
     """Recognize Playwright timeouts without requiring Playwright at import time."""
@@ -255,7 +261,6 @@ class BrowserSession:
         self._browser: Browser | None = None
         self._context: BrowserContext | None = None
         self._page: Page | None = None
-        self._cdp: Any = None
         # Live screencast state. When streaming, ``_on_frame`` is retained so the
         # screencast can be re-bound to a new page — login/OAuth flows commonly
         # open a popup or a fresh tab, and the user must see (and drive) it.
@@ -291,6 +296,15 @@ class BrowserSession:
             if self._browser is None or not self._browser.is_connected():
                 self._browser = await self._playwright.chromium.connect_over_cdp(self._cdp_url)
                 self._connected_over_cdp = True
+                # CDP-attached real Chrome owns its own browsing context, so the
+                # SSRF request guard is intentionally NOT installed for it (see
+                # _install_request_guard). Surface that to operators — for this
+                # session redirects/subresources to private/metadata hosts are
+                # not aborted; cdp_url is documented local/trusted-only.
+                logger.warning(
+                    "browser SSRF request guard is disabled for CDP-attached session (cdp_url=%s)",
+                    _redact_url(self._cdp_url),
+                )
             self._context = self._browser.contexts[0] if self._browser.contexts else await self._browser.new_context()
             self._context.set_default_timeout(self._timeout_ms)
             existing = self._context.pages
@@ -572,7 +586,6 @@ class BrowserSession:
             self._browser = None
             self._context = None
             self._page = None
-            self._cdp = None
             self._screencast_page = None
             self._connected_over_cdp = False
             self._on_frame = None
@@ -603,19 +616,7 @@ class BrowserSession:
         self._on_frame = None
         self._manual_live_frame_pending = False
         self._settle_live_frames_pending = False
-        cdp = self._cdp
-        self._cdp = None
         self._screencast_page = None
-        if cdp is None:
-            return
-        try:
-            await cdp.send("Page.stopScreencast")
-        except Exception:
-            pass
-        try:
-            await cdp.detach()
-        except Exception:
-            pass
 
     async def _dispatch_input(self, event: dict) -> None:
         page = await self._ensure_page()
@@ -729,11 +730,24 @@ class BrowserSession:
 
 
 class BrowserSessionManager:
-    """Process-local registry of per-thread browser sessions."""
+    """Process-local registry of per-thread browser sessions.
 
-    def __init__(self) -> None:
+    Sessions are keyed by ``thread_id`` and each owns a headless Chromium
+    process, so a long-running multi-user gateway would otherwise accumulate one
+    browser per thread that ever used the tools (a real memory/FD leak). To bound
+    that, ``get_session`` lazily evicts sessions that have been idle past
+    ``idle_timeout_s`` and enforces a ``max_sessions`` cap by closing the
+    least-recently-used session. Eviction is best-effort and fire-and-forget on
+    the private Playwright loop so it never blocks the caller; the just-requested
+    thread is always kept.
+    """
+
+    def __init__(self, *, max_sessions: int = _DEFAULT_MAX_SESSIONS, idle_timeout_s: float = _DEFAULT_IDLE_TIMEOUT_S) -> None:
         self._loop: _PlaywrightLoopThread | None = None
         self._sessions: dict[str, BrowserSession] = {}
+        self._last_used: dict[str, float] = {}
+        self._max_sessions = max_sessions
+        self._idle_timeout_s = idle_timeout_s
         self._lock = threading.Lock()
 
     def _ensure_loop(self) -> _PlaywrightLoopThread:
@@ -752,6 +766,7 @@ class BrowserSessionManager:
         url_guard: Callable[[str], str | None] | None = None,
     ) -> BrowserSession:
         key = thread_id or "default"
+        now = time.monotonic()
         with self._lock:
             session = self._sessions.get(key)
             if session is None:
@@ -764,12 +779,52 @@ class BrowserSessionManager:
                     url_guard=url_guard,
                 )
                 self._sessions[key] = session
-            return session
+            self._last_used[key] = now
+            evicted = self._collect_evictable_locked(keep_key=key, now=now)
+        for evicted_session in evicted:
+            self._schedule_close(evicted_session)
+        return session
+
+    def _collect_evictable_locked(self, *, keep_key: str, now: float) -> list[BrowserSession]:
+        """Drop idle/over-cap sessions from the registry; return them for close.
+
+        Must be called under ``self._lock``. ``keep_key`` (the just-touched
+        thread) is never evicted so an active request cannot lose its session.
+        """
+        to_close: list[BrowserSession] = []
+        if self._idle_timeout_s > 0:
+            for other_key, last_used in list(self._last_used.items()):
+                if other_key == keep_key:
+                    continue
+                if now - last_used >= self._idle_timeout_s:
+                    session = self._sessions.pop(other_key, None)
+                    self._last_used.pop(other_key, None)
+                    if session is not None:
+                        to_close.append(session)
+        if self._max_sessions > 0:
+            while len(self._sessions) > self._max_sessions:
+                candidates = [(last_used, other_key) for other_key, last_used in self._last_used.items() if other_key != keep_key]
+                if not candidates:
+                    break
+                _, lru_key = min(candidates)
+                session = self._sessions.pop(lru_key, None)
+                self._last_used.pop(lru_key, None)
+                if session is not None:
+                    to_close.append(session)
+        return to_close
+
+    def _schedule_close(self, session: BrowserSession) -> None:
+        loop = self._loop
+        if loop is None:
+            return
+        with contextlib.suppress(Exception):
+            loop.submit(session._close())
 
     async def close_session(self, thread_id: str | None) -> bool:
         key = thread_id or "default"
         with self._lock:
             session = self._sessions.pop(key, None)
+            self._last_used.pop(key, None)
         if session is None:
             return False
         await session.close()
@@ -779,6 +834,7 @@ class BrowserSessionManager:
         with self._lock:
             sessions = list(self._sessions.values())
             self._sessions.clear()
+            self._last_used.clear()
         for session in sessions:
             await session.close()
         return len(sessions)

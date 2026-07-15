@@ -148,6 +148,12 @@ export function useBrowserStream(
         socket.send(JSON.stringify(pendingNavigate));
         pendingNavigateRef.current = null;
       }
+      // Reset the reconnect budget on a successful open. Without this the
+      // cumulative attempt counter never returns to 0 while the panel stays
+      // mounted, so after RECONNECT_MAX_ATTEMPTS total reconnects — even across
+      // many healthy connections — scheduleReconnect would bail forever and
+      // Live would go permanently dead until the panel is toggled off/on.
+      setConnectionAttempt(0);
       setStatus("open");
     };
     socket.onmessage = async (message) => {

@@ -1,4 +1,11 @@
-from app.gateway.routers.browser import _should_apply_browser_seed
+from app.gateway.routers.browser import _should_apply_browser_seed, _ws_origin_allowed
+
+
+class _FakeWebSocket:
+    """Minimal stand-in exposing only the headers ``_ws_origin_allowed`` reads."""
+
+    def __init__(self, headers: dict[str, str]):
+        self.headers = {k.lower(): v for k, v in headers.items()}
 
 
 def test_browser_stream_seed_applies_to_blank_page():
@@ -17,6 +24,46 @@ def test_browser_stream_seed_ignores_hash_and_trailing_slash_for_same_page():
         "https://github.com/bytedance/deer-flow/#readme",
         "https://github.com/bytedance/deer-flow/",
     )
+
+
+def test_ws_origin_allowed_without_origin_header():
+    # Native ws clients / tests do not send Origin — allow them.
+    assert _ws_origin_allowed(_FakeWebSocket({"host": "app.example.com"})) is True
+
+
+def test_ws_origin_allowed_same_origin_host():
+    # Browser page scheme (https) differs from the ws scheme, so same-origin
+    # compares host[:port] against the upgrade target Host.
+    ws = _FakeWebSocket({"origin": "https://app.example.com", "host": "app.example.com"})
+    assert _ws_origin_allowed(ws) is True
+
+
+def test_ws_origin_allowed_rejects_cross_origin():
+    ws = _FakeWebSocket({"origin": "https://evil.example.com", "host": "app.example.com"})
+    assert _ws_origin_allowed(ws) is False
+
+
+def test_ws_origin_allowed_rejects_malformed_origin():
+    ws = _FakeWebSocket({"origin": "not-a-url", "host": "app.example.com"})
+    assert _ws_origin_allowed(ws) is False
+
+
+def test_ws_origin_allowed_honors_configured_cors_origin(monkeypatch):
+    monkeypatch.setenv("GATEWAY_CORS_ORIGINS", "https://console.example.com")
+    ws = _FakeWebSocket({"origin": "https://console.example.com", "host": "gateway.internal"})
+    assert _ws_origin_allowed(ws) is True
+
+
+def test_ws_origin_allowed_honors_forwarded_host():
+    # Behind a proxy the real upgrade target is X-Forwarded-Host, not Host.
+    ws = _FakeWebSocket(
+        {
+            "origin": "https://app.example.com",
+            "host": "gateway.internal",
+            "x-forwarded-host": "app.example.com",
+        },
+    )
+    assert _ws_origin_allowed(ws) is True
 
 
 def test_browser_frames_dirname_shared_between_tools_and_scanner():

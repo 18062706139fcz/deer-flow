@@ -88,7 +88,16 @@ def _as_str(value: object) -> str | None:
 
 
 def _resolve_session(runtime: Runtime, tool_name: str) -> BrowserSession:
-    cfg = _get_tool_config(tool_name)
+    # Launch config (headless/viewport/timeout/cdp_url) is read from a single
+    # canonical source — always ``browser_navigate`` — regardless of which tool
+    # first creates the session. ``get_session`` caches per thread and ignores
+    # these params for later callers, so keying launch config off the calling
+    # tool made it "first tool to run wins": a ``headless: false`` set only on
+    # ``browser_navigate`` was silently dropped if another tool (or the live WS)
+    # initialized the session first. ``tool_name`` is retained for callers that
+    # read their own non-launch config (e.g. ``browser_get_text``'s max_chars).
+    del tool_name
+    cfg = _get_tool_config("browser_navigate")
     headless = _as_bool(cfg.get("headless"), True)
     timeout_ms = _as_int(cfg.get("timeout_ms"), 30000)
     width = _as_int(cfg.get("viewport_width"), 1280)

@@ -542,6 +542,84 @@ class TestSessionManager:
         # Second close is a no-op because the session was dropped.
         assert await manager.close_session("thread-a") is False
 
+    async def test_idle_sessions_are_evicted_on_next_get(self):
+        """A session unused past the idle timeout is dropped + scheduled to close.
+
+        The active (just-requested) thread is always kept; only the stale one is
+        evicted, so a long-running gateway can't accumulate one Chromium per
+        thread that ever touched the tools.
+        """
+        manager = BrowserSessionManager(idle_timeout_s=100.0, max_sessions=0)
+        fake_loop = MagicMock()
+        manager._loop = fake_loop
+        with patch.object(manager, "_ensure_loop", return_value=fake_loop):
+            with patch.object(session_mod.time, "monotonic", return_value=0.0):
+                stale = manager.get_session("thread-stale")
+            # Avoid an un-awaited coroutine warning: the fake loop.submit does
+            # not consume the coroutine _schedule_close would build.
+            stale._close = MagicMock()
+            with patch.object(session_mod.time, "monotonic", return_value=1000.0):
+                fresh = manager.get_session("thread-fresh")
+        assert "thread-stale" not in manager._sessions
+        assert "thread-fresh" in manager._sessions
+        # The evicted session is closed on the private loop (fire-and-forget).
+        fake_loop.submit.assert_called_once()
+        assert fresh is manager._sessions["thread-fresh"]
+        del stale
+
+    async def test_max_sessions_cap_evicts_least_recently_used(self):
+        manager = BrowserSessionManager(idle_timeout_s=0, max_sessions=2)
+        fake_loop = MagicMock()
+        manager._loop = fake_loop
+        with patch.object(manager, "_ensure_loop", return_value=fake_loop):
+            with patch.object(session_mod.time, "monotonic", return_value=1.0):
+                manager.get_session("a")
+            with patch.object(session_mod.time, "monotonic", return_value=2.0):
+                evicted = manager.get_session("b")
+            evicted._close = MagicMock()
+            # Re-touch "a" so "b" becomes the least-recently-used.
+            with patch.object(session_mod.time, "monotonic", return_value=3.0):
+                manager.get_session("a")
+            with patch.object(session_mod.time, "monotonic", return_value=4.0):
+                manager.get_session("c")
+        assert set(manager._sessions) == {"a", "c"}
+        assert "b" not in manager._sessions
+        fake_loop.submit.assert_called_once()
+
+
+def test_resolve_session_always_reads_browser_navigate_config():
+    """Launch config is deterministic regardless of which tool runs first.
+
+    ``get_session`` caches per thread and ignores launch params for later
+    callers, so keying config off the calling tool made it "first tool to run
+    wins" — a ``headless: false`` set only on ``browser_navigate`` was silently
+    dropped if e.g. ``browser_snapshot`` created the session first. We now always
+    read ``browser_navigate``'s config as the single canonical source.
+    """
+    configs = {
+        "browser_navigate": {"headless": False, "viewport_width": 1920, "viewport_height": 1080, "timeout_ms": 12345},
+        "browser_snapshot": {"headless": True},
+    }
+    captured: dict[str, object] = {}
+
+    class _FakeManager:
+        def get_session(self, thread_id, **kwargs):
+            captured.update(kwargs)
+            captured["thread_id"] = thread_id
+            return MagicMock()
+
+    with (
+        patch.object(tools, "_get_tool_config", lambda name: configs.get(name, {})),
+        patch.object(tools, "get_browser_session_manager", return_value=_FakeManager()),
+    ):
+        # Even when a NON-navigate tool resolves the session, launch config comes
+        # from browser_navigate.
+        tools._resolve_session(_runtime(), "browser_snapshot")
+
+    assert captured["headless"] is False
+    assert captured["timeout_ms"] == 12345
+    assert captured["viewport"] == {"width": 1920, "height": 1080}
+
 
 def test_reset_manager_singleton():
     first = session_mod.get_browser_session_manager()

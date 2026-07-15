@@ -113,6 +113,44 @@ async def _authenticate_ws(websocket: WebSocket):
     return None
 
 
+def _ws_origin_allowed(websocket: WebSocket) -> bool:
+    """Reject cross-origin WebSocket upgrades (WS-CSRF defense).
+
+    WS upgrades bypass ``CSRFMiddleware`` (also a BaseHTTPMiddleware), so a
+    cross-origin page could otherwise open this socket riding the victim's
+    cookie and both observe frames and drive their authenticated browser. The
+    ``Origin`` header is browser-controlled but always sent on cross-origin
+    upgrades, so validating it is a standard, cheap mitigation.
+
+    Allow when: no ``Origin`` (non-browser clients such as native ws/tests do
+    not send it), the origin is an explicitly configured CORS origin, or it is
+    same-origin with the upgrade target's host. The WS scheme (ws/wss) differs
+    from the page scheme (http/https), so same-origin compares host[:port].
+    """
+    from app.gateway.csrf_middleware import (
+        _first_header_value,
+        _normalize_origin,
+        get_configured_cors_origins,
+    )
+
+    origin = websocket.headers.get("origin")
+    if not origin:
+        return True
+
+    normalized = _normalize_origin(origin)
+    if normalized is None:
+        return False
+    if normalized in get_configured_cors_origins():
+        return True
+
+    target_host = _first_header_value(websocket.headers.get("x-forwarded-host")) or websocket.headers.get("host")
+    if target_host:
+        normalized_host = normalized.split("://", 1)[-1]
+        if normalized_host == target_host.strip().lower():
+            return True
+    return False
+
+
 @router.websocket("/threads/{thread_id}/browser/stream")
 async def browser_stream(websocket: WebSocket, thread_id: str) -> None:
     """Bidirectional live browser stream.
@@ -126,16 +164,26 @@ async def browser_stream(websocket: WebSocket, thread_id: str) -> None:
         await websocket.close(code=4401)
         return
 
+    if not _ws_origin_allowed(websocket):
+        # Cross-origin upgrade — reject before touching any session (WS-CSRF).
+        await websocket.close(code=4403)
+        return
+
     thread_store = getattr(websocket.app.state, "thread_store", None)
-    if thread_store is not None:
-        # Strict ownership: the live stream drives a real browser (cookies,
-        # logged-in pages), so require an existing owned thread. A permissive
-        # check would let any authenticated caller attach to a deleted thread's
-        # id and reuse the retained page/context.
-        allowed = await thread_store.check_access(thread_id, str(user.id), require_existing=True)
-        if not allowed:
-            await websocket.close(code=4404)
-            return
+    if thread_store is None:
+        # Fail closed: the live stream drives a real browser (cookies,
+        # logged-in pages), so if the ownership store can't be resolved we must
+        # deny rather than let any authenticated caller attach to any thread's
+        # retained session.
+        await websocket.close(code=4404)
+        return
+    # Strict ownership: require an existing owned thread. A permissive check
+    # would let any authenticated caller attach to a deleted thread's id and
+    # reuse the retained page/context.
+    allowed = await thread_store.check_access(thread_id, str(user.id), require_existing=True)
+    if not allowed:
+        await websocket.close(code=4404)
+        return
 
     if not _browser_tools_enabled():
         await websocket.close(code=4404)
