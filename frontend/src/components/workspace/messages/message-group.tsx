@@ -15,7 +15,7 @@ import {
   SquareTerminalIcon,
   WrenchIcon,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 
 import {
   ChainOfThought,
@@ -47,21 +47,23 @@ import { Tooltip } from "../tooltip";
 
 import { MarkdownContent } from "./markdown-content";
 
-export function MessageGroup({
-  className,
-  messages,
-  isLoading = false,
-  tokenDebugSteps = [],
-  showTokenDebugSummaries = false,
-  threadId,
-}: {
+interface MessageGroupProps {
   className?: string;
   messages: Message[];
   isLoading?: boolean;
   tokenDebugSteps?: TokenDebugStep[];
   showTokenDebugSummaries?: boolean;
   threadId?: string;
-}) {
+}
+
+function MessageGroupComponent({
+  className,
+  messages,
+  isLoading = false,
+  tokenDebugSteps = [],
+  showTokenDebugSummaries = false,
+  threadId,
+}: MessageGroupProps) {
   const { t } = useI18n();
   const [showAbove, setShowAbove] = useState(
     env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY === "true",
@@ -394,6 +396,45 @@ export function MessageGroup({
         </>
       )}
     </ChainOfThought>
+  );
+}
+
+export const MessageGroup = memo(
+  MessageGroupComponent,
+  areMessageGroupPropsEqual,
+);
+MessageGroup.displayName = "MessageGroup";
+
+function areMessageGroupPropsEqual(
+  previous: MessageGroupProps,
+  next: MessageGroupProps,
+): boolean {
+  if (next.isLoading) {
+    return false;
+  }
+  return (
+    previous.className === next.className &&
+    Boolean(previous.isLoading) === Boolean(next.isLoading) &&
+    Boolean(previous.showTokenDebugSummaries) ===
+      Boolean(next.showTokenDebugSummaries) &&
+    previous.threadId === next.threadId &&
+    sameReferences(previous.messages, next.messages) &&
+    sameReferences(previous.tokenDebugSteps, next.tokenDebugSteps)
+  );
+}
+
+function sameReferences<T>(
+  previous: readonly T[] | undefined,
+  next: readonly T[] | undefined,
+): boolean {
+  if (previous === next) {
+    return true;
+  }
+  const previousItems = previous ?? [];
+  const nextItems = next ?? [];
+  return (
+    previousItems.length === nextItems.length &&
+    previousItems.every((item, index) => item === nextItems[index])
   );
 }
 
