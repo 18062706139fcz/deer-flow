@@ -1,0 +1,53 @@
+backend/app/gateway/routers/integrations.py
+  s_78ce8cdd2b48c9::t_e8e3febe4ec653 8,11-13,49,119-124,147,231-232,319
+backend/packages/harness/deerflow/community/aio_sandbox/remote_backend.py
+  s_78ce8cdd2b48c9::t_995b617b2c6710 38
+backend/packages/harness/deerflow/sandbox/local/local_sandbox_provider.py
+  s_78ce8cdd2b48c9::t_63f20e01a25fa2 291,293,305
+backend/packages/harness/deerflow/skills/storage/user_scoped_skill_storage.py
+  s_78ce8cdd2b48c9::t_2e1db7d44c738f 86,261,278-280
+backend/tests/blocking_io/test_integrations_router.py
+  s_78ce8cdd2b48c9::t_cd599bf5cf8617 93-97,104,109
+backend/tests/test_aio_sandbox_provider.py
+  s_78ce8cdd2b48c9::t_cc52d59d38f1f5 5,110-111,124-150
+backend/tests/test_local_sandbox_provider_mounts.py
+  s_78ce8cdd2b48c9::t_05bb436ba473f3 547-575
+backend/tests/test_sandbox_tools_security.py
+  s_78ce8cdd2b48c9::t_b00ba532bef8bb 262,266,402,406
+backend/tests/test_user_scoped_skill_storage.py
+  s_78ce8cdd2b48c9::t_ce34e6a5753f70 139-156
+docker/provisioner/app.py
+  s_78ce8cdd2b48c9::t_b34b2015a81994 82,89
+frontend/src/components/workspace/settings/integrations-settings-page.tsx
+  s_78ce8cdd2b48c9::t_1aa88960ef609b 100-101,154-155,347-352,472,474,551,554-560,592,799,804,838-848
+frontend/src/core/i18n/locales/en-US.ts
+  s_78ce8cdd2b48c9::t_f9cd796d881819 804-806,810,954-957,959
+frontend/src/core/i18n/locales/types.ts
+  s_78ce8cdd2b48c9::t_1f4d70d10657fa 677-678,738-739
+frontend/src/core/i18n/locales/zh-CN.ts
+  s_78ce8cdd2b48c9::t_e2a04cb9d90b49 774-775,779,911-914,916
+frontend/src/core/integrations/lark/hooks.ts
+  s_78ce8cdd2b48c9::t_99042759deaa71 64
+frontend/src/core/integrations/lark/types.ts
+  s_78ce8cdd2b48c9::t_316c987effad98 17,87
+frontend/tests/e2e/integrations.spec.ts
+  s_78ce8cdd2b48c9::t_04d69b8437e3b6 51-69,111,128-133,135,143,146
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "15bc5a572fe897b7759d6cb3f26113b41354c1bf",
+  "prompts": {},
+  "sessions": {
+    "s_78ce8cdd2b48c9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f64ba-b751-7881-9b3e-e21862e877b2",
+        "model": "unknown"
+      },
+      "human_author": "ryker <2279549769@qq.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
