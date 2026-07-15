@@ -209,7 +209,7 @@ def test_provisioner_create_forwards_supported_extra_mounts(monkeypatch):
     backend = RemoteSandboxBackend("http://provisioner:8002")
     monkeypatch.setattr(remote_backend_mod, "user_should_see_legacy_skills", lambda user_id: False)
 
-    def mock_post(url: str, json: dict, timeout: int):
+    def mock_post(url: str, json: dict, timeout: int, headers=None):
         assert url == "http://provisioner:8002/api/sandboxes"
         assert json["include_legacy_skills"] is False
         assert json["extra_mounts"] == [
