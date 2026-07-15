@@ -16,12 +16,14 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import logging
 import threading
 import time
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, TypeVar
+from urllib.parse import urlparse
 
 if TYPE_CHECKING:
     from playwright.async_api import Browser, BrowserContext, Page, Playwright
@@ -135,6 +137,15 @@ def _is_playwright_timeout_error(exc: Exception) -> bool:
     return exc.__class__.__name__ == "TimeoutError" and exc.__class__.__module__.startswith("playwright.")
 
 
+def _redact_url(url: str) -> str:
+    """Drop query/fragment so a blocked-URL log line can't leak tokens/PII."""
+    try:
+        parsed = urlparse(url)
+        return f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+    except Exception:
+        return "<unparsable-url>"
+
+
 class _PlaywrightLoopThread:
     """A private asyncio event loop running on a dedicated daemon thread."""
 
@@ -219,11 +230,21 @@ class BrowserSession:
         timeout_ms: int,
         viewport: dict[str, int],
         cdp_url: str | None = None,
+        url_guard: Callable[[str], str | None] | None = None,
     ) -> None:
         self._loop = loop
         self._headless = headless
         self._timeout_ms = timeout_ms
         self._viewport = viewport
+        # Optional SSRF guard applied at the browser request boundary. It returns
+        # an error string to block a URL (redirect/popup/subresource) or None to
+        # allow it. The explicit navigate URL is screened by the caller, but
+        # Playwright follows redirects and issues subresource/popup requests that
+        # bypass that single check — so we also validate every request the page
+        # makes here, catching a public URL that 30x-redirects to a private or
+        # cloud-metadata host.
+        self._url_guard = url_guard
+        self._request_guard_bound = False
         # When set, attach to an already-running Chrome via the DevTools
         # Protocol (like Codex's "connect to your real browser") instead of
         # launching a private headless instance. The user watches the agent
@@ -283,6 +304,7 @@ class BrowserSession:
         # panel stays crisp when the image is scaled up to fill the view.
         self._context = await self._browser.new_context(viewport=self._viewport, device_scale_factor=2)
         self._context.set_default_timeout(self._timeout_ms)
+        await self._install_request_guard()
         self._set_active_page(await self._context.new_page())
         self._bind_new_page_listener()
         return self._page
@@ -319,6 +341,37 @@ class BrowserSession:
 
         self._context.on("page", _on_new_page)
         self._page_listener_bound = True
+
+    async def _install_request_guard(self) -> None:
+        """Abort any request whose URL fails the SSRF guard.
+
+        Runs at the context level so it covers the top navigation, every
+        redirect hop, popups/new tabs, iframes, and subresource fetches — the
+        paths a one-time initial-URL check cannot see. A public URL that
+        redirects to ``http://169.254.169.254/...`` is aborted before the
+        response is exposed through snapshots/text. Skipped for CDP-attached
+        real Chrome, which owns its own browsing context.
+        """
+        if self._url_guard is None or self._context is None or self._request_guard_bound or self._cdp_url:
+            return
+
+        guard = self._url_guard
+
+        async def _route(route: Any) -> None:
+            url = ""
+            with contextlib.suppress(Exception):
+                url = route.request.url
+            if url.startswith(("http://", "https://")) and guard(url) is not None:
+                logger.warning("browser request blocked by SSRF guard: %s", _redact_url(url))
+                with contextlib.suppress(Exception):
+                    await route.abort("blockedbyclient")
+                return
+            with contextlib.suppress(Exception):
+                await route.continue_()
+
+        with contextlib.suppress(Exception):
+            await self._context.route("**/*", _route)
+            self._request_guard_bound = True
 
     async def _rebind_screencast(self) -> None:
         if self._on_frame is not None:
@@ -696,6 +749,7 @@ class BrowserSessionManager:
         timeout_ms: int = 30000,
         viewport: dict[str, int] | None = None,
         cdp_url: str | None = None,
+        url_guard: Callable[[str], str | None] | None = None,
     ) -> BrowserSession:
         key = thread_id or "default"
         with self._lock:
@@ -707,6 +761,7 @@ class BrowserSessionManager:
                     timeout_ms=timeout_ms,
                     viewport=viewport or {"width": 1280, "height": 720},
                     cdp_url=cdp_url,
+                    url_guard=url_guard,
                 )
                 self._sessions[key] = session
             return session

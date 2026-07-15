@@ -579,3 +579,86 @@ async def test_real_playwright_navigate_click_type():
     finally:
         await manager.close_session("it-thread")
         session_mod.reset_browser_session_manager()
+
+
+class _FakeRoute:
+    def __init__(self, url: str):
+        self.request = SimpleNamespace(url=url)
+        self.aborted_with: str | None = None
+        self.continued = False
+
+    async def abort(self, error_code: str = "failed") -> None:
+        self.aborted_with = error_code
+
+    async def continue_(self) -> None:
+        self.continued = True
+
+
+@pytest.mark.asyncio
+async def test_request_guard_aborts_blocked_redirect_target():
+    """The context request guard aborts any URL the SSRF policy rejects.
+
+    A public initial URL can 30x-redirect to a metadata/private host, and
+    Playwright follows it automatically; the per-request guard catches those
+    hops (and subresources/popups) that the one-time initial-URL check misses.
+    """
+    captured: dict[str, object] = {}
+
+    class _FakeContext:
+        async def route(self, pattern, handler):
+            captured["pattern"] = pattern
+            captured["handler"] = handler
+
+    def guard(url: str) -> str | None:
+        return "Error: blocked" if "169.254.169.254" in url else None
+
+    session = BrowserSession(
+        MagicMock(),
+        headless=True,
+        timeout_ms=1000,
+        viewport={"width": 1000, "height": 500},
+        url_guard=guard,
+    )
+    session._context = _FakeContext()
+
+    await session._install_request_guard()
+    assert session._request_guard_bound is True
+    assert captured["pattern"] == "**/*"
+    handler = captured["handler"]
+
+    blocked = _FakeRoute("http://169.254.169.254/latest/meta-data/")
+    await handler(blocked)
+    assert blocked.aborted_with == "blockedbyclient"
+    assert blocked.continued is False
+
+    allowed = _FakeRoute("https://example.com/page")
+    await handler(allowed)
+    assert allowed.continued is True
+    assert allowed.aborted_with is None
+
+
+@pytest.mark.asyncio
+async def test_request_guard_not_installed_for_cdp_sessions():
+    """CDP-attached real Chrome owns its own context, so we don't route it."""
+
+    class _FakeContext:
+        def __init__(self):
+            self.routed = False
+
+        async def route(self, pattern, handler):
+            self.routed = True
+
+    session = BrowserSession(
+        MagicMock(),
+        headless=True,
+        timeout_ms=1000,
+        viewport={"width": 1000, "height": 500},
+        cdp_url="http://127.0.0.1:9222",
+        url_guard=lambda _url: "Error: blocked",
+    )
+    context = _FakeContext()
+    session._context = context
+
+    await session._install_request_guard()
+    assert context.routed is False
+    assert session._request_guard_bound is False

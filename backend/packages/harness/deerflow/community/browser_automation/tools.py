@@ -101,6 +101,7 @@ def _resolve_session(runtime: Runtime, tool_name: str) -> BrowserSession:
         timeout_ms=timeout_ms,
         viewport={"width": width, "height": height},
         cdp_url=cdp_url,
+        url_guard=validate_browser_url,
     )
 
 
@@ -209,6 +210,7 @@ async def navigate_and_capture(*, thread_id: str | None, url: str, outputs_path:
         timeout_ms=_as_int(cfg.get("timeout_ms"), 30000),
         viewport={"width": _as_int(cfg.get("viewport_width"), 1280), "height": _as_int(cfg.get("viewport_height"), 720)},
         cdp_url=_as_str(cfg.get("cdp_url")),
+        url_guard=validate_browser_url,
     )
     snapshot = await session.navigate(url)
     screenshot_path: str | None = None

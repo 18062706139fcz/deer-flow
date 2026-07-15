@@ -59,7 +59,7 @@ def _browser_tools_enabled() -> bool:
     summary="Navigate The Live Browser Session",
     description="Steer the thread's live browser session to a URL from the UI and capture a screenshot.",
 )
-@require_permission("threads", "write", owner_check=True)
+@require_permission("threads", "write", owner_check=True, require_existing=True)
 async def navigate_browser(thread_id: str, body: BrowserNavigateRequest, request: Request) -> BrowserNavigateResponse:
     del request  # Required by the auth decorator.
 
@@ -128,7 +128,11 @@ async def browser_stream(websocket: WebSocket, thread_id: str) -> None:
 
     thread_store = getattr(websocket.app.state, "thread_store", None)
     if thread_store is not None:
-        allowed = await thread_store.check_access(thread_id, str(user.id), require_existing=False)
+        # Strict ownership: the live stream drives a real browser (cookies,
+        # logged-in pages), so require an existing owned thread. A permissive
+        # check would let any authenticated caller attach to a deleted thread's
+        # id and reuse the retained page/context.
+        allowed = await thread_store.check_access(thread_id, str(user.id), require_existing=True)
         if not allowed:
             await websocket.close(code=4404)
             return
@@ -192,6 +196,7 @@ async def browser_stream(websocket: WebSocket, thread_id: str) -> None:
         timeout_ms=_cfg_int("timeout_ms", 30000),
         viewport={"width": _cfg_int("viewport_width", 1280), "height": _cfg_int("viewport_height", 720)},
         cdp_url=_cfg_str("cdp_url"),
+        url_guard=validate_browser_url,
     )
 
     async def _pump_frames() -> None:

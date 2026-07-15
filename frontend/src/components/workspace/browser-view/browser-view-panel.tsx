@@ -16,10 +16,12 @@ import { ConversationEmptyState } from "@/components/ai-elements/conversation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { resolveArtifactURL } from "@/core/artifacts/utils";
+import { isIMEComposing } from "@/lib/ime";
 import { cn } from "@/lib/utils";
 
 import { navigateBrowser } from "./api";
 import { useMaybeBrowserView } from "./context";
+import { decideBrowserKeyInput } from "./keyboard";
 import { type BrowserInputEvent, useBrowserStream } from "./use-browser-stream";
 
 export function BrowserViewPanel({
@@ -314,49 +316,25 @@ export function BrowserViewPanel({
       )}
       tabIndex={live ? 0 : undefined}
       onKeyDown={(event) => {
-        if (!live) {
-          return;
-        }
         const target = event.target;
-        const isEditableTarget =
+        const editableTarget =
           target instanceof HTMLInputElement ||
           target instanceof HTMLTextAreaElement ||
           (target instanceof HTMLElement && target.isContentEditable);
-        if (isEditableTarget) {
+        const input = decideBrowserKeyInput({
+          live,
+          editableTarget,
+          composing: isIMEComposing(event),
+          key: event.key,
+          metaKey: event.metaKey,
+          ctrlKey: event.ctrlKey,
+        });
+        if (!input) {
           return;
         }
-        if ((event.ctrlKey || event.metaKey) && event.key.length === 1) {
-          const key = event.key.toUpperCase();
-          sendInput({
-            type: "key",
-            key: `${event.metaKey ? "Meta" : "Control"}+${key}`,
-          });
-          event.preventDefault();
-          event.stopPropagation();
-          return;
-        }
-        // Forward printable single chars as text; named keys as key presses.
-        if (event.key.length === 1 && !event.metaKey && !event.ctrlKey) {
-          sendInput({ type: "text", text: event.key });
-          event.preventDefault();
-          event.stopPropagation();
-        } else if (
-          [
-            "Enter",
-            "Backspace",
-            "Tab",
-            "ArrowUp",
-            "ArrowDown",
-            "ArrowLeft",
-            "ArrowRight",
-            "Escape",
-            "Delete",
-          ].includes(event.key)
-        ) {
-          sendInput({ type: "key", key: event.key });
-          event.preventDefault();
-          event.stopPropagation();
-        }
+        sendInput(input);
+        event.preventDefault();
+        event.stopPropagation();
       }}
     >
       <header className="flex shrink-0 items-center gap-2 border-b px-3 py-2">
