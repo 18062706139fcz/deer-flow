@@ -49,10 +49,13 @@ test.describe("Integrations settings", () => {
     mockLangGraphAPI(page);
     let authStartRequest: unknown;
     const authCompleteRequests: unknown[] = [];
-    await page.route("**/api/integrations/lark/auth/complete", async (route) => {
-      authCompleteRequests.push(route.request().postDataJSON());
-      await route.fallback();
-    });
+    await page.route(
+      "**/api/integrations/lark/auth/complete",
+      async (route) => {
+        authCompleteRequests.push(route.request().postDataJSON());
+        await route.fallback();
+      },
+    );
     await page.route("**/api/integrations/lark/config/start", async (route) => {
       await route.fulfill({
         status: 200,
@@ -107,9 +110,7 @@ test.describe("Integrations settings", () => {
       .getByLabel("Exact OAuth scope")
       .fill("calendar:calendar.event:read");
     await dialog.getByRole("button", { name: "Connect Lark" }).click();
-    await expect(
-      dialog.getByText("about:blank"),
-    ).toBeVisible();
+    await expect(dialog.getByText("about:blank")).toBeVisible();
     await expect(dialog.getByText(/app configuration/i)).toHaveCount(0);
 
     await dialog
