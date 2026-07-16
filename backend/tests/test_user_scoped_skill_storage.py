@@ -154,6 +154,17 @@ class TestSkillLoading:
         assert alice_skill.enabled is False
         assert bob_skill.enabled is True
 
+    def test_public_skill_package_children_are_not_registered(self, user_storage: UserScopedSkillStorage, skills_root: Path):
+        public_dir = skills_root / "public" / "reviewer"
+        fixture_dir = public_dir / "evals" / "fixtures" / "injection"
+        fixture_dir.mkdir(parents=True)
+        (public_dir / "SKILL.md").write_text(_skill_content("reviewer"), encoding="utf-8")
+        (fixture_dir / "SKILL.md").write_text(_skill_content("injection-example"), encoding="utf-8")
+
+        names = {skill.name for skill in user_storage.load_skills(enabled_only=False)}
+
+        assert names == {"reviewer"}
+
     def test_custom_skills_loaded_from_user_dir(self, user_storage: UserScopedSkillStorage, base_dir: Path):
         user_storage.write_custom_skill("my-skill", "SKILL.md", _skill_content("my-skill"))
 
