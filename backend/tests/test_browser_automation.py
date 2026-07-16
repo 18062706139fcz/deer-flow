@@ -316,6 +316,98 @@ async def test_live_frame_returns_base64_jpeg_screenshot():
 
 
 @pytest.mark.asyncio
+async def test_input_dispatch_does_not_wait_for_live_frame():
+    session = BrowserSession(
+        MagicMock(),
+        headless=True,
+        timeout_ms=1000,
+        viewport={"width": 1000, "height": 500},
+    )
+    page = MagicMock()
+    page.mouse.click = AsyncMock()
+    session._ensure_page = AsyncMock(return_value=page)
+
+    refresh_started = asyncio.Event()
+    release_refresh = asyncio.Event()
+
+    async def slow_live_frame() -> None:
+        refresh_started.set()
+        await release_refresh.wait()
+
+    session._on_frame = MagicMock()
+    session._emit_live_frame = slow_live_frame
+    session._schedule_settle_live_frames = MagicMock()
+    dispatch_task = asyncio.create_task(
+        session._dispatch_input({"type": "click", "nx": 0.25, "ny": 0.75}),
+    )
+
+    await asyncio.wait_for(refresh_started.wait(), timeout=0.2)
+    try:
+        await asyncio.wait_for(asyncio.shield(dispatch_task), timeout=0.05)
+    finally:
+        release_refresh.set()
+        await dispatch_task
+
+
+@pytest.mark.asyncio
+async def test_rapid_inputs_coalesce_live_frame_refresh(monkeypatch):
+    monkeypatch.setattr(session_mod, "_LIVE_FRAME_INPUT_INTERVAL_S", 0.01)
+    session = BrowserSession(
+        MagicMock(),
+        headless=True,
+        timeout_ms=1000,
+        viewport={"width": 1000, "height": 500},
+    )
+    page = MagicMock()
+    page.keyboard.press = AsyncMock()
+    session._ensure_page = AsyncMock(return_value=page)
+    session._on_frame = MagicMock()
+    session._emit_live_frame = AsyncMock()
+    session._schedule_settle_live_frames = MagicMock()
+
+    await session._dispatch_input({"type": "key", "key": "ArrowDown"})
+    await session._dispatch_input({"type": "key", "key": "ArrowDown"})
+    await session._dispatch_input({"type": "key", "key": "ArrowDown"})
+    await asyncio.sleep(0.03)
+
+    assert page.keyboard.press.await_count == 3
+    session._emit_live_frame.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_continuous_inputs_refresh_before_input_stops(monkeypatch):
+    monkeypatch.setattr(session_mod, "_LIVE_FRAME_INPUT_INTERVAL_S", 0.01)
+    session = BrowserSession(
+        MagicMock(),
+        headless=True,
+        timeout_ms=1000,
+        viewport={"width": 1000, "height": 500},
+    )
+    page = MagicMock()
+    page.keyboard.press = AsyncMock()
+    session._ensure_page = AsyncMock(return_value=page)
+    session._on_frame = MagicMock()
+    session._live_frame = AsyncMock(return_value="frame")
+    session._schedule_settle_live_frames = MagicMock()
+
+    stop = asyncio.Event()
+
+    async def send_continuously() -> None:
+        while not stop.is_set():
+            await session._dispatch_input({"type": "key", "key": "ArrowDown"})
+            await asyncio.sleep(0.001)
+
+    producer = asyncio.create_task(send_continuously())
+    try:
+        await asyncio.sleep(0.06)
+        assert session._on_frame.call_count >= 2
+    finally:
+        stop.set()
+        await producer
+        await asyncio.sleep(0.02)
+
+
+@pytest.mark.asyncio
 async def test_click_fast_fails_on_stale_ref_without_blocking():
     """A ref missing after a re-render fails immediately with a re-snapshot hint.
 

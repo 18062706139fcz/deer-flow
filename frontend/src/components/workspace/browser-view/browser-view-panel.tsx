@@ -435,8 +435,6 @@ export function BrowserViewPanel({
               alt={frame?.title ?? "Browser view"}
               draggable={false}
               onClick={(event) => forwardMouse("click", event)}
-              onMouseDown={(event) => forwardMouse("down", event)}
-              onMouseUp={(event) => forwardMouse("up", event)}
             />
           ) : (
             <ConversationEmptyState

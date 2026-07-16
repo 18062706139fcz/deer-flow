@@ -129,6 +129,7 @@ _CLICK_TIMEOUT_MS = 8000
 _POST_CLICK_LOAD_TIMEOUT_MS = 3000
 _LIVE_FRAME_JPEG_QUALITY = 85
 _MANUAL_LIVE_FRAME_MIN_INTERVAL_S = 0.75
+_LIVE_FRAME_INPUT_INTERVAL_S = 0.05
 _LIVE_FRAME_SETTLE_DELAYS_S = (0.8, 2.0)
 
 # Bound per-thread Chromium accumulation on a long-running multi-user gateway.
@@ -275,8 +276,9 @@ class BrowserSession:
         # this flag that would schedule another rebind and recurse.
         self._screencast_binding = False
         self._last_manual_live_frame_at = 0.0
-        self._manual_live_frame_pending = False
         self._settle_live_frames_pending = False
+        self._input_live_frame_generation = 0
+        self._input_live_frame_pending = False
         self._page_listener_bound = False
 
     async def _ensure_page(self) -> Page:
@@ -483,13 +485,6 @@ class BrowserSession:
         self._on_frame(await self._live_frame())
         self._last_manual_live_frame_at = time.monotonic()
 
-    async def _delayed_live_frame(self, delay: float) -> None:
-        try:
-            await asyncio.sleep(delay)
-            await self._emit_live_frame()
-        finally:
-            self._manual_live_frame_pending = False
-
     async def _settle_live_frames(self) -> None:
         previous_delay = 0.0
         try:
@@ -512,13 +507,33 @@ class BrowserSession:
         elapsed = time.monotonic() - self._last_manual_live_frame_at
         if elapsed >= _MANUAL_LIVE_FRAME_MIN_INTERVAL_S:
             await self._emit_live_frame()
-        elif not self._manual_live_frame_pending:
-            self._manual_live_frame_pending = True
-            asyncio.ensure_future(self._delayed_live_frame(_MANUAL_LIVE_FRAME_MIN_INTERVAL_S - elapsed))
         # One frame is often too early for SPAs: the URL may have changed while
         # the page body is still rendering. Add a small, bounded settle burst
         # instead of returning to continuous screencast.
         self._schedule_settle_live_frames()
+
+    async def _flush_input_live_frames(self) -> None:
+        try:
+            # Coalesce the first burst, then keep refreshing at a bounded cadence
+            # while input continues. A trailing debounce would freeze the visible
+            # page until a wheel/keyboard gesture stopped.
+            await asyncio.sleep(_LIVE_FRAME_INPUT_INTERVAL_S)
+            while self._on_frame is not None:
+                generation = self._input_live_frame_generation
+                await self._emit_live_frame()
+                if generation == self._input_live_frame_generation:
+                    self._schedule_settle_live_frames()
+                    return
+                await asyncio.sleep(_LIVE_FRAME_INPUT_INTERVAL_S)
+        finally:
+            self._input_live_frame_pending = False
+
+    def _schedule_input_live_frame(self) -> None:
+        self._input_live_frame_generation += 1
+        if self._input_live_frame_pending:
+            return
+        self._input_live_frame_pending = True
+        asyncio.ensure_future(self._flush_input_live_frames())
 
     async def _back(self) -> PageSnapshot:
         page = await self._ensure_page()
@@ -589,8 +604,8 @@ class BrowserSession:
             self._screencast_page = None
             self._connected_over_cdp = False
             self._on_frame = None
-            self._manual_live_frame_pending = False
             self._settle_live_frames_pending = False
+            self._input_live_frame_generation += 1
             self._page_listener_bound = False
 
     async def _start_screencast(self, on_frame: Callable[[str], None]) -> None:
@@ -614,8 +629,8 @@ class BrowserSession:
         if on_frame is not None and self._on_frame is not on_frame:
             return
         self._on_frame = None
-        self._manual_live_frame_pending = False
         self._settle_live_frames_pending = False
+        self._input_live_frame_generation += 1
         self._screencast_page = None
 
     async def _dispatch_input(self, event: dict) -> None:
@@ -677,7 +692,7 @@ class BrowserSession:
             if isinstance(index, int) and not isinstance(index, bool):
                 await self._activate_tab(index)
         if etype != "move":
-            await self._push_live_frame()
+            self._schedule_input_live_frame()
 
     # Public API — each marshals onto the private loop.
     async def navigate(self, url: str) -> PageSnapshot:
