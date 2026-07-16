@@ -7,15 +7,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **sandbox:** The Helm chart now defaults per-sandbox Services to `ClusterIP`
+  instead of `NodePort`, so the code-execution sandbox is reachable only inside
+  the cluster via Service DNS (`http://sandbox-<id>-svc.<ns>.svc.cluster.local`)
+  and is no longer bound on every node's interfaces - including the
+  externally-reachable ones on GKE/EKS/AKS. Existing chart installs flip
+  NodePort -> ClusterIP on upgrade. To preserve the old reachability (an
+  external probe hitting the 30xxx port, or the Docker-Compose/hybrid path
+  where the gateway is not in K8s), set `provisioner.sandboxServiceType: NodePort`
+  (with `provisioner.nodeHost` if needed). The provisioner itself is unchanged
+  (mode-aware since #4016). ([#4190])
+
+### ⚠ Breaking changes
+
+- **skills:** A directory containing `SKILL.md` is now a runtime package
+  boundary. Nested `SKILL.md` files inside that package are supporting data and
+  are no longer registered as independent skills; unusual custom layouts must
+  move independently loadable skills under a namespace directory without its
+  own `SKILL.md`. ([#4098])
+- **memory:** The memory system is now pluggable (`memory.manager_class` selects
+  a backend; default `deermem` is self-contained). DeerMem-private settings moved
+  from the top level of `memory:` into `memory.backend_config`, and the
+  `/memory/config` response (and `client.get_memory_config()`) changed shape.
+- **memory:** `/memory/config` and `client.get_memory_config()` no longer return
+  flat DeerMem fields (`storage_path`, `max_facts`, `debounce_seconds`,
+  `token_counting`, `guaranteed_*`, `staleness_*`, ...). They return
+  `{enabled, mode, injection_enabled, manager_class, backend_config}` where
+  `backend_config` is an opaque dict the active backend self-interprets. Memory
+  *data* responses (`/memory`, `/memory/status` data) are unchanged. External
+  API/SDK clients reading the old flat fields must read `backend_config` instead.
+- **memory:** Custom `memory.storage_class` moved: the old default path
+  `deerflow.agents.memory.storage.FileMemoryStorage` no longer exists (now
+  `deerflow.agents.memory.backends.deermem.deermem.core.storage.FileMemoryStorage`).
+  Custom `MemoryStorage` subclasses must accept `config` in `__init__` (was
+  no-arg). A broken/old `storage_class` logs an error and falls back to
+  `FileMemoryStorage` (won't crash) -- update the path + signature to restore it.
+- **memory:** `storage_path` semantics changed from a FILE path to a root
+  DIRECTORY. Pre-abstraction, an absolute `storage_path` was the shared memory
+  file (opting out of per-user isolation) and a relative value was the global
+  file under the data base_dir. Now `storage_path` (absolute or relative) is the
+  root directory; per-user memory lives at `{storage_path}/users/{uid}/memory.json`.
+  An upgrade keeping the old default `storage_path: memory.json` (a relative file
+  name) would orphan per-user memory or hit `NotADirectoryError` on save, so the
+  legacy migration **drops file-style `storage_path` values (ending in `.json`)
+  with a warning** and the factory **raises** if `storage_path` resolves to an
+  existing file. Set `memory.backend_config.storage_path` to a directory for a
+  custom root.
+
+### Changed
+
+- **skills:** An active restrictive skill must explicitly list `task` in
+  `allowed-tools` to delegate to a subagent. Read-only discovery infrastructure
+  (`tool_search` and `describe_skill`) remains available, but cannot grant schema
+  visibility or execution for a denied business tool. ([#4098])
+- **memory:** Pre-abstraction top-level `memory.*` DeerMem fields
+  (`storage_path`, `max_facts`, `debounce_seconds`, `model_name`,
+  `token_counting`, `staleness_*`, `consolidation_*`, ...) are **auto-migrated
+  into `backend_config`** on load with a warning, so an upgrade does NOT silently
+  revert customized settings to defaults (`model_name` ->
+  `backend_config.model.model`). Move them under `memory.backend_config` in
+  `config.yaml` to silence the warning.
+- **memory:** Added `memory.mode` (`middleware` | `tool`); `tool` mode registers
+  memory tools (`memory_search`/`add`/`update`/`delete`) the model calls directly
+  instead of passive per-turn summarization. `manager_class` resolution is now
+  fail-fast (raises `ValueError` on an unknown backend instead of silently
+  falling back).
+
 ### Fixed
 
+- **skills:** Apply `allowed-tools` only to slash-activated or actually loaded
+  lead-agent skills, preventing passive enabled skills and evaluation fixtures
+  from removing `task`, web, and file tools from every run. ([#4095], [#4098])
 - **models:** Honor `api_base` on every `BaseChatOpenAI` subclass (`VllmChatModel`,
   `MindIEChatModel`, `PatchedChatMiMo`, `PatchedChatStepFun`, `PatchedChatMiniMax`),
   not just `ChatOpenAI` / `PatchedChatOpenAI`. Those five previously dropped the
   configured endpoint silently and then failed every request with an opaque
   `unexpected keyword argument 'api_base'`; the unknown-config-key warning was
   disabled for them as well. Both now gate on `issubclass(BaseChatOpenAI)`. ([#4146])
-
 
 ## [2.0.0] — 2026-06-15
 
@@ -530,4 +600,7 @@ with **180 merged pull requests** since the first 2.0 milestone tag.
 [#3654]: https://github.com/bytedance/deer-flow/pull/3654
 [#3657]: https://github.com/bytedance/deer-flow/pull/3657
 [#3658]: https://github.com/bytedance/deer-flow/pull/3658
+[#4095]: https://github.com/bytedance/deer-flow/issues/4095
+[#4098]: https://github.com/bytedance/deer-flow/pull/4098
 [#4146]: https://github.com/bytedance/deer-flow/pull/4146
+[#4190]: https://github.com/bytedance/deer-flow/pull/4190

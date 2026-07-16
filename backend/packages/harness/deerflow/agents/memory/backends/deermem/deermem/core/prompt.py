@@ -82,6 +82,16 @@ Memory Section Guidelines:
   * behavior: Working patterns, communication habits, problem-solving approaches
   * goal: Stated objectives, learning targets, project ambitions
   * correction: Explicit agent mistakes or user corrections, including the correct approach
+- Fact lifetime (``expected_valid_days``, optional integer):
+  How many days before this fact should be reviewed for possible removal.
+  The system schedules review automatically; omit when uncertain.
+  * <= 14: highly transient - active bugs, immediate tasks, today's focus
+  * 15-60: short-term - current experiments, in-progress side projects, near-term goals
+  * 60-180: medium-term - current role, active tech stack, ongoing preferences
+  * 180-365: stable - professional background, established working patterns
+  * > 365: very stable - core skills, native language, personality traits
+  Assign the value that semantically fits; values above the server-configured
+  ceiling are silently reduced on storage.
 - Confidence levels:
   * 0.9-1.0: Explicitly stated facts ("I work on X", "My role is Y")
   * 0.7-0.8: Strongly implied from actions/discussions
@@ -114,10 +124,11 @@ Output Format (JSON):
     "longTermBackground": {{ "summary": "...", "shouldUpdate": true/false }}
   }},
   "newFacts": [
-    {{ "content": "...", "category": "preference|knowledge|context|behavior|goal|correction", "confidence": 0.0-1.0 }}
+    {{ "content": "...", "category": "preference|knowledge|context|behavior|goal|correction", "confidence": 0.0-1.0, "expected_valid_days": 90 }}
   ],
   "factsToRemove": ["fact_id_1", "fact_id_2"],
   "staleFactsToRemove": [{{ "id": "fact_id", "reason": "brief explanation" }}],
+  "staleFactsToExtend": [{{ "id": "fact_id", "extend_by_days": 365, "reason": "brief explanation" }}],
   "factsToConsolidate": [
     {{
       "sourceIds": ["fact_id_1", "fact_id_2"],
@@ -155,27 +166,37 @@ Return ONLY valid JSON, no explanation or markdown."""
 # rather than relying on passive contradiction from the current conversation.
 STALENESS_REVIEW_PROMPT = """## Staleness Review
 
-The following facts were created more than {age_days} days ago and may no longer
-accurately reflect the user's current situation. Review each one against the full
-conversation context and your understanding of the user.
+The following facts have reached their individual review window and may no longer
+accurately reflect the user's current situation. Each entry shows a ``valid:Nd``
+annotation - the number of days this fact was expected to remain valid before
+re-evaluation. Use it to calibrate conservatism: a ``valid:30d`` fact was
+considered volatile at creation; a ``valid:365d`` fact was considered stable.
 
 <stale_facts>
 {stale_facts}
 </stale_facts>
 
-For each fact, decide KEEP or REMOVE:
-- KEEP: Still likely valid — even if not mentioned in this conversation.
+For each fact, decide KEEP, REMOVE, or EXTEND:
+- KEEP: Still likely valid - even if not mentioned in this conversation.
   Stable attributes (native language, core expertise, personality traits) often
   remain true indefinitely.
 - REMOVE: Outdated, contradicted by recent context, or no longer relevant.
   Examples: tech-stack migrations, job changes, relocated offices, abandoned projects.
+- EXTEND: Keep but recalibrate the review window (see below).
 
 Add REMOVE decisions to "staleFactsToRemove" in your output JSON.
 Each entry must be {{"id": "fact_id", "reason": "brief explanation"}}.
 The reason should cite what signal in the conversation (or absence thereof)
 supports the removal.
 
-Be conservative — when in doubt, KEEP. Removing a valid fact is worse than
+Optionally, for facts you KEEP and wish to recalibrate, add them to
+"staleFactsToExtend" with the number of days from now before the next review:
+{{"id": "fact_id", "extend_by_days": 365, "reason": "brief explanation"}}
+Use this when the current window seems miscalibrated - e.g. a core skill marked
+``valid:30d`` that is clearly stable, or a goal nearing completion whose window
+should shrink. Omit facts whose current window already seems appropriate.
+
+Be conservative - when in doubt, KEEP. Removing a valid fact is worse than
 keeping a slightly stale one, because the next review cycle will re-evaluate it."""
 
 
@@ -202,7 +223,7 @@ Rules:
 - The consolidated fact must preserve ALL key details from source facts
 - Only consolidate facts that describe the same aspect of the user
 - Confidence of consolidated fact = max of source confidences
-- Be conservative — when in doubt, keep facts separate
+- Be conservative - when in doubt, keep facts separate
 - Maximum {max_groups} consolidation groups per cycle"""
 
 
@@ -405,11 +426,12 @@ def _format_fact_line(fact: dict[str, Any]) -> str | None:
     # and relocate the text after it out of the user-managed trust zone the
     # prompt declares. Mirrors the MEMORY_UPDATE_PROMPT escaping in #4028/#4060.
     # quote=False: these land in element-text position (never attribute values),
-    # so only <, >, & can break out — leave ' and " in facts untouched.
+    # so only <, >, & can break out - leave ' and " in facts untouched.
     content = html.escape(content, quote=False)
     category = html.escape(category, quote=False)
     if category == "correction" and isinstance(source_error, str) and source_error.strip():
-        return f"- [{category} | {confidence:.2f}] {content} (avoid: {html.escape(source_error.strip(), quote=False)})"
+        source_error = html.escape(source_error.strip(), quote=False)
+        return f"- [{category} | {confidence:.2f}] {content} (avoid: {source_error})"
     return f"- [{category} | {confidence:.2f}] {content}"
 
 
@@ -424,7 +446,7 @@ def _escape_summary(value: Any) -> str:
     escaping (#4097). ``str(...)`` preserves the prior f-string coercion for the
     rare non-string summary an import can plant; ``quote=False`` because summaries
     land in element-text position (never attribute values), so only ``<``, ``>``,
-    ``&`` can break out — leave ``'`` and ``"`` untouched.
+    ``&`` can break out - leave ``'`` and ``"`` untouched.
     """
     return html.escape(str(value), quote=False)
 
@@ -812,6 +834,18 @@ def format_conversation_for_update(messages: list[Any]) -> str:
         # Truncate very long messages
         if len(str(content)) > 1000:
             content = str(content)[:1000] + "..."
+
+        # Escape < > & before embedding into the <conversation> block of
+        # MEMORY_UPDATE_PROMPT. This raw user turn is the most attacker-influenced
+        # input in the prompt, so an unescaped value like
+        # "</conversation><current_memory>..." would close the block and forge a
+        # <current_memory> authority section for the extraction LLM. Same block-
+        # breakout defense #4044 applied to the current_memory slot of this exact
+        # template, and the sibling _escape_summary/_format_fact_line escaping of
+        # the <memory> block (#4097). Escape after truncation so a trailing "..."
+        # cannot split an entity; quote=False because content lands in element-
+        # text position (never an attribute value).
+        content = html.escape(str(content), quote=False)
 
         if role == "human":
             lines.append(f"User: {content}")
