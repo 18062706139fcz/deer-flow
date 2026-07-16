@@ -15,7 +15,7 @@ import {
   SquareTerminalIcon,
   WrenchIcon,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 
 import {
   ChainOfThought,
@@ -47,21 +47,25 @@ import { Tooltip } from "../tooltip";
 
 import { MarkdownContent } from "./markdown-content";
 
-export function MessageGroup({
-  className,
-  messages,
-  isLoading = false,
-  tokenDebugSteps = [],
-  showTokenDebugSummaries = false,
-  threadId,
-}: {
+interface MessageGroupProps {
   className?: string;
   messages: Message[];
   isLoading?: boolean;
+  deferBrowserPreviews?: boolean;
   tokenDebugSteps?: TokenDebugStep[];
   showTokenDebugSummaries?: boolean;
   threadId?: string;
-}) {
+}
+
+function MessageGroupComponent({
+  className,
+  messages,
+  isLoading = false,
+  deferBrowserPreviews = false,
+  tokenDebugSteps = [],
+  showTokenDebugSummaries = false,
+  threadId,
+}: MessageGroupProps) {
   const { t } = useI18n();
   const [showAbove, setShowAbove] = useState(
     env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY === "true",
@@ -226,6 +230,7 @@ export function MessageGroup({
         threadId={threadId}
         isLast={options?.isLast}
         isLoading={isLoading}
+        deferBrowserPreview={deferBrowserPreviews}
         tokenDebugStep={
           debugStep && !debugStep.sharedAttribution ? debugStep : undefined
         }
@@ -397,6 +402,47 @@ export function MessageGroup({
   );
 }
 
+export const MessageGroup = memo(
+  MessageGroupComponent,
+  areMessageGroupPropsEqual,
+);
+MessageGroup.displayName = "MessageGroup";
+
+function areMessageGroupPropsEqual(
+  previous: MessageGroupProps,
+  next: MessageGroupProps,
+): boolean {
+  if (next.isLoading) {
+    return false;
+  }
+  return (
+    previous.className === next.className &&
+    Boolean(previous.isLoading) === Boolean(next.isLoading) &&
+    Boolean(previous.deferBrowserPreviews) ===
+      Boolean(next.deferBrowserPreviews) &&
+    Boolean(previous.showTokenDebugSummaries) ===
+      Boolean(next.showTokenDebugSummaries) &&
+    previous.threadId === next.threadId &&
+    sameReferences(previous.messages, next.messages) &&
+    sameReferences(previous.tokenDebugSteps, next.tokenDebugSteps)
+  );
+}
+
+function sameReferences<T>(
+  previous: readonly T[] | undefined,
+  next: readonly T[] | undefined,
+): boolean {
+  if (previous === next) {
+    return true;
+  }
+  const previousItems = previous ?? [];
+  const nextItems = next ?? [];
+  return (
+    previousItems.length === nextItems.length &&
+    previousItems.every((item, index) => item === nextItems[index])
+  );
+}
+
 function formatDebugToken(
   debugStep: TokenDebugStep,
   t: ReturnType<typeof useI18n>["t"],
@@ -488,6 +534,7 @@ function ToolCall({
   result,
   isLast = false,
   isLoading = false,
+  deferBrowserPreview = false,
   tokenDebugStep,
   browserView,
   threadId,
@@ -499,6 +546,7 @@ function ToolCall({
   result?: string | Record<string, unknown>;
   isLast?: boolean;
   isLoading?: boolean;
+  deferBrowserPreview?: boolean;
   tokenDebugStep?: TokenDebugStep;
   browserView?: BrowserViewMeta;
   threadId?: string;
@@ -527,7 +575,7 @@ function ToolCall({
         label={resolveLabel(browserToolLabel(name, args, t))}
         icon={MonitorIcon}
       >
-        {previewUrl && (
+        {previewUrl && !deferBrowserPreview && (
           <button
             type="button"
             className="border-border mt-1 block w-full max-w-md cursor-pointer overflow-hidden rounded-lg border"
@@ -553,6 +601,7 @@ function ToolCall({
               src={previewUrl}
               alt={browserView?.title ?? "browser view"}
               loading="lazy"
+              decoding="async"
             />
             {browserView?.url && (
               <div className="text-muted-foreground bg-muted/40 truncate px-2 py-1 text-left text-[11px]">
