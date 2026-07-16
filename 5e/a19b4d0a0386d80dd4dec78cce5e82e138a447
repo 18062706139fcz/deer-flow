@@ -1,0 +1,21 @@
+docs/superpowers/specs/2026-07-16-deercapsule-portable-run-design.md
+  s_1924ad307e410f::t_f77da29d1e1686 1-964
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "5ea19b4d0a0386d80dd4dec78cce5e82e138a447",
+  "prompts": {},
+  "sessions": {
+    "s_1924ad307e410f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f6afb-6c19-7c70-b3d3-6a72123b5f22",
+        "model": "unknown"
+      },
+      "human_author": "ryker <2279549769@qq.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
