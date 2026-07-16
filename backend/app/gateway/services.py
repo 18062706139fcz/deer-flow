@@ -21,7 +21,7 @@ from langchain_core.messages.utils import convert_to_messages
 from langgraph.types import Command
 
 from app.gateway.auth_disabled import AUTH_SOURCE_INTERNAL
-from app.gateway.deps import get_checkpointer, get_run_context, get_run_manager, get_stream_bridge
+from app.gateway.deps import get_checkpointer, get_local_provider, get_run_context, get_run_manager, get_stream_bridge
 from app.gateway.internal_auth import (
     INTERNAL_OWNER_USER_ID_HEADER_NAME,
     INTERNAL_SYSTEM_ROLE,
@@ -29,6 +29,7 @@ from app.gateway.internal_auth import (
     get_trusted_internal_owner_user_id,
 )
 from app.gateway.utils import sanitize_log_param
+from deerflow.agents.middlewares.dynamic_context_middleware import _DYNAMIC_CONTEXT_REMINDER_KEY, _REMINDER_DATE_KEY
 from deerflow.config.app_config import get_app_config
 from deerflow.runtime import (
     END_SENTINEL,
@@ -42,9 +43,11 @@ from deerflow.runtime import (
     UnsupportedStrategyError,
     run_agent,
 )
+from deerflow.runtime.goal import goal_thread_lock
 from deerflow.runtime.runs.naming import resolve_root_run_name
 from deerflow.runtime.secret_context import redact_config_secrets
 from deerflow.runtime.user_context import reset_current_user, set_current_user
+from deerflow.utils.messages import ORIGINAL_USER_CONTENT_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +57,13 @@ _TERMINAL_RUN_STATUSES = {
     RunStatus.timeout,
     RunStatus.interrupted,
 }
+
+_SERVER_OWNED_DYNAMIC_CONTEXT_KEYS = frozenset(
+    {
+        _DYNAMIC_CONTEXT_REMINDER_KEY,
+        _REMINDER_DATE_KEY,
+    }
+)
 
 
 # ---------------------------------------------------------------------------
@@ -116,7 +126,20 @@ def normalize_stream_modes(raw: list[str] | str | None) -> list[str]:
     return raw if raw else ["values"]
 
 
-def normalize_input(raw_input: dict[str, Any] | None) -> dict[str, Any]:
+def _strip_external_message_metadata(message: Any) -> Any:
+    """Remove server-owned metadata from an untrusted input message."""
+    if not isinstance(message, BaseMessage):
+        return message
+    additional_kwargs = dict(message.additional_kwargs)
+    additional_kwargs.pop(ORIGINAL_USER_CONTENT_KEY, None)
+    for key in _SERVER_OWNED_DYNAMIC_CONTEXT_KEYS:
+        additional_kwargs.pop(key, None)
+    if additional_kwargs == message.additional_kwargs:
+        return message
+    return message.model_copy(update={"additional_kwargs": additional_kwargs})
+
+
+def normalize_input(raw_input: dict[str, Any] | None, *, trusted_internal: bool = False) -> dict[str, Any]:
     """Convert LangGraph Platform input format to LangChain state dict.
 
     Delegates dict→message coercion to ``langchain_core.messages.utils.convert_to_messages``
@@ -129,6 +152,10 @@ def normalize_input(raw_input: dict[str, Any] | None) -> dict[str, Any]:
     role, etc.) raise ``HTTPException(400)`` with the offending index, instead
     of bubbling up as a 500.  The gateway is a system boundary, so per-entry
     validation errors are the right shape for clients to retry against.
+
+    ``original_user_content`` and dynamic-context reminder markers are
+    server-owned. External callers cannot supply them; trusted internal channel
+    calls may preserve metadata they added before invoking this boundary.
     """
     if raw_input is None:
         return {}
@@ -148,6 +175,8 @@ def normalize_input(raw_input: dict[str, Any] | None) -> dict[str, Any]:
                     ) from exc
             else:
                 converted.append(msg)
+        if not trusted_internal:
+            converted = [_strip_external_message_metadata(message) for message in converted]
         return {**raw_input, "messages": converted}
     return raw_input
 
@@ -170,6 +199,7 @@ _CONTEXT_CONFIGURABLE_KEYS: frozenset[str] = frozenset(
         "is_plan_mode",
         "subagent_enabled",
         "max_concurrent_subagents",
+        "max_total_subagents",
         "agent_name",
         "is_bootstrap",
     }
@@ -259,7 +289,27 @@ def merge_run_context_overrides(config: dict[str, Any], context: Mapping[str, An
         runtime_context.setdefault("channel_user_id", context["channel_user_id"])
 
 
-def inject_authenticated_user_context(config: dict[str, Any], request: Request) -> None:
+async def resolve_trusted_internal_owner_for_attribution(request: Request, owner_user_id: str | None) -> Any | None:
+    """Resolve the DeerFlow user used only for trusted internal attribution."""
+
+    if not owner_user_id:
+        return None
+    user = getattr(request.state, "user", None)
+    if getattr(user, "system_role", None) != INTERNAL_SYSTEM_ROLE:
+        return None
+    try:
+        return await get_local_provider().get_user(owner_user_id)
+    except Exception:
+        logger.exception("Failed to resolve trusted internal owner %s", sanitize_log_param(owner_user_id))
+        return None
+
+
+def inject_authenticated_user_context(
+    config: dict[str, Any],
+    request: Request,
+    *,
+    internal_owner_user: Any | None = None,
+) -> None:
     """Stamp the authenticated user into the run context for background tools.
 
     Tool execution may happen after the request handler has returned, so tools
@@ -273,6 +323,20 @@ def inject_authenticated_user_context(config: dict[str, Any], request: Request) 
         return
 
     if getattr(user, "system_role", None) == INTERNAL_SYSTEM_ROLE:
+        runtime_context = config.setdefault("context", {})
+        if not isinstance(runtime_context, dict):
+            return
+        if internal_owner_user is None:
+            runtime_context.pop("user_role", None)
+            runtime_context.pop("oauth_provider", None)
+            runtime_context.pop("oauth_id", None)
+            return
+        owner_user_id = getattr(internal_owner_user, "id", None)
+        if owner_user_id is not None:
+            runtime_context["user_id"] = str(owner_user_id)
+        runtime_context["user_role"] = getattr(internal_owner_user, "system_role", None)
+        runtime_context["oauth_provider"] = getattr(internal_owner_user, "oauth_provider", None)
+        runtime_context["oauth_id"] = getattr(internal_owner_user, "oauth_id", None)
         return
 
     runtime_context = config.setdefault("context", {})
@@ -578,20 +642,21 @@ async def start_run(
     owner_context_token = set_current_user(SimpleNamespace(id=owner_user_id)) if owner_user_id else None
     try:
         try:
-            record = await run_mgr.create_or_reject(
-                thread_id,
-                body.assistant_id,
-                on_disconnect=disconnect,
-                metadata=body.metadata or {},
-                # Persist a secret-redacted copy of the config: the run record is
-                # written to runs.kwargs_json and echoed by the run API, so a
-                # request-scoped secret (#3861) must not ride along. The live
-                # config built below keeps the secrets for the actual run.
-                kwargs={"input": body.input, "config": redact_config_secrets(body.config)},
-                multitask_strategy=body.multitask_strategy,
-                model_name=model_name,
-                user_id=owner_user_id,
-            )
+            async with goal_thread_lock(thread_id):
+                record = await run_mgr.create_or_reject(
+                    thread_id,
+                    body.assistant_id,
+                    on_disconnect=disconnect,
+                    metadata=body.metadata or {},
+                    # Persist a secret-redacted copy of the config: the run record is
+                    # written to runs.kwargs_json and echoed by the run API, so a
+                    # request-scoped secret (#3861) must not ride along. The live
+                    # config built below keeps the secrets for the actual run.
+                    kwargs={"input": body.input, "config": redact_config_secrets(body.config)},
+                    multitask_strategy=body.multitask_strategy,
+                    model_name=model_name,
+                    user_id=owner_user_id,
+                )
         except ConflictError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except UnsupportedStrategyError as exc:
@@ -620,11 +685,12 @@ async def start_run(
             logger.warning("Failed to upsert thread_meta for %s (non-fatal)", sanitize_log_param(thread_id))
 
         agent_factory = resolve_agent_factory(body.assistant_id)
+        is_internal_caller = getattr(getattr(request, "state", None), "auth_source", None) == AUTH_SOURCE_INTERNAL
         command = getattr(body, "command", None)
         if command and command.get("resume") is not None:
             graph_input = Command(resume=command["resume"])
         else:
-            graph_input = normalize_input(body.input)
+            graph_input = normalize_input(body.input, trusted_internal=is_internal_caller)
         config = build_run_config(thread_id, body.config, body.metadata, assistant_id=body.assistant_id)
         await apply_checkpoint_to_run_config(config, body=body, thread_id=thread_id, request=request)
 
@@ -632,13 +698,13 @@ async def start_run(
         # The ``context`` field is a custom extension for the langgraph-compat layer
         # that carries agent configuration (model_name, thinking_enabled, etc.).
         # Only agent-relevant keys are forwarded; unknown keys (e.g. thread_id) are ignored.
-        is_internal_caller = getattr(getattr(request, "state", None), "auth_source", None) == AUTH_SOURCE_INTERNAL
         merge_run_context_overrides(config, getattr(body, "context", None), internal=is_internal_caller)
         if not is_internal_caller:
             # ``body.config`` is free-form and copied verbatim by
             # ``build_run_config``; scrub internal-only keys smuggled there.
             strip_internal_context_keys(config)
-        inject_authenticated_user_context(config, request)
+        internal_owner_user = await resolve_trusted_internal_owner_for_attribution(request, owner_user_id)
+        inject_authenticated_user_context(config, request, internal_owner_user=internal_owner_user)
 
         stream_modes = normalize_stream_modes(body.stream_mode)
 

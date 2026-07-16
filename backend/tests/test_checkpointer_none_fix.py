@@ -38,7 +38,7 @@ class TestCheckpointerNoneFix:
         """checkpointer_context should return InMemorySaver when config.checkpointer is None."""
         from deerflow.runtime.checkpointer.provider import checkpointer_context
 
-        # Mock get_app_config to return a config with checkpointer=None
+        # Mock get_app_config to return a config with checkpointer=None and database=None
         mock_config = MagicMock()
         mock_config.checkpointer = None
         mock_config.database = None

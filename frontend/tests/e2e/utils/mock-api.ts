@@ -691,6 +691,22 @@ export function mockLangGraphAPI(page: Page, options?: MockAPIOptions) {
 
   void page.route(/\/api\/threads\/[^/]+$/, (route) => {
     if (route.request().method() === "DELETE") {
+      const threadId = decodeURIComponent(
+        new URL(route.request().url()).pathname.split("/").at(-1) ?? "",
+      );
+      // Mirror the gateway's `require_existing=True` ownership guard: deleting
+      // an already-removed thread 404s. `useDeleteThread` first deletes via the
+      // LangGraph route (which drops the thread_meta row) and then hits this
+      // route, so this reproduces the real double-delete 404 the frontend must
+      // treat as idempotent success.
+      if (!threads.some((thread) => thread.thread_id === threadId)) {
+        return route.fulfill({
+          status: 404,
+          contentType: "application/json",
+          body: JSON.stringify({ detail: `Thread ${threadId} not found` }),
+        });
+      }
+      threads = threads.filter((thread) => thread.thread_id !== threadId);
       return route.fulfill({
         status: 204,
       });
@@ -935,31 +951,30 @@ export function mockLangGraphAPI(page: Page, options?: MockAPIOptions) {
     return route.fallback();
   });
 
-  void page.route(
-    /\/api\/threads\/([^/]+)\/runs\/([^/]+)\/messages/,
-    (route) => {
-      if (route.request().method() === "GET") {
-        const url = route.request().url();
-        const matchingThread = threads.find((t) =>
-          url.includes(`/api/threads/${t.thread_id}/runs/`),
-        );
-        return route.fulfill({
-          status: 200,
-          contentType: "application/json",
-          body: JSON.stringify({
-            data: (matchingThread?.messages ?? []).map((message, index) => ({
-              run_id: `run-${matchingThread?.thread_id ?? "unknown"}`,
-              content: message,
-              metadata: { caller: "lead_agent" },
-              created_at: `2025-01-01T00:00:${String(index).padStart(2, "0")}Z`,
-            })),
-            hasMore: false,
-          }),
-        });
-      }
-      return route.fallback();
-    },
-  );
+  void page.route(/\/api\/threads\/([^/]+)\/messages\/page/, (route) => {
+    if (route.request().method() === "GET") {
+      const url = route.request().url();
+      const matchingThread = threads.find((t) =>
+        url.includes(`/api/threads/${t.thread_id}/messages/page`),
+      );
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          data: (matchingThread?.messages ?? []).map((message, index) => ({
+            run_id: `run-${matchingThread?.thread_id ?? "unknown"}`,
+            seq: index + 1,
+            content: message,
+            metadata: { caller: "lead_agent" },
+            created_at: `2025-01-01T00:00:${String(index).padStart(2, "0")}Z`,
+          })),
+          has_more: false,
+          next_before_seq: null,
+        }),
+      });
+    }
+    return route.fallback();
+  });
 
   // Run stream — returns a minimal SSE response with an AI message
   const handleMockRunStream = (route: Route) => {

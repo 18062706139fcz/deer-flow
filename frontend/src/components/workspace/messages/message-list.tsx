@@ -28,7 +28,15 @@ import {
   ReasoningTrigger,
 } from "@/components/ai-elements/reasoning";
 import { Button } from "@/components/ui/button";
+import { extractArtifactsFromThread } from "@/core/artifacts/utils";
 import { useI18n } from "@/core/i18n/hooks";
+import {
+  deriveHumanInputThreadState,
+  extractHumanInputRequest,
+  shouldClearPendingHumanInputOnThreadError,
+  type HumanInputRequest,
+  type HumanInputResponse,
+} from "@/core/messages/human-input";
 import {
   buildTokenDebugSteps,
   type TokenUsageInlineMode,
@@ -39,12 +47,14 @@ import {
   extractTextFromMessage,
   getAssistantTurnCopyData,
   getAssistantTurnUsageMessages,
+  getBranchableAssistantGroupIds,
   getMessageGroups,
   getStreamingMessageLookup,
   hasContent,
   hasPresentFiles,
   hasReasoning,
   isAssistantMessageGroupStreaming,
+  isHiddenFromUIMessage,
 } from "@/core/messages/utils";
 import { useRehypeSplitWordsIntoSpans } from "@/core/rehype";
 import {
@@ -65,6 +75,10 @@ import { CopyButton } from "../copy-button";
 import { useMaybeSidecar } from "../sidecar/context";
 import { Tooltip } from "../tooltip";
 
+import {
+  HumanInputCard,
+  type HumanInputSubmitResult,
+} from "./human-input-card";
 import { MarkdownContent } from "./markdown-content";
 import { MessageGroup } from "./message-group";
 import { MessageListItem } from "./message-list-item";
@@ -208,6 +222,7 @@ export function MessageList({
   loadMoreHistory,
   isHistoryLoading,
   onRegenerateMessage,
+  onSubmitHumanInput,
   onBranchTurn,
   canRegenerate = false,
   canBranch = false,
@@ -229,6 +244,10 @@ export function MessageList({
     messageId: string,
     supersededMessageIds: string[],
   ) => void | Promise<void>;
+  onSubmitHumanInput?: (
+    request: HumanInputRequest,
+    response: HumanInputResponse,
+  ) => HumanInputSubmitResult | Promise<HumanInputSubmitResult>;
   onBranchTurn?: (
     messageId: string,
     messageIds: string[],
@@ -258,6 +277,9 @@ export function MessageList({
   const [regeneratingMessageId, setRegeneratingMessageId] = useState<
     string | null
   >(null);
+  const [pendingHumanInputRequestIds, setPendingHumanInputRequestIds] =
+    useState<Set<string>>(() => new Set());
+  const previousHumanInputThreadError = useRef<unknown>(thread.error);
   const [branchingMessageId, setBranchingMessageId] = useState<string | null>(
     null,
   );
@@ -293,6 +315,84 @@ export function MessageList({
     [messages, thread.getMessagesMetadata, thread.isLoading],
   );
 
+  const humanInputState = useMemo(
+    () =>
+      deriveHumanInputThreadState(
+        messages,
+        (message) => !isHiddenFromUIMessage(message),
+      ),
+    [messages],
+  );
+
+  useEffect(() => {
+    if (pendingHumanInputRequestIds.size === 0) {
+      return;
+    }
+    setPendingHumanInputRequestIds((previous) => {
+      const next = new Set(previous);
+      for (const requestId of previous) {
+        if (humanInputState.answeredResponses.has(requestId)) {
+          next.delete(requestId);
+        }
+      }
+      return next.size === previous.size ? previous : next;
+    });
+  }, [humanInputState.answeredResponses, pendingHumanInputRequestIds.size]);
+
+  useEffect(() => {
+    const previousError = previousHumanInputThreadError.current;
+    previousHumanInputThreadError.current = thread.error;
+
+    if (
+      !shouldClearPendingHumanInputOnThreadError({
+        currentError: thread.error,
+        pendingRequestCount: pendingHumanInputRequestIds.size,
+        previousError,
+      })
+    ) {
+      return;
+    }
+
+    // `sendMessage` can return after dispatching while the SDK stream later
+    // reports an async error through `thread.error`. In that case the hidden
+    // human reply never reaches history, so unlock the card for retry.
+    setPendingHumanInputRequestIds(new Set());
+  }, [pendingHumanInputRequestIds.size, thread.error]);
+
+  const clearPendingHumanInput = useCallback((requestId: string) => {
+    setPendingHumanInputRequestIds((previous) => {
+      if (!previous.has(requestId)) {
+        return previous;
+      }
+      const next = new Set(previous);
+      next.delete(requestId);
+      return next;
+    });
+  }, []);
+
+  const handleSubmitHumanInput = useCallback(
+    async (request: HumanInputRequest, response: HumanInputResponse) => {
+      setPendingHumanInputRequestIds((previous) => {
+        const next = new Set(previous);
+        next.add(request.request_id);
+        return next;
+      });
+
+      try {
+        const result = await onSubmitHumanInput?.(request, response);
+        if (result === false) {
+          clearPendingHumanInput(request.request_id);
+        }
+        return result;
+      } catch (error) {
+        clearPendingHumanInput(request.request_id);
+        toast.error(error instanceof Error ? error.message : String(error));
+        return false;
+      }
+    },
+    [clearPendingHumanInput, onSubmitHumanInput],
+  );
+
   const latestAssistantGroupId = useMemo(() => {
     if (thread.isLoading) {
       return null;
@@ -305,6 +405,10 @@ export function MessageList({
     }
     return null;
   }, [groupedMessages, thread.isLoading]);
+  const branchableAssistantGroupIds = useMemo(
+    () => getBranchableAssistantGroupIds(groupedMessages, thread.isLoading),
+    [groupedMessages, thread.isLoading],
+  );
 
   const clearSelectionToolbar = useCallback(() => {
     setSelectionToolbar(null);
@@ -445,6 +549,7 @@ export function MessageList({
     (
       messages: Message[],
       isStreaming: boolean,
+      enableBranchForTurn: boolean,
       enableRegenerateForTurn: boolean,
     ) => {
       const clipboardData = getAssistantTurnCopyData(messages, { isStreaming });
@@ -462,36 +567,41 @@ export function MessageList({
       return (
         <div className="mt-2 flex justify-start gap-1 opacity-0 transition-opacity delay-200 duration-300 group-hover/assistant-turn:opacity-100">
           {clipboardData && <CopyButton clipboardData={clipboardData} />}
-          {!isStreaming && actionTarget?.id && onBranchTurn && (
-            <Tooltip content={t.common.branch}>
-              <Button
-                aria-label={t.common.branch}
-                size="icon-sm"
-                type="button"
-                variant="ghost"
-                disabled={!canBranch || branchingMessageId === actionTarget.id}
-                onClick={() => {
-                  const targetId = actionTarget.id;
-                  if (!targetId) {
-                    return;
+          {enableBranchForTurn &&
+            !isStreaming &&
+            actionTarget?.id &&
+            onBranchTurn && (
+              <Tooltip content={t.common.branch}>
+                <Button
+                  aria-label={t.common.branch}
+                  size="icon-sm"
+                  type="button"
+                  variant="ghost"
+                  disabled={
+                    !canBranch || branchingMessageId === actionTarget.id
                   }
-                  setBranchingMessageId(targetId);
-                  void Promise.resolve(
-                    onBranchTurn(targetId, assistantMessageIds),
-                  ).finally(() => {
-                    setBranchingMessageId(null);
-                  });
-                }}
-              >
-                <GitBranchPlusIcon
-                  className={cn(
-                    "size-4",
-                    branchingMessageId === actionTarget.id && "animate-pulse",
-                  )}
-                />
-              </Button>
-            </Tooltip>
-          )}
+                  onClick={() => {
+                    const targetId = actionTarget.id;
+                    if (!targetId) {
+                      return;
+                    }
+                    setBranchingMessageId(targetId);
+                    void Promise.resolve(
+                      onBranchTurn(targetId, assistantMessageIds),
+                    ).finally(() => {
+                      setBranchingMessageId(null);
+                    });
+                  }}
+                >
+                  <GitBranchPlusIcon
+                    className={cn(
+                      "size-4",
+                      branchingMessageId === actionTarget.id && "animate-pulse",
+                    )}
+                  />
+                </Button>
+              </Tooltip>
+            )}
           {enableRegenerateForTurn &&
             actionTarget?.id &&
             onRegenerateMessage && (
@@ -592,6 +702,8 @@ export function MessageList({
     return <MessageListSkeleton />;
   }
 
+  const artifactPaths = extractArtifactsFromThread(thread);
+
   return (
     <>
       <Conversation
@@ -632,6 +744,7 @@ export function MessageList({
                           groupIndex === groupedMessages.length - 1
                         }
                         threadId={threadId}
+                        artifactPaths={artifactPaths}
                         runId={
                           group.type === "assistant"
                             ? (msg as { run_id?: string }).run_id
@@ -680,13 +793,60 @@ export function MessageList({
                         group.messages,
                         streamingMessages,
                       ),
+                      group.id !== undefined &&
+                        branchableAssistantGroupIds.has(group.id),
                       group.id === latestAssistantGroupId,
                     )}
                 </div>
               );
             } else if (group.type === "assistant:clarification") {
               const message = group.messages[0];
-              if (message && hasContent(message)) {
+              if (!message) {
+                return null;
+              }
+
+              const humanInputRequest = extractHumanInputRequest(message);
+              if (humanInputRequest) {
+                const answeredResponse =
+                  humanInputState.answeredResponses.get(
+                    humanInputRequest.request_id,
+                  ) ?? null;
+                const pending = pendingHumanInputRequestIds.has(
+                  humanInputRequest.request_id,
+                );
+                return (
+                  <div key={group.id} className="w-full">
+                    <HumanInputCard
+                      answeredResponse={answeredResponse}
+                      disabled={
+                        thread.isLoading ||
+                        pending ||
+                        Boolean(answeredResponse) ||
+                        humanInputState.latestOpenRequestId !==
+                          humanInputRequest.request_id ||
+                        !onSubmitHumanInput
+                      }
+                      pending={pending}
+                      request={humanInputRequest}
+                      onSubmit={
+                        onSubmitHumanInput
+                          ? (response) =>
+                              handleSubmitHumanInput(
+                                humanInputRequest,
+                                response,
+                              )
+                          : undefined
+                      }
+                    />
+                    {renderTokenUsage({
+                      messages: group.messages,
+                      turnUsageMessages,
+                    })}
+                  </div>
+                );
+              }
+
+              if (hasContent(message)) {
                 return (
                   <div key={group.id} className="w-full">
                     <MarkdownContent
