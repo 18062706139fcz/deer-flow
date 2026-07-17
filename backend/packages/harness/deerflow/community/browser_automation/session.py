@@ -286,6 +286,10 @@ class BrowserSession:
         self._browser: Browser | None = None
         self._context: BrowserContext | None = None
         self._page: Page | None = None
+        # Tool calls and the Live WebSocket share this session and can observe a
+        # closed page concurrently. Only one caller may rebuild the browser
+        # hierarchy; the second check inside the lock reuses its result.
+        self._ensure_page_lock = asyncio.Lock()
         # Live screencast state. When streaming, ``_on_frame`` is retained so the
         # screencast can be re-bound to a new page — login/OAuth flows commonly
         # open a popup or a fresh tab, and the user must see (and drive) it.
@@ -333,46 +337,49 @@ class BrowserSession:
     async def _ensure_page(self) -> Page:
         if self._page is not None and not self._page.is_closed():
             return self._page
-        from playwright.async_api import async_playwright
+        async with self._ensure_page_lock:
+            if self._page is not None and not self._page.is_closed():
+                return self._page
+            from playwright.async_api import async_playwright
 
-        if self._playwright is None:
-            self._playwright = await async_playwright().start()
+            if self._playwright is None:
+                self._playwright = await async_playwright().start()
 
-        if self._cdp_url:
-            # Attach to the user's running Chrome (started with
-            # --remote-debugging-port). Reuse its default context + an existing
-            # tab: calling new_context()/new_page() on a CDP-attached real
-            # Chrome trips "Browser context management is not supported", so we
-            # adopt the tab Chrome already opened instead.
+            if self._cdp_url:
+                # Attach to the user's running Chrome (started with
+                # --remote-debugging-port). Reuse its default context + an existing
+                # tab: calling new_context()/new_page() on a CDP-attached real
+                # Chrome trips "Browser context management is not supported", so we
+                # adopt the tab Chrome already opened instead.
+                if self._browser is None or not self._browser.is_connected():
+                    self._browser = await self._playwright.chromium.connect_over_cdp(self._cdp_url)
+                    self._connected_over_cdp = True
+                    # CDP-attached real Chrome owns its own browsing context, so the
+                    # SSRF request guard is intentionally NOT installed for it (see
+                    # _install_request_guard). Surface that to operators — for this
+                    # session redirects/subresources to private/metadata hosts are
+                    # not aborted; cdp_url is documented local/trusted-only.
+                    logger.warning(
+                        "browser SSRF request guard is disabled for CDP-attached session (cdp_url=%s)",
+                        _redact_url(self._cdp_url),
+                    )
+                self._context = self._browser.contexts[0] if self._browser.contexts else await self._browser.new_context()
+                self._context.set_default_timeout(self._timeout_ms)
+                existing = self._context.pages
+                self._set_active_page(existing[-1] if existing else await self._context.new_page())
+                self._bind_new_page_listener()
+                return self._page
+
             if self._browser is None or not self._browser.is_connected():
-                self._browser = await self._playwright.chromium.connect_over_cdp(self._cdp_url)
-                self._connected_over_cdp = True
-                # CDP-attached real Chrome owns its own browsing context, so the
-                # SSRF request guard is intentionally NOT installed for it (see
-                # _install_request_guard). Surface that to operators — for this
-                # session redirects/subresources to private/metadata hosts are
-                # not aborted; cdp_url is documented local/trusted-only.
-                logger.warning(
-                    "browser SSRF request guard is disabled for CDP-attached session (cdp_url=%s)",
-                    _redact_url(self._cdp_url),
-                )
-            self._context = self._browser.contexts[0] if self._browser.contexts else await self._browser.new_context()
+                self._browser = await self._playwright.chromium.launch(headless=self._headless)
+            # device_scale_factor=2 renders screenshots at retina density so the
+            # panel stays crisp when the image is scaled up to fill the view.
+            self._context = await self._browser.new_context(viewport=self._viewport, device_scale_factor=2)
             self._context.set_default_timeout(self._timeout_ms)
-            existing = self._context.pages
-            self._set_active_page(existing[-1] if existing else await self._context.new_page())
+            await self._install_request_guard()
+            self._set_active_page(await self._context.new_page())
             self._bind_new_page_listener()
             return self._page
-
-        if self._browser is None or not self._browser.is_connected():
-            self._browser = await self._playwright.chromium.launch(headless=self._headless)
-        # device_scale_factor=2 renders screenshots at retina density so the
-        # panel stays crisp when the image is scaled up to fill the view.
-        self._context = await self._browser.new_context(viewport=self._viewport, device_scale_factor=2)
-        self._context.set_default_timeout(self._timeout_ms)
-        await self._install_request_guard()
-        self._set_active_page(await self._context.new_page())
-        self._bind_new_page_listener()
-        return self._page
 
     def _set_active_page(self, page: Page) -> None:
         """Adopt *page* as the active page and keep the live screencast on it.
@@ -633,19 +640,24 @@ class BrowserSession:
 
     async def _close(self) -> None:
         try:
-            await self._stop_screencast()
+            with contextlib.suppress(Exception):
+                await self._stop_screencast()
             if self._connected_over_cdp:
                 # Attached to the user's real Chrome — never close their browser,
                 # context, or the tab we adopted. Just disconnect Playwright.
                 if self._browser is not None:
-                    await self._browser.close()
+                    with contextlib.suppress(Exception):
+                        await self._browser.close()
             else:
                 if self._context is not None:
-                    await self._context.close()
+                    with contextlib.suppress(Exception):
+                        await self._context.close()
                 if self._browser is not None:
-                    await self._browser.close()
+                    with contextlib.suppress(Exception):
+                        await self._browser.close()
             if self._playwright is not None:
-                await self._playwright.stop()
+                with contextlib.suppress(Exception):
+                    await self._playwright.stop()
         finally:
             self._playwright = None
             self._browser = None
@@ -657,6 +669,7 @@ class BrowserSession:
             self._settle_live_frames_pending = False
             self._input_live_frame_generation += 1
             self._page_listener_bound = False
+            self._request_guard_bound = False
 
     async def _start_screencast(self, on_frame: Callable[[str], None]) -> None:
         """Start Live mode and send an initial JPEG frame.
@@ -849,10 +862,13 @@ class BrowserSessionManager:
         timeout_ms: int = 30000,
         viewport: dict[str, int] | None = None,
         cdp_url: str | None = None,
+        allow_unguarded_cdp: bool = False,
         url_guard: Callable[[str], str | None] | None = None,
         pin: bool = False,
     ) -> BrowserSession:
         ensure_browser_worker_compatibility()
+        if cdp_url and not allow_unguarded_cdp:
+            raise RuntimeError("cdp_url uses a browser context where DeerFlow cannot enforce its SSRF request guard; set allow_unguarded_cdp: true only for an explicitly trusted local Chrome session")
         key = thread_id or "default"
         now = time.monotonic()
         with self._lock:

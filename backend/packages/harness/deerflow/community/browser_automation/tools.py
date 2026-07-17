@@ -126,6 +126,7 @@ def _resolve_session(runtime: Runtime, tool_name: str) -> _SessionLease:
         timeout_ms=timeout_ms,
         viewport={"width": width, "height": height},
         cdp_url=cdp_url,
+        allow_unguarded_cdp=_as_bool(cfg.get("allow_unguarded_cdp"), False),
         url_guard=validate_browser_url,
         pin=True,
     )
@@ -237,6 +238,7 @@ async def navigate_and_capture(*, thread_id: str | None, url: str, outputs_path:
         timeout_ms=_as_int(cfg.get("timeout_ms"), 30000),
         viewport={"width": _as_int(cfg.get("viewport_width"), 1280), "height": _as_int(cfg.get("viewport_height"), 720)},
         cdp_url=_as_str(cfg.get("cdp_url")),
+        allow_unguarded_cdp=_as_bool(cfg.get("allow_unguarded_cdp"), False),
         url_guard=validate_browser_url,
     ) as session:
         snapshot = await session.navigate(url)

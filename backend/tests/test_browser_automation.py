@@ -8,7 +8,8 @@ skipped automatically when Playwright (or its browser binary) is unavailable.
 from __future__ import annotations
 
 import asyncio
-from types import SimpleNamespace
+import sys
+from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -468,6 +469,55 @@ async def test_click_tolerates_spa_navigation_without_load_event():
 
 
 @pytest.mark.asyncio
+async def test_ensure_page_serializes_concurrent_rebuilds():
+    """Concurrent tool/Live callers must share one rebuilt browser page."""
+    session = BrowserSession(
+        MagicMock(),
+        headless=True,
+        timeout_ms=1000,
+        viewport={"width": 1000, "height": 500},
+    )
+    launch_started = asyncio.Event()
+    release_launch = asyncio.Event()
+    page = MagicMock()
+    page.is_closed.return_value = False
+    context = MagicMock()
+    context.new_page = AsyncMock(return_value=page)
+    context.set_default_timeout = MagicMock()
+    context.on = MagicMock()
+    browser = MagicMock()
+    browser.is_connected.return_value = True
+    browser.new_context = AsyncMock(return_value=context)
+
+    async def launch(*, headless):
+        launch_started.set()
+        await release_launch.wait()
+        return browser
+
+    chromium = MagicMock()
+    chromium.launch = AsyncMock(side_effect=launch)
+    session._playwright = SimpleNamespace(chromium=chromium)
+
+    # ``_ensure_page`` imports Playwright lazily even when a fake runtime is
+    # already installed. Keep this unit test independent of the optional extra.
+    fake_async_api = ModuleType("playwright.async_api")
+    fake_async_api.async_playwright = MagicMock()
+    fake_playwright = ModuleType("playwright")
+    fake_playwright.async_api = fake_async_api
+    with patch.dict(sys.modules, {"playwright": fake_playwright, "playwright.async_api": fake_async_api}):
+        first = asyncio.create_task(session._ensure_page())
+        await asyncio.wait_for(launch_started.wait(), timeout=1.0)
+        second = asyncio.create_task(session._ensure_page())
+        await asyncio.sleep(0)
+        release_launch.set()
+
+        assert await asyncio.wait_for(asyncio.gather(first, second), timeout=1.0) == [page, page]
+    chromium.launch.assert_awaited_once_with(headless=True)
+    browser.new_context.assert_awaited_once()
+    context.new_page.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_tabs_report_active_page():
     session = BrowserSession(
         MagicMock(),
@@ -725,6 +775,25 @@ class TestSessionManager:
         with pytest.raises(RuntimeError, match="process-local"):
             manager.get_session("thread-a")
 
+    async def test_cdp_requires_explicit_unguarded_trust_opt_in(self):
+        manager = BrowserSessionManager()
+
+        with pytest.raises(RuntimeError, match="allow_unguarded_cdp"):
+            manager.get_session("thread-a", cdp_url="http://127.0.0.1:9222")
+
+    async def test_cdp_allows_explicit_unguarded_trust_opt_in(self):
+        manager = BrowserSessionManager()
+        fake_loop = MagicMock()
+
+        with patch.object(manager, "_ensure_loop", return_value=fake_loop):
+            session = manager.get_session(
+                "thread-a",
+                cdp_url="http://127.0.0.1:9222",
+                allow_unguarded_cdp=True,
+            )
+
+        assert session._cdp_url == "http://127.0.0.1:9222"
+
     async def test_acquire_session_releases_pin_after_scope(self):
         manager = BrowserSessionManager()
         fake_loop = MagicMock()
@@ -777,7 +846,14 @@ def test_resolve_session_always_reads_browser_navigate_config():
     read ``browser_navigate``'s config as the single canonical source.
     """
     configs = {
-        "browser_navigate": {"headless": False, "viewport_width": 1920, "viewport_height": 1080, "timeout_ms": 12345},
+        "browser_navigate": {
+            "headless": False,
+            "viewport_width": 1920,
+            "viewport_height": 1080,
+            "timeout_ms": 12345,
+            "cdp_url": "http://127.0.0.1:9222",
+            "allow_unguarded_cdp": True,
+        },
         "browser_snapshot": {"headless": True},
     }
     captured: dict[str, object] = {}
@@ -799,6 +875,8 @@ def test_resolve_session_always_reads_browser_navigate_config():
     assert captured["headless"] is False
     assert captured["timeout_ms"] == 12345
     assert captured["viewport"] == {"width": 1920, "height": 1080}
+    assert captured["cdp_url"] == "http://127.0.0.1:9222"
+    assert captured["allow_unguarded_cdp"] is True
 
 
 def test_reset_manager_singleton():
@@ -893,6 +971,36 @@ async def test_request_guard_aborts_blocked_redirect_target():
     await handler(allowed)
     assert allowed.continued is True
     assert allowed.aborted_with is None
+
+
+@pytest.mark.asyncio
+async def test_close_continues_when_browser_driver_is_already_disconnected():
+    """Shutdown must clear every handle even if the driver died first."""
+    session = BrowserSession(
+        MagicMock(),
+        headless=True,
+        timeout_ms=1000,
+        viewport={"width": 1000, "height": 500},
+    )
+    session._stop_screencast = AsyncMock()
+    context = MagicMock()
+    context.close = AsyncMock(side_effect=RuntimeError("driver disconnected"))
+    browser = MagicMock()
+    browser.close = AsyncMock(side_effect=RuntimeError("connection closed"))
+    playwright = MagicMock()
+    playwright.stop = AsyncMock()
+    session._context = context
+    session._browser = browser
+    session._playwright = playwright
+
+    await session._close()
+
+    context.close.assert_awaited_once()
+    browser.close.assert_awaited_once()
+    playwright.stop.assert_awaited_once()
+    assert session._context is None
+    assert session._browser is None
+    assert session._playwright is None
 
 
 @pytest.mark.asyncio

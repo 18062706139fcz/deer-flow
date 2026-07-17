@@ -50,8 +50,28 @@ def _browser_tools_enabled() -> bool:
     from deerflow.config import get_app_config
 
     with contextlib.suppress(Exception):
-        return get_app_config().get_tool_config("browser_navigate") is not None and browser_multi_worker_error() is None
+        tool_cfg = get_app_config().get_tool_config("browser_navigate")
+        if tool_cfg is None or browser_multi_worker_error() is not None:
+            return False
+        extra = tool_cfg.model_extra or {}
+        cdp_url = extra.get("cdp_url")
+        if isinstance(cdp_url, str) and cdp_url.strip() and extra.get("allow_unguarded_cdp") is not True:
+            logger.error("browser automation disabled: cdp_url requires allow_unguarded_cdp: true")
+            return False
+        return True
     return False
+
+
+async def _browser_thread_owned_by(thread_store, thread_id: str, user_id: str) -> bool:
+    """Require an explicit owner for browser control's high-trust surface.
+
+    General thread reads retain compatibility with legacy ``user_id=NULL``
+    rows. A retained browser may contain authenticated cookies and page data,
+    so REST navigation and the Live socket deliberately use a stricter policy:
+    only an existing row whose owner exactly matches may drive it.
+    """
+    record = await thread_store.get(thread_id, user_id=user_id)
+    return record is not None and record.get("user_id") == user_id
 
 
 @router.post(
@@ -62,7 +82,10 @@ def _browser_tools_enabled() -> bool:
 )
 @require_permission("threads", "write", owner_check=True, require_existing=True)
 async def navigate_browser(thread_id: str, body: BrowserNavigateRequest, request: Request) -> BrowserNavigateResponse:
-    del request  # Required by the auth decorator.
+    user_id = str(request.state.auth.user.id)
+    thread_store = getattr(request.app.state, "thread_store", None)
+    if thread_store is None or not await _browser_thread_owned_by(thread_store, thread_id, user_id):
+        raise HTTPException(status_code=404, detail=f"Thread {thread_id} not found")
 
     if not _browser_tools_enabled():
         raise HTTPException(status_code=404, detail="Browser automation is not enabled")
@@ -178,11 +201,10 @@ async def browser_stream(websocket: WebSocket, thread_id: str) -> None:
         # retained session.
         await websocket.close(code=4404)
         return
-    # Strict ownership: require an existing owned thread. A permissive check
-    # would let any authenticated caller attach to a deleted thread's id and
-    # reuse the retained page/context.
-    allowed = await thread_store.check_access(thread_id, str(user.id), require_existing=True)
-    if not allowed:
+    # Browser control is stricter than ordinary legacy-thread access: NULL-owner
+    # rows are not shared because a retained page may expose cookies or account
+    # data from a previous authenticated browser session.
+    if not await _browser_thread_owned_by(thread_store, thread_id, str(user.id)):
         await websocket.close(code=4404)
         return
 
@@ -235,6 +257,10 @@ async def browser_stream(websocket: WebSocket, thread_id: str) -> None:
         value = extra.get(key)
         return value if isinstance(value, int) and not isinstance(value, bool) else default
 
+    def _cfg_bool(key: str, default: bool) -> bool:
+        value = extra.get(key)
+        return value if isinstance(value, bool) else default
+
     def _cfg_str(key: str) -> str | None:
         value = extra.get(key)
         return value.strip() or None if isinstance(value, str) else None
@@ -242,10 +268,11 @@ async def browser_stream(websocket: WebSocket, thread_id: str) -> None:
     manager = get_browser_session_manager()
     session_lease = manager.acquire_session(
         thread_id,
-        headless=bool(extra.get("headless", True)),
+        headless=_cfg_bool("headless", True),
         timeout_ms=_cfg_int("timeout_ms", 30000),
         viewport={"width": _cfg_int("viewport_width", 1280), "height": _cfg_int("viewport_height", 720)},
         cdp_url=_cfg_str("cdp_url"),
+        allow_unguarded_cdp=_cfg_bool("allow_unguarded_cdp", False),
         url_guard=validate_browser_url,
     )
     session = session_lease.__enter__()
