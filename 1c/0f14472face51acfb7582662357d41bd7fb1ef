@@ -1,0 +1,39 @@
+README.md
+  s_25230f54ac4d73::t_2df9bfa54d2331 777
+backend/AGENTS.md
+  s_25230f54ac4d73::t_dbd94dccc4b776 426
+backend/app/gateway/routers/browser.py
+  s_25230f54ac4d73::t_14388a93b0a46f 53-61,65-76,85-88,204-207,260-263,271,275
+backend/packages/harness/deerflow/community/browser_automation/tools.py
+  s_25230f54ac4d73::t_c72d179442ea0b 129,241
+backend/tests/test_browser_router.py
+  s_25230f54ac4d73::t_0efab33d7be324 1-11,22-149
+config.example.yaml
+  s_5ded57cd0c1aa4::t_d99ff65373f192 797-798,808-810,814-815
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "1c0f14472face51acfb7582662357d41bd7fb1ef",
+  "prompts": {},
+  "sessions": {
+    "s_25230f54ac4d73": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f6de8-dab8-7f63-9786-356c3d303524",
+        "model": "unknown"
+      },
+      "human_author": "ryker <2279549769@qq.com>"
+    },
+    "s_5ded57cd0c1aa4": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f6dfb-6353-7bc3-8d51-5e966ddea6e5",
+        "model": "unknown"
+      },
+      "human_author": "ryker <2279549769@qq.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
