@@ -126,6 +126,16 @@ function visibleInputMessages(messages: unknown[]) {
   return messages.filter((message) => !isHiddenInputMessage(message));
 }
 
+function mockMessageRunId(message: unknown, fallback: string) {
+  if (typeof message === "object" && message !== null) {
+    const runId = Reflect.get(message, "run_id");
+    if (typeof runId === "string" && runId.length > 0) {
+      return runId;
+    }
+  }
+  return fallback;
+}
+
 function visibleRunInputMessages(route: Route) {
   try {
     const body = route.request().postDataJSON() as {
@@ -962,7 +972,10 @@ export function mockLangGraphAPI(page: Page, options?: MockAPIOptions) {
         contentType: "application/json",
         body: JSON.stringify({
           data: (matchingThread?.messages ?? []).map((message, index) => ({
-            run_id: `run-${matchingThread?.thread_id ?? "unknown"}`,
+            run_id: mockMessageRunId(
+              message,
+              `run-${matchingThread?.thread_id ?? "unknown"}`,
+            ),
             seq: index + 1,
             content: message,
             metadata: { caller: "lead_agent" },
