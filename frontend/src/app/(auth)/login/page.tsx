@@ -10,6 +10,10 @@ import { FlickeringGrid } from "@/components/ui/flickering-grid";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/core/auth/AuthProvider";
 import {
+  loadRememberLoginPreference,
+  saveRememberLoginPreference,
+} from "@/core/auth/remember-login";
+import {
   canCreateRegularAccount,
   fetchSetupStatus,
   type SetupStatusResponse,
@@ -59,6 +63,7 @@ export default function LoginPage() {
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [rememberMe, setRememberMe] = useState(true);
   const [isLogin, setIsLogin] = useState(true);
   const [ssoProviders, setSsoProviders] = useState<
     { id: string; display_name: string; type: string }[]
@@ -98,6 +103,14 @@ export default function LoginPage() {
       router.push(redirectPath);
     }
   }, [isAuthenticated, redirectPath, router]);
+
+  useEffect(() => {
+    const preference = loadRememberLoginPreference();
+    setRememberMe(preference.rememberMe);
+    if (preference.email) {
+      setEmail(preference.email);
+    }
+  }, []);
 
   // Fetch setup state and SSO providers
   useEffect(() => {
@@ -159,7 +172,11 @@ export default function LoginPage() {
         ? "/api/v1/auth/login/local"
         : "/api/v1/auth/register";
       const body = isLogin
-        ? `username=${encodeURIComponent(email)}&password=${encodeURIComponent(password)}`
+        ? new URLSearchParams({
+            password,
+            remember_me: String(rememberMe),
+            username: email,
+          })
         : JSON.stringify({ email, password });
 
       const headers: HeadersInit = isLogin
@@ -183,6 +200,10 @@ export default function LoginPage() {
           setShowSsoHint(true);
         }
         return;
+      }
+
+      if (isLogin) {
+        saveRememberLoginPreference({ email, rememberMe });
       }
 
       // Both login and register set a cookie — redirect to workspace
@@ -258,6 +279,23 @@ export default function LoginPage() {
             />
           </div>
 
+          {isLogin && (
+            <label className="text-muted-foreground flex items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={rememberMe}
+                onChange={(e) => setRememberMe(e.currentTarget.checked)}
+                className="border-input mt-1 h-4 w-4 rounded"
+              />
+              <span>
+                <span className="text-foreground block font-medium">
+                  {t.login.rememberMe}
+                </span>
+                <span>{t.login.rememberMeDescription}</span>
+              </span>
+            </label>
+          )}
+
           {error && <p className="text-sm text-red-500">{error}</p>}
 
           <Button type="submit" className="w-full" disabled={loading}>
@@ -296,7 +334,7 @@ export default function LoginPage() {
                 className="w-full"
                 disabled={loading}
                 onClick={() => {
-                  window.location.href = `/api/v1/auth/oauth/${provider.id}?next=${encodeURIComponent(redirectPath)}`;
+                  window.location.href = `/api/v1/auth/oauth/${provider.id}?next=${encodeURIComponent(redirectPath)}&remember_me=${String(rememberMe)}`;
                 }}
               >
                 {t.login.continueWith(provider.display_name)}

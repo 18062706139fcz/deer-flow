@@ -29,6 +29,7 @@ export default function SetupPage() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [rememberMe, setRememberMe] = useState(true);
 
   // --- Change-password mode only ---
   const [currentPassword, setCurrentPassword] = useState("");
@@ -82,6 +83,7 @@ export default function SetupPage() {
         body: JSON.stringify({
           email,
           password: newPassword,
+          remember_me: rememberMe,
         }),
       });
 
@@ -221,6 +223,23 @@ export default function SetupPage() {
                 minLength={8}
               />
             </div>
+            <label className="text-muted-foreground flex items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={rememberMe}
+                onChange={(e) => setRememberMe(e.currentTarget.checked)}
+                className="border-input mt-1 h-4 w-4 rounded"
+              />
+              <span>
+                <span className="text-foreground block font-medium">
+                  Keep me signed in
+                </span>
+                <span>
+                  Keep this browser session when possible. DeerFlow never stores
+                  your password.
+                </span>
+              </span>
+            </label>
             {error && <p className="ms-1 text-sm text-red-500">{error}</p>}
             <Button type="submit" className="w-full" disabled={loading}>
               {loading ? "Creating account…" : "Create Admin Account"}

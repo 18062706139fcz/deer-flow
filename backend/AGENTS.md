@@ -310,6 +310,10 @@ FastAPI application on port 8001 with health check at `GET /health`. Set `GATEWA
 
 CORS is same-origin by default when requests enter through nginx on port 2026. Split-origin or port-forwarded browser clients must opt in with `GATEWAY_CORS_ORIGINS` (comma-separated exact origins); Gateway `CORSMiddleware` and `CSRFMiddleware` both read that variable so browser CORS and auth-origin checks stay aligned.
 
+Browser auth sessions are owned by `app.gateway.auth.session_cookie`. Login accepts a `remember_me` form flag, but the Gateway never stores passwords. `SessionCookiePolicy` persists the `HttpOnly access_token` cookie only for HTTPS/trusted-forwarded HTTPS, localhost HTTP, or explicit operator opt-in for insecure persistence; public HTTP sandbox URLs degrade to session cookies. Session-creating handlers stamp the final `max_age` on `request.state`, and `CSRFMiddleware` mirrors that value onto `csrf_token` so the double-submit cookie pair expires together. A small `HttpOnly` preference cookie preserves the user's remember choice across token re-issue paths such as password change and OIDC callback. Logout clears all auth cookies and suppresses CSRF re-issue on the logout response.
+
+The same auth origin helpers trust `Forwarded` / `X-Forwarded-*` headers because the bundled nginx overwrites them. Direct-to-Gateway public deployments must strip or control those headers before traffic reaches Gateway; otherwise a client can influence localhost/HTTPS classification for its own browser session.
+
 **Routers**:
 
 | Router | Endpoints |
