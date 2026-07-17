@@ -1,0 +1,21 @@
+frontend/src/core/threads/hooks.ts
+  s_25230f54ac4d73::t_4fb160da59e920 1008
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "623ea2460371c229e3a94fd88edcbf5011e4e0f2",
+  "prompts": {},
+  "sessions": {
+    "s_25230f54ac4d73": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f6de8-dab8-7f63-9786-356c3d303524",
+        "model": "unknown"
+      },
+      "human_author": "ryker <2279549769@qq.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
