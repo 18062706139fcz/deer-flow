@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisco
 from pydantic import BaseModel, Field
 
 from app.gateway.authz import require_permission
+from deerflow.community.browser_automation.session import browser_multi_worker_error
 from deerflow.config.paths import get_paths
 from deerflow.runtime.user_context import get_effective_user_id, reset_current_user, set_current_user
 
@@ -49,7 +50,7 @@ def _browser_tools_enabled() -> bool:
     from deerflow.config import get_app_config
 
     with contextlib.suppress(Exception):
-        return get_app_config().get_tool_config("browser_navigate") is not None
+        return get_app_config().get_tool_config("browser_navigate") is not None and browser_multi_worker_error() is None
     return False
 
 
@@ -238,7 +239,8 @@ async def browser_stream(websocket: WebSocket, thread_id: str) -> None:
         value = extra.get(key)
         return value.strip() or None if isinstance(value, str) else None
 
-    session = get_browser_session_manager().get_session(
+    manager = get_browser_session_manager()
+    session_lease = manager.acquire_session(
         thread_id,
         headless=bool(extra.get("headless", True)),
         timeout_ms=_cfg_int("timeout_ms", 30000),
@@ -246,6 +248,7 @@ async def browser_stream(websocket: WebSocket, thread_id: str) -> None:
         cdp_url=_cfg_str("cdp_url"),
         url_guard=validate_browser_url,
     )
+    session = session_lease.__enter__()
 
     async def _pump_frames() -> None:
         while True:
@@ -415,4 +418,5 @@ async def browser_stream(websocket: WebSocket, thread_id: str) -> None:
             poll_task.cancel()
         with contextlib.suppress(Exception):
             await session.stop_screencast(_on_frame)
+        session_lease.__exit__(None, None, None)
         reset_current_user(token)

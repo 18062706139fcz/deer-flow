@@ -160,6 +160,11 @@ Boundary check (harness → app import firewall):
 
 CI runs these regression tests for every pull request via [.github/workflows/backend-unit-tests.yml](../.github/workflows/backend-unit-tests.yml).
 
+Agentic browser sessions are process-local. The Gateway startup safety gate rejects
+`GATEWAY_WORKERS > 1` when `browser_navigate` is configured, because ordinary
+uvicorn worker dispatch does not provide thread affinity for browser tools, REST
+navigation, and the Live WebSocket.
+
 ## Architecture
 
 ### Harness / App Split

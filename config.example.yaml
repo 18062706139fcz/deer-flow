@@ -814,6 +814,8 @@ tools:
   #   #                                # Playwright; a much newer Chrome can reject the
   #   #                                # CDP handshake. If so, use headless: false to launch
   #   #                                # Playwright's own visible browser instead.
+  #   # Multi-worker note: browser sessions live in one Gateway worker's memory.
+  #   # Keep GATEWAY_WORKERS=1 while this tool group is enabled.
   # - name: browser_snapshot
   #   group: browser
   #   use: deerflow.community.browser_automation.tools:browser_snapshot_tool

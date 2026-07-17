@@ -4,6 +4,7 @@ from .session import (
     BrowserTab,
     PageSnapshot,
     SnapshotElement,
+    browser_multi_worker_error,
     get_browser_session_manager,
     reset_browser_session_manager,
 )
@@ -26,6 +27,7 @@ __all__ = [
     "BrowserTab",
     "PageSnapshot",
     "SnapshotElement",
+    "browser_multi_worker_error",
     "browser_back_tool",
     "browser_click_tool",
     "browser_close_tool",

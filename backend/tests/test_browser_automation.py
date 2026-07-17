@@ -678,6 +678,94 @@ class TestSessionManager:
         assert "b" not in manager._sessions
         fake_loop.submit.assert_called_once()
 
+    async def test_pinned_session_survives_lru_eviction(self):
+        manager = BrowserSessionManager(idle_timeout_s=0, max_sessions=2)
+        fake_loop = MagicMock()
+        manager._loop = fake_loop
+        with patch.object(manager, "_ensure_loop", return_value=fake_loop):
+            with patch.object(session_mod.time, "monotonic", return_value=0.0):
+                pinned = manager.get_session("pinned", pin=True)
+            pinned._close = MagicMock()
+            with patch.object(session_mod.time, "monotonic", return_value=1.0):
+                lru = manager.get_session("lru")
+            lru._close = MagicMock()
+
+            with patch.object(session_mod.time, "monotonic", return_value=2.0):
+                current = manager.get_session("current")
+            current._close = MagicMock()
+
+        # The pinned stream is the oldest session, but the LRU cap must evict
+        # the oldest unpinned session instead.
+        assert "pinned" in manager._sessions
+        assert "lru" not in manager._sessions
+        assert current is manager._sessions["current"]
+
+    async def test_releasing_pin_restores_session_capacity_without_another_acquisition(self):
+        manager = BrowserSessionManager(idle_timeout_s=0, max_sessions=1)
+        fake_loop = MagicMock()
+        manager._loop = fake_loop
+        with patch.object(manager, "_ensure_loop", return_value=fake_loop):
+            with patch.object(session_mod.time, "monotonic", return_value=0.0):
+                pinned = manager.get_session("pinned", pin=True)
+            pinned._close = MagicMock()
+            with patch.object(session_mod.time, "monotonic", return_value=1.0):
+                manager.get_session("current")
+
+        assert set(manager._sessions) == {"pinned", "current"}
+
+        manager.release_session("pinned", pinned)
+
+        assert set(manager._sessions) == {"current"}
+        fake_loop.submit.assert_called_once()
+
+    async def test_get_session_rejects_runtime_multi_worker_browser_use(self, monkeypatch):
+        monkeypatch.setenv("GATEWAY_WORKERS", "2")
+        manager = BrowserSessionManager()
+
+        with pytest.raises(RuntimeError, match="process-local"):
+            manager.get_session("thread-a")
+
+    async def test_acquire_session_releases_pin_after_scope(self):
+        manager = BrowserSessionManager()
+        fake_loop = MagicMock()
+        with patch.object(manager, "_ensure_loop", return_value=fake_loop):
+            with manager.acquire_session("thread-a") as session:
+                assert session.active_refs == 1
+                assert manager._sessions["thread-a"] is session
+            assert session.active_refs == 0
+
+    async def test_in_flight_browser_operation_is_not_evicted(self):
+        manager = BrowserSessionManager(idle_timeout_s=100.0, max_sessions=0)
+        fake_loop = MagicMock()
+        manager._loop = fake_loop
+        with patch.object(manager, "_ensure_loop", return_value=fake_loop):
+            session = manager.get_session("thread-a")
+        session._close = MagicMock()
+        page = MagicMock()
+        page.is_closed.return_value = False
+        page.url = "https://example.com/"
+        session._page = page
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def run(coro):
+            started.set()
+            await release.wait()
+            return await coro
+
+        fake_loop.run = run
+        operation = asyncio.create_task(session.current_url())
+        await started.wait()
+
+        with patch.object(session_mod.time, "monotonic", return_value=1000.0):
+            manager.get_session("thread-b")
+        assert "thread-a" in manager._sessions
+        assert session.active_refs == 1
+
+        release.set()
+        assert await operation == "https://example.com/"
+        assert session.active_refs == 0
+
 
 def test_resolve_session_always_reads_browser_navigate_config():
     """Launch config is deterministic regardless of which tool runs first.

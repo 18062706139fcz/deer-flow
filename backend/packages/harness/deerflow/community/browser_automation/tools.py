@@ -32,7 +32,7 @@ from deerflow.config.paths import VIRTUAL_PATH_PREFIX
 from deerflow.constants import BROWSER_FRAMES_DIRNAME
 from deerflow.tools.types import Runtime
 
-from .session import BrowserSession, PageSnapshot, get_browser_session_manager
+from .session import BrowserSession, BrowserSessionManager, PageSnapshot, get_browser_session_manager
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +87,22 @@ def _as_str(value: object) -> str | None:
     return None
 
 
-def _resolve_session(runtime: Runtime, tool_name: str) -> BrowserSession:
+class _SessionLease:
+    """Context manager that keeps a process-local browser session pinned."""
+
+    def __init__(self, manager: BrowserSessionManager, thread_id: str | None, session: BrowserSession) -> None:
+        self._manager = manager
+        self._thread_id = thread_id
+        self.session = session
+
+    def __enter__(self) -> BrowserSession:
+        return self.session
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self._manager.release_session(self._thread_id, self.session)
+
+
+def _resolve_session(runtime: Runtime, tool_name: str) -> _SessionLease:
     # Launch config (headless/viewport/timeout/cdp_url) is read from a single
     # canonical source — always ``browser_navigate`` — regardless of which tool
     # first creates the session. ``get_session`` caches per thread and ignores
@@ -104,14 +119,17 @@ def _resolve_session(runtime: Runtime, tool_name: str) -> BrowserSession:
     height = _as_int(cfg.get("viewport_height"), 720)
     cdp_url = _as_str(cfg.get("cdp_url"))
     manager = get_browser_session_manager()
-    return manager.get_session(
-        _thread_id(runtime),
+    thread_id = _thread_id(runtime)
+    session = manager.get_session(
+        thread_id,
         headless=headless,
         timeout_ms=timeout_ms,
         viewport={"width": width, "height": height},
         cdp_url=cdp_url,
         url_guard=validate_browser_url,
+        pin=True,
     )
+    return _SessionLease(manager, thread_id, session)
 
 
 def validate_browser_url(url: str, *, tool_name: str = "browser_navigate") -> str | None:
@@ -213,24 +231,24 @@ async def navigate_and_capture(*, thread_id: str | None, url: str, outputs_path:
         raise ValueError(url_error)
     cfg = _get_tool_config("browser_navigate")
     manager = get_browser_session_manager()
-    session = manager.get_session(
+    with manager.acquire_session(
         thread_id,
         headless=_as_bool(cfg.get("headless"), True),
         timeout_ms=_as_int(cfg.get("timeout_ms"), 30000),
         viewport={"width": _as_int(cfg.get("viewport_width"), 1280), "height": _as_int(cfg.get("viewport_height"), 720)},
         cdp_url=_as_str(cfg.get("cdp_url")),
         url_guard=validate_browser_url,
-    )
-    snapshot = await session.navigate(url)
-    screenshot_path: str | None = None
-    try:
-        content = await session.screenshot_bytes(full_page=False)
-        name = _step_screenshot_name("navigate")
-        frames_dir = outputs_path / _BROWSER_FRAMES_DIRNAME
-        final_name = await asyncio.to_thread(_write_screenshot, frames_dir, name, content)
-        screenshot_path = f"{_FRAMES_VIRTUAL_PREFIX}/{final_name}"
-    except Exception as e:
-        logger.warning(f"browser gateway navigate screenshot failed: {e}")
+    ) as session:
+        snapshot = await session.navigate(url)
+        screenshot_path: str | None = None
+        try:
+            content = await session.screenshot_bytes(full_page=False)
+            name = _step_screenshot_name("navigate")
+            frames_dir = outputs_path / _BROWSER_FRAMES_DIRNAME
+            final_name = await asyncio.to_thread(_write_screenshot, frames_dir, name, content)
+            screenshot_path = f"{_FRAMES_VIRTUAL_PREFIX}/{final_name}"
+        except Exception as e:
+            logger.warning(f"browser gateway navigate screenshot failed: {e}")
     return {"screenshot": screenshot_path, "url": snapshot.url, "title": snapshot.title}
 
 
@@ -254,10 +272,10 @@ async def browser_navigate_tool(runtime: Runtime, url: str, tool_call_id: Annota
         url_error = _validate_url("browser_navigate", url)
         if url_error:
             return _tool_message(url_error, tool_call_id)
-        session = _resolve_session(runtime, "browser_navigate")
-        snapshot = await session.navigate(url)
-        screenshot = await _capture_step_screenshot(runtime, session, "navigate")
-        return _snapshot_command(runtime, session, snapshot, tool_call_id, f"Navigated to {url}.", screenshot)
+        with _resolve_session(runtime, "browser_navigate") as session:
+            snapshot = await session.navigate(url)
+            screenshot = await _capture_step_screenshot(runtime, session, "navigate")
+            return _snapshot_command(runtime, session, snapshot, tool_call_id, f"Navigated to {url}.", screenshot)
     except Exception as e:
         logger.error(f"browser_navigate failed: {e}")
         return _tool_message(f"Error: browser navigation failed: {e}", tool_call_id)
@@ -267,10 +285,10 @@ async def browser_navigate_tool(runtime: Runtime, url: str, tool_call_id: Annota
 async def browser_snapshot_tool(runtime: Runtime, tool_call_id: Annotated[str, InjectedToolCallId]) -> Command:
     """Re-read the current page's interactive elements without acting. Use this to refresh the [ref] element list after the page changed on its own (e.g. async content loaded) or when you are unsure of the current state."""
     try:
-        session = _resolve_session(runtime, "browser_snapshot")
-        snapshot = await session.snapshot()
-        screenshot = await _capture_step_screenshot(runtime, session, "snapshot")
-        return _snapshot_command(runtime, session, snapshot, tool_call_id, "", screenshot)
+        with _resolve_session(runtime, "browser_snapshot") as session:
+            snapshot = await session.snapshot()
+            screenshot = await _capture_step_screenshot(runtime, session, "snapshot")
+            return _snapshot_command(runtime, session, snapshot, tool_call_id, "", screenshot)
     except Exception as e:
         logger.error(f"browser_snapshot failed: {e}")
         return _tool_message(f"Error: browser snapshot failed: {e}", tool_call_id)
@@ -288,10 +306,10 @@ async def browser_click_tool(runtime: Runtime, ref: int, tool_call_id: Annotated
         ref: The element reference number to click.
     """
     try:
-        session = _resolve_session(runtime, "browser_click")
-        snapshot = await session.click(ref)
-        screenshot = await _capture_step_screenshot(runtime, session, "click")
-        return _snapshot_command(runtime, session, snapshot, tool_call_id, f"Clicked element [{ref}].", screenshot)
+        with _resolve_session(runtime, "browser_click") as session:
+            snapshot = await session.click(ref)
+            screenshot = await _capture_step_screenshot(runtime, session, "click")
+            return _snapshot_command(runtime, session, snapshot, tool_call_id, f"Clicked element [{ref}].", screenshot)
     except Exception as e:
         logger.error(f"browser_click failed: {e}")
         return _tool_message(f"Error: could not click element [{ref}]: {e}", tool_call_id)
@@ -316,11 +334,11 @@ async def browser_type_tool(
         submit: When true, press Enter after typing to submit.
     """
     try:
-        session = _resolve_session(runtime, "browser_type")
-        snapshot = await session.type_text(ref, text, submit=submit)
-        action = f"Typed into element [{ref}] and submitted." if submit else f"Typed into element [{ref}]."
-        screenshot = await _capture_step_screenshot(runtime, session, "type")
-        return _snapshot_command(runtime, session, snapshot, tool_call_id, action, screenshot)
+        with _resolve_session(runtime, "browser_type") as session:
+            snapshot = await session.type_text(ref, text, submit=submit)
+            action = f"Typed into element [{ref}] and submitted." if submit else f"Typed into element [{ref}]."
+            screenshot = await _capture_step_screenshot(runtime, session, "type")
+            return _snapshot_command(runtime, session, snapshot, tool_call_id, action, screenshot)
     except Exception as e:
         logger.error(f"browser_type failed: {e}")
         return _tool_message(f"Error: could not type into element [{ref}]: {e}", tool_call_id)
@@ -330,10 +348,10 @@ async def browser_type_tool(
 async def browser_get_text_tool(runtime: Runtime, tool_call_id: Annotated[str, InjectedToolCallId]) -> Command:
     """Read the visible text content of the current page. Use this to extract readable text after navigating/interacting, e.g. to quote results or summarize content. Output is truncated for large pages."""
     try:
-        session = _resolve_session(runtime, "browser_get_text")
-        cfg = _get_tool_config("browser_get_text")
-        max_chars = _as_int(cfg.get("max_chars"), 8000)
-        text = await session.get_text(max_chars=max_chars)
+        with _resolve_session(runtime, "browser_get_text") as session:
+            cfg = _get_tool_config("browser_get_text")
+            max_chars = _as_int(cfg.get("max_chars"), 8000)
+            text = await session.get_text(max_chars=max_chars)
         return _tool_message(text or "(page has no visible text)", tool_call_id)
     except Exception as e:
         logger.error(f"browser_get_text failed: {e}")
@@ -344,10 +362,10 @@ async def browser_get_text_tool(runtime: Runtime, tool_call_id: Annotated[str, I
 async def browser_back_tool(runtime: Runtime, tool_call_id: Annotated[str, InjectedToolCallId]) -> Command:
     """Go back to the previous page in the browser session's history."""
     try:
-        session = _resolve_session(runtime, "browser_back")
-        snapshot = await session.back()
-        screenshot = await _capture_step_screenshot(runtime, session, "back")
-        return _snapshot_command(runtime, session, snapshot, tool_call_id, "Went back.", screenshot)
+        with _resolve_session(runtime, "browser_back") as session:
+            snapshot = await session.back()
+            screenshot = await _capture_step_screenshot(runtime, session, "back")
+            return _snapshot_command(runtime, session, snapshot, tool_call_id, "Went back.", screenshot)
     except Exception as e:
         logger.error(f"browser_back failed: {e}")
         return _tool_message(f"Error: could not go back: {e}", tool_call_id)
@@ -399,10 +417,10 @@ async def browser_screenshot_tool(
         outputs_path = _thread_outputs_path(runtime)
         if isinstance(outputs_path, str):
             return _tool_message(outputs_path, tool_call_id)
-        session = _resolve_session(runtime, "browser_screenshot")
-        content = await session.screenshot_bytes(full_page=full_page)
-        name = _safe_screenshot_name(filename)
-        final_name = await asyncio.to_thread(_write_screenshot, outputs_path, name, content)
+        with _resolve_session(runtime, "browser_screenshot") as session:
+            content = await session.screenshot_bytes(full_page=full_page)
+            name = _safe_screenshot_name(filename)
+            final_name = await asyncio.to_thread(_write_screenshot, outputs_path, name, content)
         virtual_path = f"{_OUTPUTS_VIRTUAL_PREFIX}/{final_name}"
         return Command(
             update={

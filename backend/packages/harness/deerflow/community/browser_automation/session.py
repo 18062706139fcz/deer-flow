@@ -18,6 +18,7 @@ import asyncio
 import base64
 import contextlib
 import logging
+import os
 import threading
 import time
 from collections.abc import Callable, Coroutine
@@ -139,6 +140,25 @@ _DEFAULT_MAX_SESSIONS = 32
 _DEFAULT_IDLE_TIMEOUT_S = 30 * 60.0
 
 
+def browser_multi_worker_error(workers: int | None = None) -> str | None:
+    """Return the fail-closed reason for process-local browser sessions."""
+    if workers is None:
+        try:
+            workers = int(os.environ.get("GATEWAY_WORKERS", "1"))
+        except (TypeError, ValueError):
+            workers = 1
+    if workers <= 1:
+        return None
+    return f"GATEWAY_WORKERS={workers} cannot enable agentic browser tools: browser sessions are process-local and uvicorn does not provide thread affinity. Set GATEWAY_WORKERS=1 or disable the browser_navigate tool."
+
+
+def ensure_browser_worker_compatibility() -> None:
+    """Reject runtime browser use when requests can land in another worker."""
+    error = browser_multi_worker_error()
+    if error is not None:
+        raise RuntimeError(error)
+
+
 def _is_playwright_timeout_error(exc: Exception) -> bool:
     """Recognize Playwright timeouts without requiring Playwright at import time."""
     return exc.__class__.__name__ == "TimeoutError" and exc.__class__.__module__.startswith("playwright.")
@@ -238,6 +258,7 @@ class BrowserSession:
         viewport: dict[str, int],
         cdp_url: str | None = None,
         url_guard: Callable[[str], str | None] | None = None,
+        on_activity: Callable[[], None] | None = None,
     ) -> None:
         self._loop = loop
         self._headless = headless
@@ -257,6 +278,9 @@ class BrowserSession:
         # launching a private headless instance. The user watches the agent
         # drive their own visible browser, with their real login sessions.
         self._cdp_url = cdp_url
+        self._on_activity = on_activity
+        self._activity_lock = threading.Lock()
+        self._active_refs = 0
         self._connected_over_cdp = False
         self._playwright: Playwright | None = None
         self._browser: Browser | None = None
@@ -280,6 +304,31 @@ class BrowserSession:
         self._input_live_frame_generation = 0
         self._input_live_frame_pending = False
         self._page_listener_bound = False
+
+    @property
+    def active_refs(self) -> int:
+        with self._activity_lock:
+            return self._active_refs
+
+    def _pin(self) -> None:
+        """Keep this session in the manager while a caller owns it."""
+        with self._activity_lock:
+            self._active_refs += 1
+
+    def _unpin(self) -> None:
+        with self._activity_lock:
+            self._active_refs = max(0, self._active_refs - 1)
+
+    @contextlib.contextmanager
+    def _activity(self):
+        """Reference a real browser operation and refresh its recency."""
+        self._pin()
+        if self._on_activity is not None:
+            self._on_activity()
+        try:
+            yield
+        finally:
+            self._unpin()
 
     async def _ensure_page(self) -> Page:
         if self._page is not None and not self._page.is_closed():
@@ -482,8 +531,9 @@ class BrowserSession:
     async def _emit_live_frame(self) -> None:
         if self._on_frame is None:
             return
-        self._on_frame(await self._live_frame())
-        self._last_manual_live_frame_at = time.monotonic()
+        with self._activity():
+            self._on_frame(await self._live_frame())
+            self._last_manual_live_frame_at = time.monotonic()
 
     async def _settle_live_frames(self) -> None:
         previous_delay = 0.0
@@ -696,49 +746,63 @@ class BrowserSession:
 
     # Public API — each marshals onto the private loop.
     async def navigate(self, url: str) -> PageSnapshot:
-        return await self._loop.run(self._navigate(url))
+        with self._activity():
+            return await self._loop.run(self._navigate(url))
 
     async def snapshot(self) -> PageSnapshot:
-        return await self._loop.run(self._snapshot())
+        with self._activity():
+            return await self._loop.run(self._snapshot())
 
     async def click(self, ref: int) -> PageSnapshot:
-        return await self._loop.run(self._click(ref))
+        with self._activity():
+            return await self._loop.run(self._click(ref))
 
     async def type_text(self, ref: int, text: str, submit: bool = False) -> PageSnapshot:
-        return await self._loop.run(self._type(ref, text, submit))
+        with self._activity():
+            return await self._loop.run(self._type(ref, text, submit))
 
     async def get_text(self, max_chars: int = 8000) -> str:
-        return await self._loop.run(self._get_text(max_chars))
+        with self._activity():
+            return await self._loop.run(self._get_text(max_chars))
 
     async def screenshot_bytes(self, full_page: bool = False) -> bytes:
-        return await self._loop.run(self._screenshot_bytes(full_page))
+        with self._activity():
+            return await self._loop.run(self._screenshot_bytes(full_page))
 
     async def live_frame(self) -> str:
-        return await self._loop.run(self._live_frame())
+        with self._activity():
+            return await self._loop.run(self._live_frame())
 
     async def push_live_frame(self) -> None:
-        await self._loop.run(self._push_live_frame())
+        with self._activity():
+            await self._loop.run(self._push_live_frame())
 
     def schedule_live_frames(self) -> None:
         self._loop.submit(self._push_live_frame())
 
     async def back(self) -> PageSnapshot:
-        return await self._loop.run(self._back())
+        with self._activity():
+            return await self._loop.run(self._back())
 
     async def current_url(self) -> str | None:
-        return await self._loop.run(self._current_url())
+        with self._activity():
+            return await self._loop.run(self._current_url())
 
     async def tabs(self) -> list[BrowserTab]:
-        return await self._loop.run(self._tabs())
+        with self._activity():
+            return await self._loop.run(self._tabs())
 
     async def start_screencast(self, on_frame: Callable[[str], None]) -> None:
-        await self._loop.run(self._start_screencast(on_frame))
+        with self._activity():
+            await self._loop.run(self._start_screencast(on_frame))
 
     async def stop_screencast(self, on_frame: Callable[[str], None] | None = None) -> None:
-        await self._loop.run(self._stop_screencast(on_frame))
+        with self._activity():
+            await self._loop.run(self._stop_screencast(on_frame))
 
     async def dispatch_input(self, event: dict) -> None:
-        await self._loop.run(self._dispatch_input(event))
+        with self._activity():
+            await self._loop.run(self._dispatch_input(event))
 
     async def close(self) -> None:
         await self._loop.run(self._close())
@@ -752,8 +816,10 @@ class BrowserSessionManager:
     browser per thread that ever used the tools (a real memory/FD leak). To bound
     that, ``get_session`` lazily evicts sessions that have been idle past
     ``idle_timeout_s`` and enforces a ``max_sessions`` cap by closing the
-    least-recently-used session. Eviction is best-effort and fire-and-forget on
-    the private Playwright loop so it never blocks the caller; the just-requested
+    least-recently-used unpinned session. Active browser operations and Live
+    WebSocket leases are reference-counted, so eviction never closes a session
+    while it is in use. Eviction is best-effort and fire-and-forget on the
+    private Playwright loop so it never blocks the caller; the just-requested
     thread is always kept.
     """
 
@@ -764,6 +830,11 @@ class BrowserSessionManager:
         self._max_sessions = max_sessions
         self._idle_timeout_s = idle_timeout_s
         self._lock = threading.Lock()
+
+    def _touch_session(self, key: str) -> None:
+        with self._lock:
+            if key in self._sessions:
+                self._last_used[key] = time.monotonic()
 
     def _ensure_loop(self) -> _PlaywrightLoopThread:
         if self._loop is None:
@@ -779,7 +850,9 @@ class BrowserSessionManager:
         viewport: dict[str, int] | None = None,
         cdp_url: str | None = None,
         url_guard: Callable[[str], str | None] | None = None,
+        pin: bool = False,
     ) -> BrowserSession:
+        ensure_browser_worker_compatibility()
         key = thread_id or "default"
         now = time.monotonic()
         with self._lock:
@@ -792,24 +865,52 @@ class BrowserSessionManager:
                     viewport=viewport or {"width": 1280, "height": 720},
                     cdp_url=cdp_url,
                     url_guard=url_guard,
+                    on_activity=lambda: self._touch_session(key),
                 )
                 self._sessions[key] = session
+            if pin:
+                session._pin()
             self._last_used[key] = now
             evicted = self._collect_evictable_locked(keep_key=key, now=now)
         for evicted_session in evicted:
             self._schedule_close(evicted_session)
         return session
 
-    def _collect_evictable_locked(self, *, keep_key: str, now: float) -> list[BrowserSession]:
+    @contextlib.contextmanager
+    def acquire_session(self, thread_id: str | None, **kwargs: Any):
+        """Acquire an atomically pinned session for one browser operation."""
+        key = thread_id or "default"
+        session = self.get_session(key, pin=True, **kwargs)
+        try:
+            yield session
+        finally:
+            self.release_session(key, session)
+
+    def release_session(self, thread_id: str | None, session: BrowserSession) -> None:
+        """Release a lease and restore idle/LRU bounds when it becomes evictable."""
+        key = thread_id or "default"
+        session._unpin()
+        now = time.monotonic()
+        with self._lock:
+            evicted = self._collect_evictable_locked(keep_key=None, now=now) if self._sessions.get(key) is session else []
+        for evicted_session in evicted:
+            self._schedule_close(evicted_session)
+
+    def _collect_evictable_locked(self, *, keep_key: str | None, now: float) -> list[BrowserSession]:
         """Drop idle/over-cap sessions from the registry; return them for close.
 
-        Must be called under ``self._lock``. ``keep_key`` (the just-touched
-        thread) is never evicted so an active request cannot lose its session.
+        Must be called under ``self._lock``. When set, ``keep_key`` (the
+        just-touched thread) is never evicted so a new request cannot lose its
+        session. Lease release passes ``None`` so newly unpinned sessions can
+        restore the configured bounds without waiting for another request.
         """
         to_close: list[BrowserSession] = []
         if self._idle_timeout_s > 0:
             for other_key, last_used in list(self._last_used.items()):
                 if other_key == keep_key:
+                    continue
+                session = self._sessions.get(other_key)
+                if session is not None and session.active_refs:
                     continue
                 if now - last_used >= self._idle_timeout_s:
                     session = self._sessions.pop(other_key, None)
@@ -818,7 +919,7 @@ class BrowserSessionManager:
                         to_close.append(session)
         if self._max_sessions > 0:
             while len(self._sessions) > self._max_sessions:
-                candidates = [(last_used, other_key) for other_key, last_used in self._last_used.items() if other_key != keep_key]
+                candidates = [(last_used, other_key) for other_key, last_used in self._last_used.items() if other_key != keep_key and (session := self._sessions.get(other_key)) is not None and not session.active_refs]
                 if not candidates:
                     break
                 _, lru_key = min(candidates)

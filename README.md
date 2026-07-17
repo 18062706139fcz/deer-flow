@@ -774,7 +774,7 @@ uv pip install 'deerflow-harness[browser]'
 playwright install chromium
 ```
 
-Then uncomment the `group: browser` tool entries in `config.yaml` (`browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_get_text`, `browser_back`, `browser_screenshot`, `browser_close`). Keep `headless: true` and `allow_private_addresses: false` for anything but local, trusted debugging.
+Then uncomment the `group: browser` tool entries in `config.yaml` (`browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_get_text`, `browser_back`, `browser_screenshot`, `browser_close`). Keep `headless: true` and `allow_private_addresses: false` for anything but local, trusted debugging. Browser sessions are process-local; keep `GATEWAY_WORKERS=1` while this tool group is enabled because ordinary uvicorn worker dispatch does not provide thread affinity.
 
 ### Context Engineering
 
