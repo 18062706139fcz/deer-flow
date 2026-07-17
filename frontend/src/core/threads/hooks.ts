@@ -1005,7 +1005,7 @@ export function useThreadStream({
     threadIdRef.current = normalizedThreadId;
   }, [threadId]);
 
-  const handleStreamStart = useCallback((_threadId: string, _runId = "") => {
+  const handleStreamStart = useCallback((_threadId: string, _runId: string) => {
     threadIdRef.current = _threadId;
     setOptimisticThreadId((currentOptimisticThreadId) => {
       const currentView = currentViewThreadIdRef.current;
@@ -1043,11 +1043,6 @@ export function useThreadStream({
     client: getAPIClient(isMock),
     assistantId: "lead_agent",
     threadId: onStreamThreadId,
-    onThreadId(createdThreadId) {
-      if (!threadIdRef.current) {
-        handleStreamStart(createdThreadId);
-      }
-    },
     reconnectOnMount: true,
     fetchStateHistory: { limit: 1 },
     onCreated(meta) {
