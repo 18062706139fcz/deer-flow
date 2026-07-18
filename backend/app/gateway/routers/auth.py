@@ -128,6 +128,7 @@ class RegisterRequest(BaseModel):
 
     email: EmailStr
     password: str = Field(..., min_length=8)
+    remember_me: bool = True
 
     _strong_password = field_validator("password")(classmethod(lambda cls, v: _validate_strong_password(v)))
 
@@ -330,7 +331,7 @@ async def register(request: Request, response: Response, body: RegisterRequest):
         )
 
     token = create_access_token(str(user.id), token_version=user.token_version)
-    _set_session_cookie(response, token, request)
+    _set_session_cookie(response, token, request, remember_me=body.remember_me)
 
     return UserResponse(id=str(user.id), email=user.email, system_role=user.system_role, oauth_provider=user.oauth_provider)
 
@@ -398,6 +399,7 @@ async def change_password(request: Request, response: Response, body: ChangePass
     # Re-issue cookie with new token_version
     token = create_access_token(str(user.id), token_version=user.token_version)
     _set_session_cookie(response, token, request, remember_me=body.remember_me)
+    _set_csrf_cookie(response, request)
 
     return MessageResponse(message="Password changed successfully")
 

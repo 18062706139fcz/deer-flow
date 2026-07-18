@@ -681,6 +681,20 @@ def test_session_cookie_policy_persists_on_localhost_http():
     assert policy.max_age == 7 * 24 * 3600
 
 
+def test_session_cookie_policy_persists_on_ipv4_loopback_range():
+    from starlette.requests import Request
+
+    from app.gateway.auth.session_cookie import resolve_session_cookie_policy
+
+    _setup_config()
+    request = Request(_make_request_scope(scheme="http", host="127.1.2.3:2026"))
+
+    policy = resolve_session_cookie_policy(request, remember_me=True)
+
+    assert policy.secure is False
+    assert policy.max_age == 7 * 24 * 3600
+
+
 def test_session_cookie_policy_degrades_public_http_to_session_cookie():
     from starlette.requests import Request
 
@@ -688,6 +702,27 @@ def test_session_cookie_policy_degrades_public_http_to_session_cookie():
 
     _setup_config()
     request = Request(_make_request_scope(scheme="http", host="sandbox.example"))
+
+    policy = resolve_session_cookie_policy(request, remember_me=True)
+
+    assert policy.secure is False
+    assert policy.max_age is None
+
+
+@pytest.mark.parametrize(
+    "spoofed_headers",
+    [
+        {"x-forwarded-host": "localhost:2026"},
+        {"forwarded": 'for=192.0.2.1;host="localhost:2026";proto=http'},
+    ],
+)
+def test_session_cookie_policy_ignores_forwarded_localhost_on_public_http(spoofed_headers):
+    from starlette.requests import Request
+
+    from app.gateway.auth.session_cookie import resolve_session_cookie_policy
+
+    _setup_config()
+    request = Request(_make_request_scope(scheme="http", host="sandbox.example", headers=spoofed_headers))
 
     policy = resolve_session_cookie_policy(request, remember_me=True)
 
@@ -754,6 +789,28 @@ def test_register_https_cookie_httponly_true_secure_true():
     assert "httponly" in cookie_header.lower()
     assert "secure" in cookie_header.lower()
     assert "max-age" in cookie_header.lower()
+
+
+def test_register_remember_me_false_keeps_access_and_csrf_session_only():
+    _setup_config()
+    client = TestClient(_make_auth_app(), base_url="https://deerflow.example")
+
+    resp = client.post(
+        "/api/v1/auth/register",
+        json={"email": _unique_email("register-session"), "password": "Tr0ub4dor3a", "remember_me": False},
+    )
+
+    assert resp.status_code == 201
+    set_cookies = _get_set_cookie_headers(resp)
+    access_cookies = [h for h in set_cookies if "access_token=" in h]
+    csrf_cookies = [h for h in set_cookies if "csrf_token=" in h]
+    preference_cookies = [h for h in set_cookies if "deerflow_session_persistent=" in h]
+    assert access_cookies and csrf_cookies and preference_cookies
+    assert "secure" in access_cookies[0].lower()
+    assert "secure" in csrf_cookies[0].lower()
+    assert "max-age" not in access_cookies[0].lower()
+    assert "max-age" not in csrf_cookies[0].lower()
+    assert "deerflow_session_persistent=0" in preference_cookies[0].lower()
 
 
 def test_login_https_sets_secure_cookie():
@@ -879,6 +936,38 @@ def test_change_password_preserves_session_only_preference():
     assert access_cookies and preference_cookies
     assert "max-age" not in access_cookies[0].lower()
     assert "deerflow_session_persistent=0" in preference_cookies[0].lower()
+
+
+def test_change_password_reissues_access_and_csrf_in_lockstep_when_preference_changes():
+    _setup_config()
+    client = TestClient(_make_auth_app(), base_url="https://deerflow.example")
+    email = _unique_email("change-password-persistent")
+    client.post("/api/v1/auth/register", json={"email": email, "password": "Tr0ub4dor3a"})
+    client.post(
+        "/api/v1/auth/login/local",
+        data={"username": email, "password": "Tr0ub4dor3a", "remember_me": "false"},
+    )
+    csrf_token = client.cookies.get("csrf_token")
+
+    resp = client.post(
+        "/api/v1/auth/change-password",
+        json={
+            "current_password": "Tr0ub4dor3a",
+            "new_password": "An0therStrongPwd!",
+            "remember_me": True,
+        },
+        headers={"X-CSRF-Token": csrf_token},
+    )
+
+    assert resp.status_code == 200
+    set_cookies = _get_set_cookie_headers(resp)
+    access_cookies = [h.lower() for h in set_cookies if "access_token=" in h]
+    csrf_cookies = [h.lower() for h in set_cookies if "csrf_token=" in h]
+    assert access_cookies and csrf_cookies
+    assert "secure" in access_cookies[0]
+    assert "secure" in csrf_cookies[0]
+    assert "max-age=604800" in access_cookies[0]
+    assert "max-age=604800" in csrf_cookies[0]
 
 
 def test_initialize_remember_me_false_keeps_access_and_csrf_session_only():

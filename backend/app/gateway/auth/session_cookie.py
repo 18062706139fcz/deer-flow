@@ -3,13 +3,17 @@
 import logging
 import os
 from dataclasses import dataclass
-from urllib.parse import urlsplit
+from ipaddress import ip_address
 
 from fastapi import Request, Response
 
 from app.gateway.auth.config import get_auth_config
-from app.gateway.auth.session_cookie_state import SESSION_COOKIE_ISSUED_STATE_ATTR, SESSION_COOKIE_MAX_AGE_STATE_ATTR, SESSION_COOKIE_SECURE_STATE_ATTR
-from app.gateway.csrf_middleware import _request_origin, is_secure_request
+from app.gateway.auth.session_cookie_state import (
+    SESSION_COOKIE_ISSUED_STATE_ATTR,
+    SESSION_COOKIE_MAX_AGE_STATE_ATTR,
+    SESSION_COOKIE_SECURE_STATE_ATTR,
+)
+from app.gateway.csrf_middleware import is_secure_request
 
 ACCESS_TOKEN_COOKIE_NAME = "access_token"
 SESSION_PERSISTENCE_COOKIE_NAME = "deerflow_session_persistent"
@@ -32,12 +36,7 @@ def _env_flag_enabled(name: str) -> bool:
 
 
 def _request_hostname(request: Request) -> str:
-    origin = _request_origin(request)
-    if origin:
-        host = urlsplit(origin).hostname
-        if host:
-            return host.lower()
-
+    """Return the direct request host without trusting forwarded host headers."""
     if request.url.hostname:
         return request.url.hostname.lower()
     return ""
@@ -46,7 +45,12 @@ def _request_hostname(request: Request) -> str:
 def is_local_browser_origin(request: Request) -> bool:
     """Return True for loopback browser origins where HTTP persistence is acceptable."""
     host = _request_hostname(request)
-    return host in {"localhost", "127.0.0.1", "::1"} or host.endswith(".localhost")
+    if host == "localhost" or host.endswith(".localhost"):
+        return True
+    try:
+        return ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def _remember_me_from_cookie(request: Request, *, default: bool) -> bool:

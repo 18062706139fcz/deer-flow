@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useTheme } from "next-themes";
 import { useEffect, useState } from "react";
 
+import { RememberSessionOption } from "@/components/auth/remember-session-option";
 import { Button } from "@/components/ui/button";
 import { FlickeringGrid } from "@/components/ui/flickering-grid";
 import { Input } from "@/components/ui/input";
@@ -177,7 +178,7 @@ export default function LoginPage() {
             remember_me: String(rememberMe),
             username: email,
           })
-        : JSON.stringify({ email, password });
+        : JSON.stringify({ email, password, remember_me: rememberMe });
 
       const headers: HeadersInit = isLogin
         ? { "Content-Type": "application/x-www-form-urlencoded" }
@@ -202,9 +203,7 @@ export default function LoginPage() {
         return;
       }
 
-      if (isLogin) {
-        saveRememberLoginPreference({ email, rememberMe });
-      }
+      saveRememberLoginPreference({ email, rememberMe });
 
       // Both login and register set a cookie — redirect to workspace
       router.push(redirectPath);
@@ -279,22 +278,10 @@ export default function LoginPage() {
             />
           </div>
 
-          {isLogin && (
-            <label className="text-muted-foreground flex items-start gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={rememberMe}
-                onChange={(e) => setRememberMe(e.currentTarget.checked)}
-                className="border-input mt-1 h-4 w-4 rounded"
-              />
-              <span>
-                <span className="text-foreground block font-medium">
-                  {t.login.rememberMe}
-                </span>
-                <span>{t.login.rememberMeDescription}</span>
-              </span>
-            </label>
-          )}
+          <RememberSessionOption
+            checked={rememberMe}
+            onCheckedChange={setRememberMe}
+          />
 
           {error && <p className="text-sm text-red-500">{error}</p>}
 
