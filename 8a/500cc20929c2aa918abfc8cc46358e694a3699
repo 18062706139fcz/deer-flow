@@ -1,0 +1,21 @@
+docs/superpowers/specs/2026-07-18-pr-4282-review-fixes-design.md
+  s_f087c9f5808c44::t_998ab811250abb 1-101
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "8a500cc20929c2aa918abfc8cc46358e694a3699",
+  "prompts": {},
+  "sessions": {
+    "s_f087c9f5808c44": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f73ea-c968-7af2-9203-9fa824c8a913",
+        "model": "unknown"
+      },
+      "human_author": "ryker <2279549769@qq.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
