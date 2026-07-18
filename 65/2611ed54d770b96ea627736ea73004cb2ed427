@@ -1,0 +1,27 @@
+README.md
+  s_a4bce8bb207fc1::t_2df357abc3474c 330
+backend/AGENTS.md
+  s_a4bce8bb207fc1::t_05e4875254a895 332
+backend/app/gateway/routers/thread_runs.py
+  s_a4bce8bb207fc1::t_d64fc0dbeb8349 711,957
+backend/tests/test_thread_run_query_validation.py
+  s_a4bce8bb207fc1::t_9448ef8ad43ffd 1-40
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "652611ed54d770b96ea627736ea73004cb2ed427",
+  "prompts": {},
+  "sessions": {
+    "s_a4bce8bb207fc1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f737b-b034-7400-9bdb-b4f7ecf66e95",
+        "model": "unknown"
+      },
+      "human_author": "ryker <2279549769@qq.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
