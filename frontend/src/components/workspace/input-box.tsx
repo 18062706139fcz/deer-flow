@@ -23,9 +23,11 @@ import { useSearchParams } from "next/navigation";
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
+  type ChangeEvent,
   type ComponentProps,
   type ClipboardEvent,
   type FormEvent,
@@ -88,6 +90,7 @@ import {
   getSessionComposerDraftStorage,
   readComposerDraft,
   resolveComposerDraft,
+  type ComposerDraft,
   writeComposerDraft,
 } from "@/core/threads/composer-draft";
 import { threadTokenUsageQueryKey } from "@/core/threads/token-usage";
@@ -377,11 +380,8 @@ export function InputBox({
     key: string;
     draft: { text: string; skillName: string | null };
   } | null>(null);
-  const acceptedDraftRef = useRef<{
-    key: string;
-    draft: { text: string; skillName: string | null };
-  } | null>(null);
   const draftSaveTimerRef = useRef<number | null>(null);
+  const draftSaveGenerationRef = useRef(0);
 
   const [followups, setFollowups] = useState<string[]>([]);
   const { data: suggestionsConfig } = useSuggestionsConfig();
@@ -603,24 +603,46 @@ export function InputBox({
     window.clearTimeout(draftSaveTimerRef.current);
     draftSaveTimerRef.current = null;
   }, []);
-  const draftMatches = useCallback(
-    (
-      left: { text: string; skillName: string | null },
-      right: { text: string; skillName: string | null },
-    ) => left.text === right.text && left.skillName === right.skillName,
-    [],
+  const invalidateDraftSaveTimer = useCallback(() => {
+    draftSaveGenerationRef.current += 1;
+    cancelDraftSaveTimer();
+  }, [cancelDraftSaveTimer]);
+  const scheduleDraftSave = useCallback(
+    (draft: ComposerDraft, key = draftKey) => {
+      if (
+        !draft.text &&
+        !draft.skillName &&
+        pendingDraftSubmissionKeyRef.current === key
+      ) {
+        return null;
+      }
+      if (draft.text || draft.skillName) {
+        pendingDraftSubmissionKeyRef.current = null;
+      }
+
+      latestDraftRef.current = { key, draft };
+      cancelDraftSaveTimer();
+      draftSaveGenerationRef.current += 1;
+      const generation = draftSaveGenerationRef.current;
+      const timer = window.setTimeout(() => {
+        if (
+          draftSaveGenerationRef.current !== generation ||
+          draftSaveTimerRef.current !== timer
+        ) {
+          return;
+        }
+        draftSaveTimerRef.current = null;
+        writeComposerDraft(getSessionComposerDraftStorage(), key, draft);
+      }, COMPOSER_DRAFT_SAVE_DELAY_MS);
+      draftSaveTimerRef.current = timer;
+      return timer;
+    },
+    [cancelDraftSaveTimer, draftKey],
   );
   const flushLatestDraft = useCallback(
     (expectedKey?: string) => {
       const latest = latestDraftRef.current;
       if (!latest || (expectedKey && latest.key !== expectedKey)) {
-        return;
-      }
-      const accepted = acceptedDraftRef.current;
-      if (
-        accepted?.key === latest.key &&
-        draftMatches(accepted.draft, latest.draft)
-      ) {
         return;
       }
       cancelDraftSaveTimer();
@@ -630,7 +652,7 @@ export function InputBox({
         latest.draft,
       );
     },
-    [cancelDraftSaveTimer, draftMatches],
+    [cancelDraftSaveTimer],
   );
 
   const promptHistory = useMemo(() => {
@@ -658,7 +680,7 @@ export function InputBox({
     return history;
   }, [thread.messages]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     promptHistoryIndexRef.current = null;
     promptHistoryDraftRef.current = "";
     setTextInput("");
@@ -667,12 +689,11 @@ export function InputBox({
     setHydratedDraftKey(null);
     pendingDraftSubmissionKeyRef.current = null;
     latestDraftRef.current = null;
-    acceptedDraftRef.current = null;
-    cancelDraftSaveTimer();
+    invalidateDraftSaveTimer();
     return () => flushLatestDraft(draftKey);
-  }, [cancelDraftSaveTimer, draftKey, flushLatestDraft, setTextInput]);
+  }, [draftKey, flushLatestDraft, invalidateDraftSaveTimer, setTextInput]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const handlePageHide = () => flushLatestDraft();
     window.addEventListener("pagehide", handlePageHide);
     return () => window.removeEventListener("pagehide", handlePageHide);
@@ -728,38 +749,16 @@ export function InputBox({
       return;
     }
 
-    const draft = {
+    const draft: ComposerDraft = {
       text: textInput.value ?? "",
       skillName:
         selectedSlashSkill?.kind === "skill" ? selectedSlashSkill.name : null,
     };
-    const accepted = acceptedDraftRef.current;
-    if (accepted?.key === draftKey && draftMatches(accepted.draft, draft)) {
-      return;
-    }
-    if (
-      !draft.text &&
-      !draft.skillName &&
-      pendingDraftSubmissionKeyRef.current === draftKey
-    ) {
-      return;
-    }
-    if (draft.text || draft.skillName) {
-      pendingDraftSubmissionKeyRef.current = null;
-      acceptedDraftRef.current = null;
-    }
-    latestDraftRef.current = { key: draftKey, draft };
-
-    const timer = window.setTimeout(() => {
-      draftSaveTimerRef.current = null;
-      const accepted = acceptedDraftRef.current;
-      if (accepted?.key === draftKey && draftMatches(accepted.draft, draft)) {
+    const timer = scheduleDraftSave(draft, draftKey);
+    return () => {
+      if (timer === null) {
         return;
       }
-      writeComposerDraft(getSessionComposerDraftStorage(), draftKey, draft);
-    }, COMPOSER_DRAFT_SAVE_DELAY_MS);
-    draftSaveTimerRef.current = timer;
-    return () => {
       window.clearTimeout(timer);
       if (draftSaveTimerRef.current === timer) {
         draftSaveTimerRef.current = null;
@@ -767,8 +766,8 @@ export function InputBox({
     };
   }, [
     draftKey,
-    draftMatches,
     hydratedDraftKey,
+    scheduleDraftSave,
     selectedSlashSkill,
     textInput.value,
   ]);
@@ -1066,11 +1065,6 @@ export function InputBox({
       const quotes = sidecar?.conversationQuotes ?? [];
       const quoteIds = quotes.map((quote) => quote.id);
       const quoteContexts = quotes.map((quote) => quote.context);
-      const draftAtSubmit = {
-        text: textInput.value ?? "",
-        skillName:
-          selectedSlashSkill?.kind === "skill" ? selectedSlashSkill.name : null,
-      };
       pendingDraftSubmissionKeyRef.current = draftKey;
       const submitOptions: InputBoxSubmitOptions = {
         ...(quotes.length
@@ -1088,12 +1082,8 @@ export function InputBox({
         onSent: () => {
           if (pendingDraftSubmissionKeyRef.current === draftKey) {
             pendingDraftSubmissionKeyRef.current = null;
-            acceptedDraftRef.current = {
-              key: draftKey,
-              draft: draftAtSubmit,
-            };
             latestDraftRef.current = null;
-            cancelDraftSaveTimer();
+            invalidateDraftSaveTimer();
             clearComposerDraft(getSessionComposerDraftStorage(), draftKey);
           }
           sidecar?.clearConversationQuotes(quoteIds);
@@ -1124,16 +1114,14 @@ export function InputBox({
     [
       context,
       draftKey,
-      cancelDraftSaveTimer,
+      invalidateDraftSaveTimer,
       onContextChange,
       onSubmit,
       reportUploadLimitViolations,
       resolvedModelName,
-      selectedSlashSkill,
       selectedModel?.supports_thinking,
       sidecar,
       t.inputBox.suggestionPlaceholderRequired,
-      textInput.value,
       uploadLimits,
     ],
   );
@@ -1762,15 +1750,29 @@ export function InputBox({
     ],
   );
 
-  const handlePromptTextareaChange = useCallback(() => {
-    if (voiceListening) {
-      abortVoiceInput();
-    }
-    abortInputPolishRequest();
-    setInputPolishUndo(null);
-    promptHistoryIndexRef.current = null;
-    promptHistoryDraftRef.current = "";
-  }, [abortInputPolishRequest, abortVoiceInput, voiceListening]);
+  const handlePromptTextareaChange = useCallback(
+    (event: ChangeEvent<HTMLTextAreaElement>) => {
+      if (voiceListening) {
+        abortVoiceInput();
+      }
+      abortInputPolishRequest();
+      setInputPolishUndo(null);
+      promptHistoryIndexRef.current = null;
+      promptHistoryDraftRef.current = "";
+      scheduleDraftSave({
+        text: event.currentTarget.value,
+        skillName:
+          selectedSlashSkill?.kind === "skill" ? selectedSlashSkill.name : null,
+      });
+    },
+    [
+      abortInputPolishRequest,
+      abortVoiceInput,
+      scheduleDraftSave,
+      selectedSlashSkill,
+      voiceListening,
+    ],
+  );
 
   const updateInlineSkillTextInput = useCallback(
     (element: HTMLElement) => {
@@ -1779,9 +1781,21 @@ export function InputBox({
       }
       promptHistoryIndexRef.current = null;
       promptHistoryDraftRef.current = "";
-      textInput.setInput(element.textContent ?? "");
+      const nextText = element.textContent ?? "";
+      textInput.setInput(nextText);
+      scheduleDraftSave({
+        text: nextText,
+        skillName:
+          selectedSlashSkill?.kind === "skill" ? selectedSlashSkill.name : null,
+      });
     },
-    [abortVoiceInput, textInput, voiceListening],
+    [
+      abortVoiceInput,
+      scheduleDraftSave,
+      selectedSlashSkill,
+      textInput,
+      voiceListening,
+    ],
   );
 
   useEffect(() => {

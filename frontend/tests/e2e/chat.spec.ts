@@ -68,6 +68,33 @@ test.describe("Chat workspace", () => {
     );
   });
 
+  test("restores a repeated draft that matches the last sent prompt", async ({
+    page,
+  }) => {
+    await page.goto("/workspace/chats/new");
+
+    const textarea = page.getByPlaceholder(/how can i assist you/i);
+    await expect(textarea).toBeVisible({ timeout: 15_000 });
+    await textarea.fill("Repeat this request");
+    await textarea.press("Enter");
+    await expect(page.getByText("Hello from DeerFlow!")).toBeVisible({
+      timeout: 10_000,
+    });
+    await expect(textarea).toHaveValue("");
+
+    await textarea.fill("Repeat this request");
+    await expect
+      .poll(() =>
+        page.evaluate(() => Object.values(window.sessionStorage).join("\n")),
+      )
+      .toContain("Repeat this request");
+
+    await page.reload();
+    await expect(page.getByPlaceholder(/how can i assist you/i)).toHaveValue(
+      "Repeat this request",
+    );
+  });
+
   test("restores a selected slash skill draft after reload", async ({
     page,
   }) => {
