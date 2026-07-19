@@ -1,0 +1,27 @@
+README.md
+  s_0baa2a2557b5fa::t_5851b3bd00e8ce 685-686
+frontend/AGENTS.md
+  s_0baa2a2557b5fa::t_2152aa6f09881b 85
+frontend/src/core/threads/utils.ts
+  s_0baa2a2557b5fa::t_a928fce8b3a708 24,39-40
+frontend/tests/unit/core/threads/utils.test.ts
+  s_0baa2a2557b5fa::t_0584267fc85e6a 19-30
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "aabc5b5be63b86b4c07c9c6d6ece16a87b36171f",
+  "prompts": {},
+  "sessions": {
+    "s_0baa2a2557b5fa": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f79f8-c6db-7822-a39c-52154435c92d",
+        "model": "unknown"
+      },
+      "human_author": "ryker <2279549769@qq.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
