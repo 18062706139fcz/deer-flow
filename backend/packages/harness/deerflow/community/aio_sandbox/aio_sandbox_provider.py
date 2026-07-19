@@ -328,7 +328,30 @@ class AioSandboxProvider(WarmPoolLifecycleMixin[SandboxInfo], SandboxProvider):
             mounts.extend(lark_cli_mounts)
             logger.info(f"Adding Lark CLI runtime mounts: {lark_cli_mounts}")
 
-        return mounts
+        return self._dedupe_mounts_by_container_path(mounts)
+
+    @staticmethod
+    def _dedupe_mounts_by_container_path(mounts: list[tuple[str, str, bool]]) -> list[tuple[str, str, bool]]:
+        """Keep the first mount for each container path.
+
+        Duplicate container paths are rejected by the provisioner and can also
+        fail local Docker creation. The earlier mount wins because mount helpers
+        are appended in priority order: thread data, skill roots, integration
+        skill roots, then integration runtimes/credentials.
+        """
+        seen: set[str] = set()
+        deduped: list[tuple[str, str, bool]] = []
+        for host_path, container_path, read_only in mounts:
+            if container_path in seen:
+                logger.warning(
+                    "Skipping duplicate sandbox mount for container path %s from host %s",
+                    container_path,
+                    host_path,
+                )
+                continue
+            seen.add(container_path)
+            deduped.append((host_path, container_path, read_only))
+        return deduped
 
     @staticmethod
     def _get_thread_mounts(thread_id: str, *, user_id: str | None = None) -> list[tuple[str, str, bool]]:
@@ -425,21 +448,18 @@ class AioSandboxProvider(WarmPoolLifecycleMixin[SandboxInfo], SandboxProvider):
 
     @staticmethod
     def _get_user_skill_mounts(*, user_id: str | None = None) -> list[tuple[str, str, bool]]:
-        """Mount per-user custom and managed integration skills into AIO sandboxes.
+        """Mount managed integration skills into AIO sandboxes.
 
-        The global skills mount only exposes ``skills/public`` and legacy global
-        custom content. User-scoped skills live under ``DEER_FLOW_HOME/users`` and
-        need their own submounts so sandbox paths match the skill registry.
+        Per-user custom skills are already mounted by ``_get_skills_mounts``.
+        This helper adds the shared integration skill root so sandbox paths match
+        the skill registry without duplicating ``/mnt/skills/custom``.
         """
         try:
             config = get_app_config()
             paths = get_paths()
-            effective_user_id = AioSandboxProvider._effective_acquire_user_id(user_id)
             skills_container_path = config.skills.container_path
-            paths.user_custom_skills_dir(effective_user_id).mkdir(parents=True, exist_ok=True)
             paths.integration_skills_dir().mkdir(parents=True, exist_ok=True)
             return [
-                (paths.host_user_custom_skills_dir(effective_user_id), f"{skills_container_path}/custom", True),
                 (paths.host_integration_skills_dir(), f"{skills_container_path}/integrations", True),
             ]
         except Exception as e:
