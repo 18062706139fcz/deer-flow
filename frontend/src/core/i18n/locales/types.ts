@@ -713,6 +713,8 @@ export interface Translations {
     emailPlaceholder: string;
     password: string;
     passwordPlaceholder: string;
+    rememberMe: string;
+    rememberMeDescription: string;
     pleaseWait: string;
     signIn: string;
     createAccount: string;

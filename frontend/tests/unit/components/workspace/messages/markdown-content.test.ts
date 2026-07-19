@@ -90,3 +90,18 @@ describe("MarkdownContent streaming code blocks", () => {
     expect(renderMarkdown(content, false)).toContain(content);
   });
 });
+
+describe("MarkdownContent strikethrough", () => {
+  it("preserves single tildes in temperature ranges", () => {
+    const html = renderMarkdown("周六23~30℃；周日22~30℃", false);
+
+    expect(html).toContain("周六23~30℃；周日22~30℃");
+    expect(html).not.toContain("<del>");
+  });
+
+  it("continues to render double-tilde strikethrough", () => {
+    const html = renderMarkdown("状态：~~已取消~~", false);
+
+    expect(html).toContain("<del>已取消</del>");
+  });
+});
