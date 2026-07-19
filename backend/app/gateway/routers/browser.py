@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisco
 from pydantic import BaseModel, Field
 
 from app.gateway.authz import require_permission
-from deerflow.community.browser_automation.session import browser_multi_worker_error
+from app.gateway.browser_capability import browser_capability
 from deerflow.config.paths import get_paths
 from deerflow.runtime.user_context import get_effective_user_id, reset_current_user, set_current_user
 
@@ -50,15 +50,10 @@ def _browser_tools_enabled() -> bool:
     from deerflow.config import get_app_config
 
     with contextlib.suppress(Exception):
-        tool_cfg = get_app_config().get_tool_config("browser_navigate")
-        if tool_cfg is None or browser_multi_worker_error() is not None:
-            return False
-        extra = tool_cfg.model_extra or {}
-        cdp_url = extra.get("cdp_url")
-        if isinstance(cdp_url, str) and cdp_url.strip() and extra.get("allow_unguarded_cdp") is not True:
-            logger.error("browser automation disabled: cdp_url requires allow_unguarded_cdp: true")
-            return False
-        return True
+        capability = browser_capability(get_app_config())
+        if capability.configured and not capability.available and capability.reason:
+            logger.error("browser automation disabled: %s", capability.reason)
+        return capability.available
     return False
 
 
@@ -91,7 +86,7 @@ async def navigate_browser(thread_id: str, body: BrowserNavigateRequest, request
         raise HTTPException(status_code=404, detail="Browser automation is not enabled")
 
     try:
-        from deerflow.community.browser_automation import navigate_and_capture
+        from deerflow.community.browser_automation import navigate_and_capture, redact_browser_url
     except ImportError as exc:  # Playwright is an optional dependency.
         raise HTTPException(status_code=501, detail="Browser automation is not available") from exc
 
@@ -106,8 +101,13 @@ async def navigate_browser(thread_id: str, body: BrowserNavigateRequest, request
         # SSRF / URL validation failure.
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        logger.exception("Browser navigate failed: thread_id=%s url=%s err=%s", thread_id, url, exc)
-        raise HTTPException(status_code=502, detail=f"Browser navigation failed: {exc}") from exc
+        logger.error(
+            "Browser navigate failed: thread_id=%s url=%s err_type=%s",
+            thread_id,
+            redact_browser_url(url),
+            type(exc).__name__,
+        )
+        raise HTTPException(status_code=502, detail="Browser navigation failed") from exc
 
     return BrowserNavigateResponse(**result)
 
@@ -213,7 +213,12 @@ async def browser_stream(websocket: WebSocket, thread_id: str) -> None:
         return
 
     try:
-        from deerflow.community.browser_automation import get_browser_session_manager, validate_browser_url
+        from deerflow.community.browser_automation import (
+            BrowserLiveViewerError,
+            BrowserSessionCapacityError,
+            get_browser_session_manager,
+            validate_browser_url,
+        )
     except ImportError:
         await websocket.close(code=4501)
         return
@@ -266,16 +271,25 @@ async def browser_stream(websocket: WebSocket, thread_id: str) -> None:
         return value.strip() or None if isinstance(value, str) else None
 
     manager = get_browser_session_manager()
-    session_lease = manager.acquire_session(
-        thread_id,
-        headless=_cfg_bool("headless", True),
-        timeout_ms=_cfg_int("timeout_ms", 30000),
-        viewport={"width": _cfg_int("viewport_width", 1280), "height": _cfg_int("viewport_height", 720)},
-        cdp_url=_cfg_str("cdp_url"),
-        allow_unguarded_cdp=_cfg_bool("allow_unguarded_cdp", False),
-        url_guard=validate_browser_url,
-    )
-    session = session_lease.__enter__()
+    try:
+        session_lease = manager.acquire_session(
+            thread_id,
+            headless=_cfg_bool("headless", True),
+            timeout_ms=_cfg_int("timeout_ms", 30000),
+            viewport={"width": _cfg_int("viewport_width", 1280), "height": _cfg_int("viewport_height", 720)},
+            cdp_url=_cfg_str("cdp_url"),
+            allow_unguarded_cdp=_cfg_bool("allow_unguarded_cdp", False),
+            url_guard=validate_browser_url,
+        )
+        session = session_lease.__enter__()
+    except BrowserSessionCapacityError:
+        await websocket.close(code=4429)
+        reset_current_user(token)
+        return
+    except Exception:
+        await websocket.close(code=4501)
+        reset_current_user(token)
+        return
 
     async def _pump_frames() -> None:
         while True:
@@ -424,7 +438,11 @@ async def browser_stream(websocket: WebSocket, thread_id: str) -> None:
                 current = await session.current_url()
                 if _should_apply_browser_seed(current, seed):
                     await session.navigate(seed)
-        await session.start_screencast(_on_frame)
+        try:
+            await session.start_screencast(_on_frame)
+        except BrowserLiveViewerError:
+            await websocket.close(code=4409)
+            return
         await _send_url()
         await _send_tabs()
         input_task = asyncio.create_task(_process_inputs())

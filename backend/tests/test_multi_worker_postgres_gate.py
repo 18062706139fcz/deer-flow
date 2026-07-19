@@ -67,7 +67,7 @@ def test_gate_rejects_process_local_browser_with_multi_worker(monkeypatch):
 
 def test_runtime_browser_surface_stays_disabled_after_incompatible_hot_reload(monkeypatch):
     monkeypatch.setenv("GATEWAY_WORKERS", "2")
-    live_config = SimpleNamespace(get_tool_config=lambda name: object() if name == "browser_navigate" else None)
+    live_config = SimpleNamespace(tools=[SimpleNamespace(name="browser_navigate", model_extra={})])
 
     with patch("deerflow.config.get_app_config", return_value=live_config):
         assert _browser_tools_enabled() is False

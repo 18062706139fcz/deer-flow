@@ -159,12 +159,20 @@ def ensure_browser_worker_compatibility() -> None:
         raise RuntimeError(error)
 
 
+class BrowserSessionCapacityError(RuntimeError):
+    """Raised when the browser session cap has no evictable slot."""
+
+
+class BrowserLiveViewerError(RuntimeError):
+    """Raised when a second Live viewer tries to attach to a session."""
+
+
 def _is_playwright_timeout_error(exc: Exception) -> bool:
     """Recognize Playwright timeouts without requiring Playwright at import time."""
     return exc.__class__.__name__ == "TimeoutError" and exc.__class__.__module__.startswith("playwright.")
 
 
-def _redact_url(url: str) -> str:
+def redact_browser_url(url: str) -> str:
     """Drop query/fragment so a blocked-URL log line can't leak tokens/PII."""
     try:
         parsed = urlparse(url)
@@ -361,7 +369,7 @@ class BrowserSession:
                     # not aborted; cdp_url is documented local/trusted-only.
                     logger.warning(
                         "browser SSRF request guard is disabled for CDP-attached session (cdp_url=%s)",
-                        _redact_url(self._cdp_url),
+                        redact_browser_url(self._cdp_url),
                     )
                 self._context = self._browser.contexts[0] if self._browser.contexts else await self._browser.new_context()
                 self._context.set_default_timeout(self._timeout_ms)
@@ -434,7 +442,7 @@ class BrowserSession:
             with contextlib.suppress(Exception):
                 url = route.request.url
             if url.startswith(("http://", "https://")) and guard(url) is not None:
-                logger.warning("browser request blocked by SSRF guard: %s", _redact_url(url))
+                logger.warning("browser request blocked by SSRF guard: %s", redact_browser_url(url))
                 with contextlib.suppress(Exception):
                     await route.abort("blockedbyclient")
                 return
@@ -682,6 +690,8 @@ class BrowserSession:
         throttled screenshot.
         """
         page = await self._ensure_page()
+        if self._on_frame is not None and self._on_frame is not on_frame:
+            raise BrowserLiveViewerError("Browser live stream already has an active viewer")
         await self._stop_screencast()
         self._on_frame = on_frame
         self._screencast_page = page
@@ -831,9 +841,10 @@ class BrowserSessionManager:
     ``idle_timeout_s`` and enforces a ``max_sessions`` cap by closing the
     least-recently-used unpinned session. Active browser operations and Live
     WebSocket leases are reference-counted, so eviction never closes a session
-    while it is in use. Eviction is best-effort and fire-and-forget on the
-    private Playwright loop so it never blocks the caller; the just-requested
-    thread is always kept.
+    while it is in use. Admission is a hard bound: when every existing session
+    is pinned, a new thread is rejected instead of exceeding ``max_sessions``.
+    Eviction is fire-and-forget on the private Playwright loop so it never
+    blocks the caller; the just-requested thread is always kept.
     """
 
     def __init__(self, *, max_sessions: int = _DEFAULT_MAX_SESSIONS, idle_timeout_s: float = _DEFAULT_IDLE_TIMEOUT_S) -> None:
@@ -871,9 +882,16 @@ class BrowserSessionManager:
             raise RuntimeError("cdp_url uses a browser context where DeerFlow cannot enforce its SSRF request guard; set allow_unguarded_cdp: true only for an explicitly trusted local Chrome session")
         key = thread_id or "default"
         now = time.monotonic()
+        evicted: list[BrowserSession] = []
         with self._lock:
             session = self._sessions.get(key)
             if session is None:
+                evicted.extend(self._collect_idle_locked(keep_key=key, now=now))
+                if self._max_sessions > 0 and len(self._sessions) >= self._max_sessions:
+                    lru = self._pop_lru_unpinned_locked(excluded_keys={key})
+                    if lru is None:
+                        raise BrowserSessionCapacityError(f"Browser session capacity is full ({self._max_sessions}); close an active Live browser before opening another")
+                    evicted.append(lru)
                 session = BrowserSession(
                     self._ensure_loop(),
                     headless=headless,
@@ -887,7 +905,7 @@ class BrowserSessionManager:
             if pin:
                 session._pin()
             self._last_used[key] = now
-            evicted = self._collect_evictable_locked(keep_key=key, now=now)
+            evicted.extend(self._collect_evictable_locked(keep_key=key, now=now))
         for evicted_session in evicted:
             self._schedule_close(evicted_session)
         return session
@@ -921,6 +939,19 @@ class BrowserSessionManager:
         restore the configured bounds without waiting for another request.
         """
         to_close: list[BrowserSession] = []
+        to_close.extend(self._collect_idle_locked(keep_key=keep_key, now=now))
+        if self._max_sessions > 0:
+            excluded = {keep_key} if keep_key is not None else set()
+            while len(self._sessions) > self._max_sessions:
+                session = self._pop_lru_unpinned_locked(excluded_keys=excluded)
+                if session is None:
+                    break
+                to_close.append(session)
+        return to_close
+
+    def _collect_idle_locked(self, *, keep_key: str | None, now: float) -> list[BrowserSession]:
+        """Drop idle, unpinned sessions from the registry."""
+        to_close: list[BrowserSession] = []
         if self._idle_timeout_s > 0:
             for other_key, last_used in list(self._last_used.items()):
                 if other_key == keep_key:
@@ -933,17 +964,16 @@ class BrowserSessionManager:
                     self._last_used.pop(other_key, None)
                     if session is not None:
                         to_close.append(session)
-        if self._max_sessions > 0:
-            while len(self._sessions) > self._max_sessions:
-                candidates = [(last_used, other_key) for other_key, last_used in self._last_used.items() if other_key != keep_key and (session := self._sessions.get(other_key)) is not None and not session.active_refs]
-                if not candidates:
-                    break
-                _, lru_key = min(candidates)
-                session = self._sessions.pop(lru_key, None)
-                self._last_used.pop(lru_key, None)
-                if session is not None:
-                    to_close.append(session)
         return to_close
+
+    def _pop_lru_unpinned_locked(self, *, excluded_keys: set[str]) -> BrowserSession | None:
+        candidates = [(last_used, other_key) for other_key, last_used in self._last_used.items() if other_key not in excluded_keys and (session := self._sessions.get(other_key)) is not None and not session.active_refs]
+        if not candidates:
+            return None
+        _, lru_key = min(candidates)
+        session = self._sessions.pop(lru_key, None)
+        self._last_used.pop(lru_key, None)
+        return session
 
     def _schedule_close(self, session: BrowserSession) -> None:
         loop = self._loop

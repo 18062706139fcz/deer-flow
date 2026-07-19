@@ -1,3 +1,4 @@
+import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -122,29 +123,58 @@ def test_browser_navigate_rejects_legacy_null_owner_thread():
 
 
 def test_browser_tools_disabled_when_cdp_risk_not_explicitly_accepted():
-    tool_cfg = SimpleNamespace(model_extra={"cdp_url": "http://127.0.0.1:9222"})
-    app_config = MagicMock()
-    app_config.get_tool_config.return_value = tool_cfg
+    tool_cfg = SimpleNamespace(name="browser_navigate", model_extra={"cdp_url": "http://127.0.0.1:9222"})
+    app_config = SimpleNamespace(tools=[tool_cfg])
 
     with (
         patch("deerflow.config.get_app_config", return_value=app_config),
-        patch.object(browser_router, "browser_multi_worker_error", return_value=None),
+        patch("app.gateway.browser_capability.browser_multi_worker_error", return_value=None),
+        patch("app.gateway.browser_capability.importlib.util.find_spec", return_value=object()),
     ):
         assert browser_router._browser_tools_enabled() is False
 
 
 def test_browser_tools_enabled_when_cdp_risk_explicitly_accepted():
     tool_cfg = SimpleNamespace(
+        name="browser_navigate",
         model_extra={"cdp_url": "http://127.0.0.1:9222", "allow_unguarded_cdp": True},
     )
-    app_config = MagicMock()
-    app_config.get_tool_config.return_value = tool_cfg
+    app_config = SimpleNamespace(tools=[tool_cfg])
 
     with (
         patch("deerflow.config.get_app_config", return_value=app_config),
-        patch.object(browser_router, "browser_multi_worker_error", return_value=None),
+        patch("app.gateway.browser_capability.browser_multi_worker_error", return_value=None),
+        patch("app.gateway.browser_capability.importlib.util.find_spec", return_value=object()),
     ):
         assert browser_router._browser_tools_enabled() is True
+
+
+def test_browser_navigate_redacts_failure_url_from_logs_and_response(caplog):
+    user = User(email="browser@example.com", password_hash="x", system_role="user")
+    app = make_authed_test_app(user_factory=lambda: user)
+    app.include_router(browser_router.router)
+    app.state.thread_store.get = AsyncMock(return_value={"thread_id": "thread-1", "user_id": str(user.id)})
+    failing_url = "https://example.com/callback?code=secret#fragment"
+
+    caplog.set_level(logging.ERROR, logger="app.gateway.routers.browser")
+    with (
+        patch.object(browser_router, "_browser_tools_enabled", return_value=True),
+        patch(
+            "deerflow.community.browser_automation.navigate_and_capture",
+            new=AsyncMock(side_effect=RuntimeError(f"timed out opening {failing_url}")),
+        ),
+    ):
+        response = TestClient(app).post(
+            "/api/threads/thread-1/browser/navigate",
+            json={"url": failing_url},
+        )
+
+    assert response.status_code == 502
+    assert response.json() == {"detail": "Browser navigation failed"}
+    assert "https://example.com/callback" in caplog.text
+    assert "code=secret" not in caplog.text
+    assert "fragment" not in caplog.text
+    assert "secret" not in response.text
 
 
 def test_browser_stream_seed_applies_to_blank_page():

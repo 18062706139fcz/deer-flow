@@ -18,7 +18,9 @@ from deerflow.community.browser_automation import session as session_mod
 from deerflow.community.browser_automation import tools
 from deerflow.community.browser_automation.session import (
     _LIVE_FRAME_JPEG_QUALITY,
+    BrowserLiveViewerError,
     BrowserSession,
+    BrowserSessionCapacityError,
     BrowserSessionManager,
     PageSnapshot,
     SnapshotElement,
@@ -662,6 +664,33 @@ async def test_stop_screencast_ignores_stale_connection_callback():
 
 
 @pytest.mark.asyncio
+async def test_start_screencast_rejects_second_live_viewer():
+    """A second Live connection must not silently freeze the first viewer."""
+    session = BrowserSession(
+        MagicMock(),
+        headless=True,
+        timeout_ms=1000,
+        viewport={"width": 1000, "height": 500},
+    )
+    page = MagicMock()
+    session._ensure_page = AsyncMock(return_value=page)
+
+    def old_frame(_data: str) -> None:
+        pass
+
+    def new_frame(_data: str) -> None:
+        pass
+
+    session._on_frame = old_frame
+    session._screencast_page = page
+
+    with pytest.raises(BrowserLiveViewerError):
+        await session._start_screencast(new_frame)
+
+    assert session._on_frame is old_frame
+
+
+@pytest.mark.asyncio
 class TestSessionManager:
     async def test_get_session_is_per_thread_and_cached(self):
         manager = BrowserSessionManager()
@@ -750,7 +779,7 @@ class TestSessionManager:
         assert "lru" not in manager._sessions
         assert current is manager._sessions["current"]
 
-    async def test_releasing_pin_restores_session_capacity_without_another_acquisition(self):
+    async def test_pinned_session_makes_capacity_admission_fail_until_release(self):
         manager = BrowserSessionManager(idle_timeout_s=0, max_sessions=1)
         fake_loop = MagicMock()
         manager._loop = fake_loop
@@ -759,11 +788,18 @@ class TestSessionManager:
                 pinned = manager.get_session("pinned", pin=True)
             pinned._close = MagicMock()
             with patch.object(session_mod.time, "monotonic", return_value=1.0):
-                manager.get_session("current")
+                with pytest.raises(BrowserSessionCapacityError):
+                    manager.get_session("current")
 
-        assert set(manager._sessions) == {"pinned", "current"}
+        assert set(manager._sessions) == {"pinned"}
+        assert fake_loop.submit.call_count == 0
 
         manager.release_session("pinned", pinned)
+        assert set(manager._sessions) == {"pinned"}
+
+        with patch.object(manager, "_ensure_loop", return_value=fake_loop):
+            with patch.object(session_mod.time, "monotonic", return_value=2.0):
+                manager.get_session("current")
 
         assert set(manager._sessions) == {"current"}
         fake_loop.submit.assert_called_once()

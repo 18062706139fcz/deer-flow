@@ -792,7 +792,9 @@ tools:
   # numeric [ref] index returned in each page snapshot.
   #
   # Requires the optional dependency, installed once per environment:
-  #   uv pip install 'deerflow-harness[browser]' && playwright install chromium
+  #   cd backend && uv sync --extra browser && uv run playwright install chromium
+  # make dev / Docker startup auto-detect an active browser_navigate entry and
+  # preserve the browser extra during dependency sync.
   #
   # Uncomment the whole block to enable. Launch and URL-policy settings are read
   # canonically from browser_navigate and shared by every browser tool + Live.

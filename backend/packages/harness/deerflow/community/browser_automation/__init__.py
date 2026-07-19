@@ -1,11 +1,14 @@
 from .session import (
+    BrowserLiveViewerError,
     BrowserSession,
+    BrowserSessionCapacityError,
     BrowserSessionManager,
     BrowserTab,
     PageSnapshot,
     SnapshotElement,
     browser_multi_worker_error,
     get_browser_session_manager,
+    redact_browser_url,
     reset_browser_session_manager,
 )
 from .tools import (
@@ -23,8 +26,10 @@ from .tools import (
 
 __all__ = [
     "BrowserSession",
+    "BrowserSessionCapacityError",
     "BrowserSessionManager",
     "BrowserTab",
+    "BrowserLiveViewerError",
     "PageSnapshot",
     "SnapshotElement",
     "browser_multi_worker_error",
@@ -38,6 +43,7 @@ __all__ = [
     "browser_type_tool",
     "get_browser_session_manager",
     "navigate_and_capture",
+    "redact_browser_url",
     "reset_browser_session_manager",
     "validate_browser_url",
 ]
