@@ -1,0 +1,23 @@
+backend/packages/harness/deerflow/tui/app.py
+  s_2ecd41c85d30fa::t_1157502b1764d8 39
+docs/superpowers/plans/2026-07-20-tui-clear-command.md
+  s_2ecd41c85d30fa::t_1e722a9f7acc62 123,125,128,267
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "fe59d265fd48edea3f47080816791970e84d6f2c",
+  "prompts": {},
+  "sessions": {
+    "s_2ecd41c85d30fa": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f7d75-8cee-7bb3-b8a4-fce937ae51db",
+        "model": "unknown"
+      },
+      "human_author": "ryker <2279549769@qq.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
