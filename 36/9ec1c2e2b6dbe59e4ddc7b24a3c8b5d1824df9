@@ -1,0 +1,27 @@
+backend/packages/harness/deerflow/tui/app.py
+  s_2ecd41c85d30fa::t_35d55736964636 39-42
+backend/packages/harness/deerflow/tui/command_registry.py
+  s_2ecd41c85d30fa::t_4be031da9de473 39
+backend/tests/test_tui_app.py
+  s_2ecd41c85d30fa::t_450898641655e8 15,19-21,29,97,102-119
+backend/tests/test_tui_command_registry.py
+  s_2ecd41c85d30fa::t_182116905e5c25 105-112
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "369ec1c2e2b6dbe59e4ddc7b24a3c8b5d1824df9",
+  "prompts": {},
+  "sessions": {
+    "s_2ecd41c85d30fa": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f7d75-8cee-7bb3-b8a4-fce937ae51db",
+        "model": "unknown"
+      },
+      "human_author": "ryker <2279549769@qq.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
