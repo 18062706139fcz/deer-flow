@@ -1,0 +1,21 @@
+docs/superpowers/specs/2026-07-20-tui-clear-command-design.md
+  s_2ecd41c85d30fa::t_64d88391970de4 1-64
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "2898108e142993a82bb2de5f25aac77f1b595656",
+  "prompts": {},
+  "sessions": {
+    "s_2ecd41c85d30fa": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f7d75-8cee-7bb3-b8a4-fce937ae51db",
+        "model": "unknown"
+      },
+      "human_author": "ryker <2279549769@qq.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
