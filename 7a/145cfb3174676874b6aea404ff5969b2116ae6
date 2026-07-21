@@ -1,0 +1,74 @@
+frontend/tests/unit/core/agents/api.test.ts
+  s_e4e527dce6c13b::t_abe80e7e317136 154-187
+  s_e4e527dce6c13b::t_dfc3d1f58deb88 29-33
+backend/tests/test_agents_router_model_settings.py
+  s_e4e527dce6c13b::t_9dd1acd3bbf0d4 1-146
+frontend/src/core/i18n/locales/types.ts
+  s_e4e527dce6c13b::t_9c8edf0b0593bd 349-363
+frontend/src/components/workspace/agents/agent-card.tsx
+  s_e4e527dce6c13b::t_808c9a3557ac32 197-202
+  s_e4e527dce6c13b::t_22cb71ae810fdc 3-8
+  s_e4e527dce6c13b::t_b5a64d6cc8d022 115
+  s_e4e527dce6c13b::t_679641296bd941 216-224
+  s_e4e527dce6c13b::t_5c30b5efa3a437 41-42
+  s_e4e527dce6c13b::t_fc329dd1888ada 194-196
+  s_e4e527dce6c13b::t_8a027eda8f95a2 225
+backend/packages/harness/deerflow/agents/lead_agent/agent.py
+  s_e4e527dce6c13b::t_5466b57e990d43 673
+  s_e4e527dce6c13b::t_ec2f3bc4edd19a 513-515
+  s_e4e527dce6c13b::t_34d9784e867d1c 76-91
+  s_e4e527dce6c13b::t_bdad12bb162930 506-512,516-517
+  s_e4e527dce6c13b::t_92f8c185d37458 518
+backend/app/gateway/routers/agents.py
+  s_e4e527dce6c13b::t_521fb15222c936 7,14-22,31-37,47-49,67-69,80-82
+  s_e4e527dce6c13b::t_e46d9d6ed26e95 123-126,128-135
+  s_e4e527dce6c13b::t_0e9987929e64ca 411-413,419,439-443,457
+  s_e4e527dce6c13b::t_f52b1caf1d8c6b 306,334,338
+  s_e4e527dce6c13b::t_a4810209d7fe6b 116-122,127,136-180,193-195
+frontend/src/app/workspace/agents/[agent_name]/chats/[thread_id]/page.tsx
+  s_e4e527dce6c13b::t_7ce961af23a757 368
+backend/packages/harness/deerflow/models/factory.py
+  s_e4e527dce6c13b::t_7b4623a524c67c 174,181-186
+  s_e4e527dce6c13b::t_7a0cdfdf051b72 228-235
+frontend/src/core/i18n/locales/en-US.ts
+  s_e4e527dce6c13b::t_36a6191e64d9ce 447-463
+backend/tests/test_agent_model_settings.py
+  s_e4e527dce6c13b::t_a0b44e01c1e711 1-144
+backend/tests/test_lead_agent_model_resolution.py
+  s_e4e527dce6c13b::t_69750321893212 872,948
+  s_e4e527dce6c13b::t_7e3a9c2ad09fb2 973-1080
+  s_e4e527dce6c13b::t_d23c315c58af53 150,185,219,298,342
+frontend/src/components/workspace/input-box.tsx
+  s_e4e527dce6c13b::t_14103367f775b9 324-330
+  s_e4e527dce6c13b::t_7f97f06b46aab3 557-563,577
+  s_e4e527dce6c13b::t_fad070076a74d2 295
+frontend/src/components/workspace/agents/agent-settings-dialog.tsx
+  s_e4e527dce6c13b::t_76ee4cffa043d1 1-238
+backend/packages/harness/deerflow/config/agents_config.py
+  s_e4e527dce6c13b::t_cbb23d2738e40d 160-191,205-213,220-240
+  s_e4e527dce6c13b::t_8135d090ecf6e4 13,16
+frontend/src/core/agents/types.ts
+  s_e4e527dce6c13b::t_40b85475fe2c59 1-7,14-16,26-28,37-39
+frontend/src/core/i18n/locales/zh-CN.ts
+  s_e4e527dce6c13b::t_49d8745c5986d7 426-441
+backend/tests/test_model_factory.py
+  s_e4e527dce6c13b::t_bc4d597beaf235 1539-1592
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "7a145cfb3174676874b6aea404ff5969b2116ae6",
+  "prompts": {},
+  "sessions": {
+    "s_e4e527dce6c13b": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a5f4ca1aa5b6ed6c99b8c67",
+        "model": "openrouter-3o__max"
+      },
+      "human_author": "ryker <2279549769@qq.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
