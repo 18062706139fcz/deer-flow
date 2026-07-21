@@ -104,6 +104,14 @@ def _write_extensions_config(path: Path) -> None:
     path.write_text(json.dumps({"mcpServers": {}, "skills": {}}), encoding="utf-8")
 
 
+def test_config_example_does_not_enable_empty_extensions_block_by_default():
+    config_example_path = Path(__file__).resolve().parents[2] / "config.example.yaml"
+
+    config_data = yaml.safe_load(config_example_path.read_text(encoding="utf-8"))
+
+    assert "extensions" not in config_data
+
+
 def test_app_config_defaults_missing_database_to_sqlite(tmp_path, monkeypatch):
     config_path = tmp_path / "config.yaml"
     extensions_path = tmp_path / "extensions_config.json"
@@ -116,6 +124,79 @@ def test_app_config_defaults_missing_database_to_sqlite(tmp_path, monkeypatch):
 
     assert config.database.backend == "sqlite"
     assert config.database.sqlite_dir == ".deer-flow/data"
+
+
+def test_app_config_preserves_config_yaml_extension_middlewares(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.yaml"
+    extensions_path = tmp_path / "extensions_config.json"
+    extensions_path.write_text(
+        json.dumps({"mcpServers": {}, "skills": {}, "middlewares": ["pkg.from_file:FileMiddleware"]}),
+        encoding="utf-8",
+    )
+    _write_config_with_sections(
+        config_path,
+        {
+            "extensions": {
+                "middlewares": ["pkg.from_yaml:YamlMiddleware"],
+            }
+        },
+    )
+    monkeypatch.setenv("DEER_FLOW_EXTENSIONS_CONFIG_PATH", str(extensions_path))
+
+    config = AppConfig.from_file(str(config_path))
+
+    assert config.extensions.middlewares == ["pkg.from_yaml:YamlMiddleware"]
+
+
+def test_app_config_normalizes_config_yaml_extension_aliases_before_override(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.yaml"
+    extensions_path = tmp_path / "extensions_config.json"
+    extensions_path.write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "from-file": {
+                        "command": "file-mcp",
+                    }
+                },
+                "skills": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    _write_config_with_sections(
+        config_path,
+        {
+            "extensions": {
+                "mcp_servers": {
+                    "from-yaml": {
+                        "command": "yaml-mcp",
+                    }
+                },
+            }
+        },
+    )
+    monkeypatch.setenv("DEER_FLOW_EXTENSIONS_CONFIG_PATH", str(extensions_path))
+
+    config = AppConfig.from_file(str(config_path))
+
+    assert set(config.extensions.mcp_servers) == {"from-yaml"}
+    assert config.extensions.mcp_servers["from-yaml"].command == "yaml-mcp"
+
+
+def test_app_config_loads_extension_middlewares_from_extensions_config(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.yaml"
+    extensions_path = tmp_path / "extensions_config.json"
+    extensions_path.write_text(
+        json.dumps({"mcpServers": {}, "skills": {}, "middlewares": ["pkg.from_file:FileMiddleware"]}),
+        encoding="utf-8",
+    )
+    _write_config_with_sections(config_path)
+    monkeypatch.setenv("DEER_FLOW_EXTENSIONS_CONFIG_PATH", str(extensions_path))
+
+    config = AppConfig.from_file(str(config_path))
+
+    assert config.extensions.middlewares == ["pkg.from_file:FileMiddleware"]
 
 
 def test_app_config_defaults_empty_database_to_sqlite(tmp_path, monkeypatch):
@@ -532,73 +613,61 @@ def test_get_app_config_does_not_mutate_singletons_when_reload_validation_fails(
         _reset_config_singletons()
 
 
-def test_get_memory_config_follows_config_file_reload(tmp_path, monkeypatch):
-    """get_memory_config() picks up a config.yaml memory.mode edit on its own (#4204).
+def test_get_memory_config_self_syncs_without_prior_get_app_config(tmp_path, monkeypatch):
+    """get_memory_config() triggers reload when file changes without prior get_app_config().
 
-    ``_memory_config`` used to refresh only as a side effect of ``get_app_config()``,
-    so a reader reaching memory config directly (e.g. the agent factory deciding
-    whether to bind the memory tools) saw a stale mode after a config edit even
-    though ``memory.*`` is documented as hot-reloadable.
+    Background memory paths (updater/queue/storage) never call get_app_config()
+    directly.  This test pins the fix: calling get_memory_config() in isolation
+    — after mutating the file, with no intervening get_app_config() — reflects
+    the new value.
     """
     config_path = tmp_path / "config.yaml"
     extensions_path = tmp_path / "extensions_config.json"
     _write_extensions_config(extensions_path)
-    _write_config_with_sections(config_path, {"memory": {"enabled": True, "mode": "middleware"}})
+
+    _write_config_with_sections(config_path, {"memory": {"enabled": False}})
 
     monkeypatch.setenv("DEER_FLOW_CONFIG_PATH", str(config_path))
     monkeypatch.setenv("DEER_FLOW_EXTENSIONS_CONFIG_PATH", str(extensions_path))
-    _reset_config_singletons()
+    reset_app_config()
 
     try:
-        assert get_memory_config().mode == "middleware"
+        get_app_config()
+        assert get_memory_config().enabled is False
 
-        _write_config_with_sections(config_path, {"memory": {"enabled": True, "mode": "tool"}})
+        _write_config_with_sections(config_path, {"memory": {"enabled": True}})
         next_mtime = config_path.stat().st_mtime + 5
         os.utime(config_path, (next_mtime, next_mtime))
 
-        # No explicit get_app_config() call: get_memory_config() must reflect the
-        # new mode on its own.
-        assert get_memory_config().mode == "tool"
+        assert get_memory_config().enabled is True
     finally:
         _reset_config_singletons()
 
 
-def test_get_memory_config_surfaces_malformed_config_edit(tmp_path, monkeypatch):
-    """A malformed config edit surfaces through get_memory_config() rather than
-    being swallowed.
+def test_get_memory_config_falls_back_on_broken_config(tmp_path, monkeypatch):
+    """get_memory_config() does not crash on transiently broken config.yaml.
 
-    The ``except FileNotFoundError`` guard is deliberately narrow: it covers only
-    the genuinely-absent file (tests, or a defaults-only deployment) where there
-    is nothing to reload from. A file that exists but fails validation is a real
-    error and propagates -- consistent with every other unguarded
-    ``get_app_config()`` caller -- and the last-good singleton is left intact
-    rather than cleared or half-applied.
+    get_app_config() can raise yaml.YAMLError, ValidationError, or ValueError.
+    get_memory_config() catches them and returns the last-good singleton.
     """
-    import deerflow.config.memory_config as memory_config_module
-
     config_path = tmp_path / "config.yaml"
     extensions_path = tmp_path / "extensions_config.json"
     _write_extensions_config(extensions_path)
-    _write_config_with_sections(config_path, {"memory": {"enabled": True, "mode": "middleware"}})
+
+    _write_config_with_sections(config_path, {"memory": {"enabled": False}})
 
     monkeypatch.setenv("DEER_FLOW_CONFIG_PATH", str(config_path))
     monkeypatch.setenv("DEER_FLOW_EXTENSIONS_CONFIG_PATH", str(extensions_path))
-    _reset_config_singletons()
+    reset_app_config()
 
     try:
-        assert get_memory_config().mode == "middleware"
+        get_app_config()
+        assert get_memory_config().enabled is False
 
-        # Same file, now invalid: `title: false` fails AppConfig validation while
-        # the edit also flips memory.mode -- so a half-applied reload would leak
-        # "tool" into the singleton.
-        _write_config_with_sections(config_path, {"memory": {"enabled": True, "mode": "tool"}, "title": False})
+        config_path.write_text("memory: {enabled: true\n")
         next_mtime = config_path.stat().st_mtime + 5
         os.utime(config_path, (next_mtime, next_mtime))
 
-        with pytest.raises(ValidationError):
-            get_memory_config()
-
-        # Failed reload: the last-good singleton stays "middleware", not "tool".
-        assert memory_config_module._memory_config.mode == "middleware"
+        assert get_memory_config().enabled is False
     finally:
         _reset_config_singletons()

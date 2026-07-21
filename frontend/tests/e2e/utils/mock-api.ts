@@ -87,6 +87,10 @@ export type MockAPIOptions = {
     max_file_size: number;
     max_total_size: number;
   };
+  features?: {
+    agentsApiEnabled?: boolean;
+    browserControlEnabled?: boolean;
+  };
 };
 
 const DEFAULT_SKILLS: MockSkill[] = [
@@ -124,6 +128,16 @@ function isHiddenInputMessage(message: unknown) {
 
 function visibleInputMessages(messages: unknown[]) {
   return messages.filter((message) => !isHiddenInputMessage(message));
+}
+
+function mockMessageRunId(message: unknown, fallback: string) {
+  if (typeof message === "object" && message !== null) {
+    const runId = Reflect.get(message, "run_id");
+    if (typeof runId === "string" && runId.length > 0) {
+      return runId;
+    }
+  }
+  return fallback;
 }
 
 function visibleRunInputMessages(route: Route) {
@@ -270,6 +284,10 @@ export function mockLangGraphAPI(page: Page, options?: MockAPIOptions) {
       user: null as string | null,
       verified: false,
     },
+  };
+  const featureFlags = {
+    agentsApiEnabled: options?.features?.agentsApiEnabled ?? true,
+    browserControlEnabled: options?.features?.browserControlEnabled ?? true,
   };
 
   const upsertThread = (thread: MockThread) => {
@@ -989,7 +1007,10 @@ export function mockLangGraphAPI(page: Page, options?: MockAPIOptions) {
         contentType: "application/json",
         body: JSON.stringify({
           data: (matchingThread?.messages ?? []).map((message, index) => ({
-            run_id: `run-${matchingThread?.thread_id ?? "unknown"}`,
+            run_id: mockMessageRunId(
+              message,
+              `run-${matchingThread?.thread_id ?? "unknown"}`,
+            ),
             seq: index + 1,
             content: message,
             metadata: { caller: "lead_agent" },
@@ -1043,7 +1064,7 @@ export function mockLangGraphAPI(page: Page, options?: MockAPIOptions) {
     return route.fallback();
   });
 
-  // Feature flags — frontend gates UI (e.g. agents) on these. Default to
+  // Feature flags — frontend gates UI (e.g. agents/browser) on these. Default to
   // enabled so existing tests exercise the normal path; tests that need the
   // disabled state override this route after calling mockLangGraphAPI.
   void page.route("**/api/features", (route) => {
@@ -1051,7 +1072,10 @@ export function mockLangGraphAPI(page: Page, options?: MockAPIOptions) {
       return route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify({ agents_api: { enabled: true } }),
+        body: JSON.stringify({
+          agents_api: { enabled: featureFlags.agentsApiEnabled },
+          browser_control: { enabled: featureFlags.browserControlEnabled },
+        }),
       });
     }
     return route.fallback();

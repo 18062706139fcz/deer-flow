@@ -131,21 +131,26 @@ def get_memory_config() -> MemoryConfig:
     though ``memory.*`` is documented as hot-reloadable. Trigger the same
     signature-checked reload here so the singleton follows the config file.
 
-    If no config file is on disk (tests, or a minimal deployment running purely
-    on defaults / ``set_memory_config``), there is nothing to reload from, so we
-    keep the pre-existing behavior of returning the in-memory singleton instead of
-    becoming more fragile than before. The catch is deliberately narrow: a config
-    file that exists but fails to load (malformed YAML, failed validation) is a
-    real error and is surfaced here just as it is at every other unguarded
-    ``get_app_config()`` call site, leaving the last-good singleton untouched.
+    If ``get_app_config()`` has never been called (``_app_config`` is ``None``),
+    there is no stale config to refresh, so we keep the pre-existing behaviour
+    of returning the in-memory singleton.  This avoids picking up a config file
+    as a side effect of the first access to ``get_memory_config()``, which would
+    break callers that expect module-level defaults (e.g. unit tests).
     """
     # Lazy import: app_config imports this module, so a top-level import cycles.
-    from .app_config import get_app_config
+    from .app_config import _app_config, get_app_config
 
-    try:
-        get_app_config()
-    except FileNotFoundError:
-        pass
+    if _app_config is not None:
+        try:
+            get_app_config()
+        except Exception:
+            # If the config file is transiently broken (invalid YAML, schema
+            # violation, missing env var, etc.), keep the last-good singleton
+            # so an in-flight turn completes normally instead of crashing.
+            logger.warning(
+                "Failed to reload app config from get_memory_config(); falling back to cached memory config.",
+                exc_info=True,
+            )
     return _memory_config
 
 
