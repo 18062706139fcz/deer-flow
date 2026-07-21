@@ -1,0 +1,47 @@
+frontend/src/core/i18n/locales/zh-CN.ts
+  s_83332a2fff370a::t_62d2359131a4a8 181
+  s_83332a2fff370a::t_399874e52222ee 180
+frontend/src/components/workspace/input-box.tsx
+  s_83332a2fff370a::t_119a9ecee5cc59 150-151
+  s_83332a2fff370a::t_b70636e226aa3e 1203
+  s_83332a2fff370a::t_395507b83e478b 1263-1266
+  s_83332a2fff370a::t_1fc7e24ed3a391 2590-2605
+  s_83332a2fff370a::t_9568b5e4fc476d 143
+  s_83332a2fff370a::t_ff4b91196f8a7b 1151-1163
+frontend/src/core/i18n/locales/en-US.ts
+  s_83332a2fff370a::t_25aa8f4fc4a565 192
+  s_83332a2fff370a::t_d0a749c8e165f6 193
+frontend/src/components/workspace/input-box-helpers.ts
+  s_83332a2fff370a::t_ff5cbec917f762 48
+  s_83332a2fff370a::t_6889a6940f7a3d 9-14,23,25-26
+  s_83332a2fff370a::t_b263b437b49772 27-47,49-61
+  s_83332a2fff370a::t_cd7076532c47d2 15-22,24
+frontend/src/core/i18n/locales/types.ts
+  s_83332a2fff370a::t_a8516dc6135b13 160
+  s_83332a2fff370a::t_6182d0169eb70d 159
+frontend/tests/unit/components/workspace/input-box-helpers.test.ts
+  s_83332a2fff370a::t_2f06572cdfdf44 10,14
+  s_83332a2fff370a::t_28e50071639aae 71-87,109-110
+  s_83332a2fff370a::t_7b960e03a5d093 90-101,104-107
+  s_83332a2fff370a::t_a40ed0586e7393 17-18
+  s_83332a2fff370a::t_209b5ed1055b4a 88-89,102-103,108
+  s_83332a2fff370a::t_b41171978b9447 111-152
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "267e297e4642a36394565fa4ae23b588d9022381",
+  "prompts": {},
+  "sessions": {
+    "s_83332a2fff370a": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a5eda16aa5b6ed6c99b7130",
+        "model": "openrouter-3o__max"
+      },
+      "human_author": null
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
