@@ -1,0 +1,105 @@
+backend/tests/test_history_batch_queries.py
+  s_6e3f63f455dcbb::t_dfe65f07322412 9,292-399
+backend/app/gateway/routers/thread_runs.py
+  s_6e3f63f455dcbb::t_bd8f73a6d57fc4 16,106-115,289-303,328-332,371-432,517-540,587-665,682-692,929-932,994,1020
+frontend/src/core/threads/hooks.ts
+  s_6e3f63f455dcbb::t_663c0b6e32ecc9 98-102,707-724,1391-1400,1606-1619,1634,1636,1644,1650-1655,1687-1689,1693,1695-1696,1708,1716-1787,1857
+backend/packages/harness/deerflow/runtime/runs/store/base.py
+  s_6e3f63f455dcbb::t_d74c33d866d3e5 14,18-23,78-86
+frontend/src/core/i18n/locales/en-US.ts
+  s_6e3f63f455dcbb::t_0ea874ea7aeb01 54-57
+frontend/src/core/i18n/locales/zh-CN.ts
+  s_6e3f63f455dcbb::t_94b74b3bb11286 54-57
+backend/packages/harness/deerflow/runtime/runs/worker.py
+  s_6e3f63f455dcbb::t_68a6de3b5d171e 285,619,663,685-708,740,1143-1162
+backend/tests/test_tool_args_schema_no_pydantic_warning.py
+  s_3db8d648f95d8a::t_07655a9c02ca00 20,31,60,107-111
+  s_3db8d648f95d8a::t_9b6598843cd268 112-113
+frontend/src/core/messages/utils.ts
+  s_6e3f63f455dcbb::t_a53948c989755f 194-267
+frontend/src/components/workspace/messages/message-list.tsx
+  s_6e3f63f455dcbb::t_a05bd078e5a17d 52,323,327,346-350,360,431,596-604,774-776,810-812,847,959-988
+backend/AGENTS.md
+  s_6e3f63f455dcbb::t_e92fbd82512173 422,438-439,813
+frontend/src/components/workspace/messages/message-list-item.tsx
+  s_6e3f63f455dcbb::t_862fb27ed3cd37 3,6,9,32-33,67,149-151,162-164,166,168-205,219-230,243-256,365,374-381,383,537-586,590
+backend/packages/harness/deerflow/runtime/runs/manager.py
+  s_6e3f63f455dcbb::t_0995642d17503a 23,631-694
+frontend/src/app/workspace/agents/[agent_name]/chats/[thread_id]/page.tsx
+  s_6e3f63f455dcbb::t_d199c1279ac6cb 95,213-217,316-325
+backend/packages/harness/deerflow/persistence/run/sql.py
+  s_6e3f63f455dcbb::t_3431bef98288cc 191-212
+backend/packages/harness/deerflow/runtime/runs/store/memory.py
+  s_6e3f63f455dcbb::t_1e453e939c44d1 106-121
+backend/tests/test_run_worker_rollback.py
+  s_6e3f63f455dcbb::t_903558da6ca47e 385-461
+frontend/src/core/i18n/locales/types.ts
+  s_6e3f63f455dcbb::t_cb8d45da81b567 43-45
+frontend/tests/e2e/agent-chat.spec.ts
+  s_3db8d648f95d8a::t_910cab4817a503 6,183-288,291,296,334
+  s_3db8d648f95d8a::t_f050aff6509325 289-290,320,329,333
+  s_3db8d648f95d8a::t_c0800632215f2a 292-294
+  s_3db8d648f95d8a::t_828bd7dfe409ea 295
+  s_3db8d648f95d8a::t_3ff67b0743f87e 297-299,317-319
+  s_3db8d648f95d8a::t_587257e4d36067 321-323,326-328
+  s_3db8d648f95d8a::t_65951cacccf085 330-332
+  s_3db8d648f95d8a::t_56d725570f7e7f 335-337
+README.md
+  s_6e3f63f455dcbb::t_62ead9d5b9c1fa 690-691
+backend/packages/harness/deerflow/tools/builtins/list_uploaded_files_tool.py
+  s_3db8d648f95d8a::t_8f73daaf57b5d1 201
+frontend/src/app/workspace/chats/[thread_id]/page.tsx
+  s_6e3f63f455dcbb::t_4dca1a76d85f59 107,216-220,328-338
+backend/tests/test_thread_messages_page.py
+  s_3db8d648f95d8a::t_42893e610076fb 37
+backend/tests/test_thread_regenerate_prepare.py
+  s_6e3f63f455dcbb::t_8c38d713502076 9,15-24,34,132-134,369-623
+frontend/AGENTS.md
+  s_6e3f63f455dcbb::t_70c947151f2302 83-84,99
+frontend/tests/unit/core/messages/utils.test.ts
+  s_6e3f63f455dcbb::t_622c848b384cc9 9,135-199
+frontend/tests/unit/core/threads/message-merge.test.ts
+  s_6e3f63f455dcbb::t_121ca4ea32ec2a 8,411-441
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "b3856b37ba354ae68951c318ef3283d5eb5d8222",
+  "prompts": {},
+  "sessions": {
+    "s_3db8d648f95d8a": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a60c909aa5b6ed6c99b9770",
+        "model": "gpt-5.5__max",
+        "display_model_name": "GPT-5.5"
+      },
+      "human_author": null
+    },
+    "s_6e3f63f455dcbb": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f8982-ce75-7311-bb55-e2a6bea4a432",
+        "model": "unknown"
+      },
+      "human_author": "ryker <2279549769@qq.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {
+    "s_3db8d648f95d8a": {
+      "tool": "trae",
+      "conversation_id": "6a60c909aa5b6ed6c99b9770",
+      "session_id": "6a60c909aa5b6ed6c99b9770",
+      "status": "remote_only",
+      "message": "Remote transcript resolution is not implemented yet for TRAE prompts."
+    },
+    "s_3db8d648f95d8a::t_220281d4cfd1c3": {
+      "tool": "trae",
+      "conversation_id": "6a60c909aa5b6ed6c99b9770",
+      "session_id": "6a60c909aa5b6ed6c99b9770",
+      "status": "remote_only",
+      "message": "Remote transcript resolution is not implemented yet for TRAE prompts."
+    }
+  }
+}
