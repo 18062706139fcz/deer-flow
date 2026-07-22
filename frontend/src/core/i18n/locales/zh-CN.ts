@@ -434,6 +434,8 @@ export const zhCN: Translations = {
     settingsMaxTokens: "最大输出 token",
     settingsMaxTokensPlaceholder: "继承模型配置",
     settingsThinking: "思考模式",
+    settingsThinkingOn: "开启",
+    settingsThinkingOff: "关闭",
     settingsReasoningEffort: "推理强度",
     settingsInherit: "继承",
     settingsSaved: "模型设置已保存",

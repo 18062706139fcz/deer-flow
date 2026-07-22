@@ -455,6 +455,8 @@ export const enUS: Translations = {
     settingsMaxTokens: "Max output tokens",
     settingsMaxTokensPlaceholder: "Inherit from model",
     settingsThinking: "Thinking mode",
+    settingsThinkingOn: "On",
+    settingsThinkingOff: "Off",
     settingsReasoningEffort: "Reasoning effort",
     settingsInherit: "Inherit",
     settingsSaved: "Model settings saved",

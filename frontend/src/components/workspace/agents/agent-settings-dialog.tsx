@@ -20,19 +20,21 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
 import { useUpdateAgent } from "@/core/agents";
 import type { Agent, ReasoningEffort } from "@/core/agents";
 import { useI18n } from "@/core/i18n/hooks";
 import { useModels } from "@/core/models/hooks";
 
 import {
+  DEFAULT_MODEL_VALUE,
+  INHERIT_VALUE,
   MAX_AGENT_OUTPUT_TOKENS,
   parseAgentModelSettingsDraft,
+  resolveEffectiveModel,
+  selectionToThinkingEnabled,
+  thinkingEnabledToSelection,
 } from "./agent-settings-dialog-helpers";
 
-const DEFAULT_MODEL_VALUE = "__default__";
-const INHERIT_EFFORT_VALUE = "__inherit__";
 const REASONING_EFFORTS: ReasoningEffort[] = ["low", "medium", "high"];
 
 interface AgentSettingsDialogProps {
@@ -67,15 +69,19 @@ export function AgentSettingsDialog({
       ? String(agent.model_settings.max_tokens)
       : "",
   );
-  const [thinking, setThinking] = useState(agent.thinking_enabled ?? false);
+  const [thinking, setThinking] = useState(
+    thinkingEnabledToSelection(agent.thinking_enabled),
+  );
   const [reasoningEffort, setReasoningEffort] = useState(
-    agent.reasoning_effort ?? INHERIT_EFFORT_VALUE,
+    agent.reasoning_effort ?? INHERIT_VALUE,
   );
 
   // The resolved profile gates which controls are meaningful: thinking and
   // reasoning-effort only apply when the selected model advertises support.
+  // When the agent inherits the global default model, fall back to the
+  // effective default (models[0]) so the controls are not hidden for it.
   const selectedModel = useMemo(
-    () => models.find((m) => m.name === model),
+    () => resolveEffectiveModel(models, model),
     [models, model],
   );
   const supportsThinking = selectedModel?.supports_thinking ?? false;
@@ -102,9 +108,11 @@ export function AgentSettingsDialog({
         request: {
           model: model === DEFAULT_MODEL_VALUE ? null : model,
           model_settings: parsedSettings.modelSettings,
-          thinking_enabled: supportsThinking ? thinking : null,
+          thinking_enabled: supportsThinking
+            ? selectionToThinkingEnabled(thinking)
+            : null,
           reasoning_effort:
-            supportsReasoningEffort && reasoningEffort !== INHERIT_EFFORT_VALUE
+            supportsReasoningEffort && reasoningEffort !== INHERIT_VALUE
               ? (reasoningEffort as ReasoningEffort)
               : null,
         },
@@ -184,11 +192,29 @@ export function AgentSettingsDialog({
 
           {/* Thinking mode (only when the selected model supports it) */}
           {supportsThinking && (
-            <div className="flex items-center justify-between">
+            <div className="space-y-1.5">
               <span className="text-sm font-medium">
                 {t.agents.settingsThinking}
               </span>
-              <Switch checked={thinking} onCheckedChange={setThinking} />
+              <Select
+                value={thinking}
+                onValueChange={(value) => setThinking(value as typeof thinking)}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={INHERIT_VALUE}>
+                    {t.agents.settingsInherit}
+                  </SelectItem>
+                  <SelectItem value="on">
+                    {t.agents.settingsThinkingOn}
+                  </SelectItem>
+                  <SelectItem value="off">
+                    {t.agents.settingsThinkingOff}
+                  </SelectItem>
+                </SelectContent>
+              </Select>
             </div>
           )}
 
@@ -206,7 +232,7 @@ export function AgentSettingsDialog({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value={INHERIT_EFFORT_VALUE}>
+                  <SelectItem value={INHERIT_VALUE}>
                     {t.agents.settingsInherit}
                   </SelectItem>
                   {REASONING_EFFORTS.map((effort) => (

@@ -356,6 +356,8 @@ export interface Translations {
     settingsMaxTokens: string;
     settingsMaxTokensPlaceholder: string;
     settingsThinking: string;
+    settingsThinkingOn: string;
+    settingsThinkingOff: string;
     settingsReasoningEffort: string;
     settingsInherit: string;
     settingsSaved: string;
