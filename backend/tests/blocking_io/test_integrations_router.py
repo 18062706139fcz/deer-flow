@@ -121,7 +121,8 @@ async def test_lark_auth_complete_route_does_not_block_event_loop(tmp_path: Path
     monkeypatch.setattr(integrations, "get_effective_user_id", lambda: "loop-user")
 
     response = await integrations.complete_lark_browser_auth(
-        integrations.LarkAuthCompleteRequest(device_code="device-code"),
+        request=None,
+        body=integrations.LarkAuthCompleteRequest(device_code="device-code"),
         config=config,
     )
 

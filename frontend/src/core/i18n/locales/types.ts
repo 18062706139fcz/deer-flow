@@ -680,6 +680,10 @@ export interface Translations {
         skillPack: string;
         gatewayCli: string;
         auth: string;
+        sandboxRuntime: string;
+        sandboxRuntimeInitContainer: string;
+        sandboxRuntimeGatewayDownload: string;
+        sandboxRuntimeNotReady: string;
         notInstalled: string;
         skillsInstalled: (installed: number, expected: number) => string;
         installedVersion: (version: string) => string;

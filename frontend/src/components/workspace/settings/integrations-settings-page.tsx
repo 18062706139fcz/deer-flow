@@ -153,6 +153,9 @@ function LarkIntegrationCard() {
   const connectActionBusy = connectBusy || isCheckingConnection;
   const credentialsConfigured = data?.auth.status === "authenticated";
   const isConnected = credentialsConfigured && data?.auth.verified === true;
+  // The sandbox-runtime readiness row only applies when the sandbox actually
+  // runs lark-cli (AIO / provisioner modes report a non-"none" mode).
+  const showSandboxRuntime = !!data && data.sandbox_runtime_mode !== "none";
   const trimmedCustomAuthScope = customAuthScope.trim();
   const hasAdditionalPermissionRequest =
     selectedAuthDomains.length > 0 || trimmedCustomAuthScope.length > 0;
@@ -524,7 +527,12 @@ function LarkIntegrationCard() {
           </Alert>
         ) : data ? (
           <>
-            <div className="grid gap-3 md:grid-cols-3">
+            <div
+              className={cn(
+                "grid gap-3",
+                showSandboxRuntime ? "md:grid-cols-4" : "md:grid-cols-3",
+              )}
+            >
               <StatusItem
                 label={t.settings.integrations.lark.skillPack}
                 ok={data.installed}
@@ -561,6 +569,22 @@ function LarkIntegrationCard() {
                     : t.settings.integrations.lark.authNotConfigured
                 }
               />
+              {showSandboxRuntime && (
+                <StatusItem
+                  label={t.settings.integrations.lark.sandboxRuntime}
+                  ok={data.sandbox_runtime_ready}
+                  value={
+                    data.sandbox_runtime_ready
+                      ? data.sandbox_runtime_mode === "init-container"
+                        ? t.settings.integrations.lark
+                            .sandboxRuntimeInitContainer
+                        : t.settings.integrations.lark
+                            .sandboxRuntimeGatewayDownload
+                      : (data.sandbox_runtime_detail ??
+                        t.settings.integrations.lark.sandboxRuntimeNotReady)
+                  }
+                />
+              )}
             </div>
             {data.installed && (
               <div className="text-muted-foreground flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">

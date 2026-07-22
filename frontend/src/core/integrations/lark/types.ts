@@ -17,6 +17,11 @@ export interface LarkAuthProbe {
   verified: boolean;
 }
 
+export type LarkSandboxRuntimeMode =
+  | "none"
+  | "gateway-download"
+  | "init-container";
+
 export interface LarkIntegrationStatus {
   installed: boolean;
   version: string;
@@ -33,6 +38,9 @@ export interface LarkIntegrationStatus {
   install_path: string;
   cli: LarkCliProbe;
   auth: LarkAuthProbe;
+  sandbox_runtime_mode: LarkSandboxRuntimeMode;
+  sandbox_runtime_ready: boolean;
+  sandbox_runtime_detail: string | null;
 }
 
 export interface LarkInstallResponse {

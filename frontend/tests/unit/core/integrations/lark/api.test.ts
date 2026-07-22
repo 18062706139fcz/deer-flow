@@ -52,12 +52,17 @@ describe("lark integration api", () => {
         install_path: "/tmp/lark-cli",
         cli: { available: false, path: null, version: null, error: "missing" },
         auth: { status: "unavailable", message: "missing", user: null },
+        sandbox_runtime_mode: "init-container",
+        sandbox_runtime_ready: false,
+        sandbox_runtime_detail: "init image not configured",
       }),
     );
 
     await expect(loadLarkIntegrationStatus()).resolves.toMatchObject({
       installed: false,
       version: "v1.0.65",
+      sandbox_runtime_mode: "init-container",
+      sandbox_runtime_ready: false,
     });
     expect(mockedFetch).toHaveBeenCalledWith(
       "/backend/api/integrations/lark/status",

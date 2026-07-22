@@ -60,6 +60,13 @@ SANDBOX_IMAGE = os.environ.get(
     "SANDBOX_IMAGE",
     "enterprise-public-cn-beijing.cr.volces.com/vefaas-public/all-in-one-sandbox:latest",
 )
+# Optional "lark-cli init" image (Pattern A). When set, sandbox Pods get an init
+# container + shared emptyDir that provisions the lark-cli runtime binary, instead
+# of a hostPath/PVC runtime mount fed by a Gateway-side GitHub download. Empty ⇒
+# feature off (legacy behavior).
+LARK_CLI_INIT_IMAGE = os.environ.get("LARK_CLI_INIT_IMAGE", "")
+LARK_CLI_RUNTIME_CONTAINER_PATH = "/mnt/integrations/lark-cli/runtime"
+LARK_CLI_RUNTIME_VOLUME_NAME = "lark-cli-runtime"
 SKILLS_HOST_PATH = os.environ.get("SKILLS_HOST_PATH", "/skills")
 THREADS_HOST_PATH = os.environ.get("THREADS_HOST_PATH", "/.deer-flow/threads")
 DEER_FLOW_HOST_BASE_DIR = os.environ.get("DEER_FLOW_HOST_BASE_DIR", "/.deer-flow")
@@ -185,6 +192,31 @@ def _validated_extra_mounts(extra_mounts: list["ExtraMount"] | None) -> list["Ex
 
 def _extra_mount_volume_name(index: int) -> str:
     return f"extra-{index}"
+
+
+def _lark_cli_runtime_enabled(provision_lark_cli_runtime: bool) -> bool:
+    """Whether to provision the lark-cli runtime via init container + emptyDir."""
+    return bool(LARK_CLI_INIT_IMAGE) and provision_lark_cli_runtime
+
+
+def _runtime_provided_extra_mounts(
+    extra_mounts: list["ExtraMount"] | None,
+    *,
+    provision_lark_cli_runtime: bool,
+) -> list["ExtraMount"]:
+    """Drop the lark-cli runtime extra mount when the init container supersedes it.
+
+    The init container + emptyDir provides ``/mnt/integrations/lark-cli/runtime``,
+    so a hostPath/PVC mount at the same path would collide. The per-user
+    ``config`` / ``data`` credential mounts are left untouched.
+    """
+    if not extra_mounts or not _lark_cli_runtime_enabled(provision_lark_cli_runtime):
+        return list(extra_mounts or [])
+    return [
+        mount
+        for mount in extra_mounts
+        if posixpath.normpath(mount.container_path) != LARK_CLI_RUNTIME_CONTAINER_PATH
+    ]
 
 
 def _extra_mount_pvc_sub_path(host_path: str) -> str:
@@ -319,6 +351,10 @@ class CreateSandboxRequest(BaseModel):
     user_id: str = Field(default=DEFAULT_USER_ID, pattern=SAFE_USER_ID_PATTERN)
     extra_mounts: list[ExtraMount] = Field(default_factory=list)
     include_legacy_skills: bool = False
+    # When true (and LARK_CLI_INIT_IMAGE is configured), provision the sandbox
+    # lark-cli runtime via an init container + emptyDir instead of a runtime
+    # hostPath/PVC extra mount.
+    provision_lark_cli_runtime: bool = False
 
 
 class SandboxResponse(BaseModel):
@@ -393,6 +429,7 @@ def _build_volumes(
     *,
     include_legacy_skills: bool = False,
     extra_mounts: list[ExtraMount] | None = None,
+    provision_lark_cli_runtime: bool = False,
 ) -> list[k8s_client.V1Volume]:
     """Build volume list: PVC when configured, otherwise hostPath.
 
@@ -479,7 +516,21 @@ def _build_volumes(
         )
 
     volumes.append(userdata_vol)
-    volumes.extend(_build_extra_volumes(extra_mounts))
+    volumes.extend(
+        _build_extra_volumes(
+            _runtime_provided_extra_mounts(
+                extra_mounts,
+                provision_lark_cli_runtime=provision_lark_cli_runtime,
+            )
+        )
+    )
+    if _lark_cli_runtime_enabled(provision_lark_cli_runtime):
+        volumes.append(
+            k8s_client.V1Volume(
+                name=LARK_CLI_RUNTIME_VOLUME_NAME,
+                empty_dir=k8s_client.V1EmptyDirVolumeSource(),
+            )
+        )
     return volumes
 
 
@@ -489,6 +540,7 @@ def _build_volume_mounts(
     *,
     include_legacy_skills: bool = False,
     extra_mounts: list[ExtraMount] | None = None,
+    provision_lark_cli_runtime: bool = False,
 ) -> list[k8s_client.V1VolumeMount]:
     """Build volume mount list, mirroring three-way skills layout.
 
@@ -543,9 +595,56 @@ def _build_volume_mounts(
     if USERDATA_PVC_NAME:
         userdata_mount.sub_path = f"deer-flow/users/{user_id}/threads/{thread_id}/user-data"
     mounts.append(userdata_mount)
-    mounts.extend(_build_extra_volume_mounts(extra_mounts))
+    mounts.extend(
+        _build_extra_volume_mounts(
+            _runtime_provided_extra_mounts(
+                extra_mounts,
+                provision_lark_cli_runtime=provision_lark_cli_runtime,
+            )
+        )
+    )
+    if _lark_cli_runtime_enabled(provision_lark_cli_runtime):
+        mounts.append(
+            k8s_client.V1VolumeMount(
+                name=LARK_CLI_RUNTIME_VOLUME_NAME,
+                mount_path=LARK_CLI_RUNTIME_CONTAINER_PATH,
+                read_only=True,
+            )
+        )
 
     return mounts
+
+
+def _build_lark_cli_init_containers(
+    provision_lark_cli_runtime: bool,
+) -> list[k8s_client.V1Container]:
+    """Init container that copies the lark-cli runtime into the shared emptyDir."""
+    if not _lark_cli_runtime_enabled(provision_lark_cli_runtime):
+        return []
+    return [
+        k8s_client.V1Container(
+            name="lark-cli-init",
+            image=LARK_CLI_INIT_IMAGE,
+            image_pull_policy="IfNotPresent",
+            env=[
+                k8s_client.V1EnvVar(
+                    name="LARK_CLI_RUNTIME_DEST",
+                    value=LARK_CLI_RUNTIME_CONTAINER_PATH,
+                )
+            ],
+            volume_mounts=[
+                k8s_client.V1VolumeMount(
+                    name=LARK_CLI_RUNTIME_VOLUME_NAME,
+                    mount_path=LARK_CLI_RUNTIME_CONTAINER_PATH,
+                    read_only=False,
+                )
+            ],
+            security_context=k8s_client.V1SecurityContext(
+                privileged=False,
+                allow_privilege_escalation=False,
+            ),
+        )
+    ]
 
 
 def _build_pod(
@@ -555,8 +654,12 @@ def _build_pod(
     *,
     include_legacy_skills: bool = False,
     extra_mounts: list[ExtraMount] | None = None,
+    provision_lark_cli_runtime: bool = False,
 ) -> k8s_client.V1Pod:
     """Construct a Pod manifest for a single sandbox."""
+    init_containers = (
+        _build_lark_cli_init_containers(provision_lark_cli_runtime) or None
+    )
     return k8s_client.V1Pod(
         metadata=k8s_client.V1ObjectMeta(
             name=_pod_name(sandbox_id),
@@ -618,6 +721,7 @@ def _build_pod(
                         user_id=user_id,
                         include_legacy_skills=include_legacy_skills,
                         extra_mounts=extra_mounts,
+                        provision_lark_cli_runtime=provision_lark_cli_runtime,
                     ),
                     security_context=k8s_client.V1SecurityContext(
                         privileged=False,
@@ -625,11 +729,13 @@ def _build_pod(
                     ),
                 )
             ],
+            init_containers=init_containers,
             volumes=_build_volumes(
                 thread_id,
                 user_id=user_id,
                 include_legacy_skills=include_legacy_skills,
                 extra_mounts=extra_mounts,
+                provision_lark_cli_runtime=provision_lark_cli_runtime,
             ),
             restart_policy="Always",
         ),
@@ -715,6 +821,17 @@ async def health():
     return {"status": "ok"}
 
 
+@app.get("/api/capabilities")
+async def capabilities():
+    """Report provisioner-side capabilities the Gateway cannot infer statically.
+
+    ``lark_cli_init_image`` reflects whether a lark-cli init image is configured,
+    which the Gateway surfaces as the Lark integration sandbox-runtime readiness
+    signal so a green UI can't hide a chat-time ``command not found``.
+    """
+    return {"lark_cli_init_image": bool(LARK_CLI_INIT_IMAGE)}
+
+
 @app.post("/api/sandboxes", response_model=SandboxResponse)
 def create_sandbox(req: CreateSandboxRequest):
     """Create a sandbox Pod + Service for *sandbox_id*.
@@ -726,13 +843,15 @@ def create_sandbox(req: CreateSandboxRequest):
     thread_id = req.thread_id or sandbox_id
     user_id = req.user_id
     include_legacy_skills = req.include_legacy_skills
+    provision_lark_cli_runtime = req.provision_lark_cli_runtime
 
     logger.info(
-        "Received request to create sandbox '%s' for thread '%s' user '%s' include_legacy_skills=%s",
+        "Received request to create sandbox '%s' for thread '%s' user '%s' include_legacy_skills=%s provision_lark_cli_runtime=%s",
         sandbox_id,
         thread_id,
         user_id,
         include_legacy_skills,
+        _lark_cli_runtime_enabled(provision_lark_cli_runtime),
     )
 
     # ── Fast path: sandbox already exists ────────────────────────────
@@ -754,6 +873,7 @@ def create_sandbox(req: CreateSandboxRequest):
                 user_id=user_id,
                 include_legacy_skills=include_legacy_skills,
                 extra_mounts=req.extra_mounts,
+                provision_lark_cli_runtime=provision_lark_cli_runtime,
             ),
         )
         logger.info(f"Created Pod {_pod_name(sandbox_id)}")

@@ -87,6 +87,20 @@ def test_sandbox_lark_cli_env_prepends_managed_linux_runtime() -> None:
     assert overlay["LARKSUITE_CLI_DATA_DIR"] == "/mnt/integrations/lark-cli/data"
 
 
+def test_init_image_launcher_matches_python_constant() -> None:
+    """The init image's build script must embed the same launcher as the Gateway.
+
+    Both produce ``bin/lark-cli``; if they drift, the sandbox PATH contract
+    breaks for one provisioning mode.
+    """
+    repo_root = Path(lark_cli.__file__).resolve().parents[5]
+    build_script = repo_root / "docker" / "lark-cli-init" / "build-runtime.sh"
+    assert build_script.is_file(), f"missing init image build script at {build_script}"
+    body = build_script.read_text(encoding="utf-8")
+    # The launcher heredoc in the build script must contain the exact script body.
+    assert lark_cli.LARK_CLI_SANDBOX_LAUNCHER_SCRIPT.strip() in body
+
+
 def test_managed_sandbox_runtime_verifies_and_installs_linux_archives(monkeypatch, tmp_path) -> None:
     assert hasattr(lark_cli, "_ensure_managed_sandbox_lark_cli"), "managed sandbox runtime installer is missing"
     _patch_paths(monkeypatch, tmp_path / "home")
@@ -325,6 +339,134 @@ def test_aio_install_provisions_matching_linux_sandbox_runtime(monkeypatch, tmp_
     assert result.success is True
     assert provisioned_versions == ["v1.0.65"]
     reset_skill_storage()
+
+
+def test_remote_provisioner_install_skips_gateway_sandbox_runtime(monkeypatch, tmp_path) -> None:
+    reset_skill_storage()
+    _patch_paths(monkeypatch, tmp_path / "home")
+    skills_root = tmp_path / "skills"
+    (skills_root / "public").mkdir(parents=True)
+    (skills_root / "custom").mkdir()
+    config = _config(skills_root)
+    config.sandbox = SimpleNamespace(
+        use="deerflow.community.aio_sandbox:AioSandboxProvider",
+        provisioner_url="http://provisioner:8002",
+    )
+    archive = _make_lark_cli_source_zip(tmp_path)
+    provisioned_versions: list[str] = []
+
+    monkeypatch.setattr(lark_cli, "probe_lark_cli", lambda: lark_cli.LarkCliProbe(available=True, path="/usr/bin/lark-cli", version="v1.0.65"))
+    monkeypatch.setattr(lark_cli, "probe_lark_auth", lambda _user_id, **_kwargs: lark_cli.LarkAuthProbe(status="not_configured", message="not configured"))
+    monkeypatch.setattr(
+        lark_cli,
+        "_ensure_managed_sandbox_lark_cli",
+        lambda version: provisioned_versions.append(version) or lark_cli.lark_cli_managed_sandbox_dir(),
+    )
+
+    result = lark_cli.install_lark_integration("alice", config, source_archive=archive)
+
+    assert result.success is True
+    # Remote provisioner mode gets the runtime from an init container, so the
+    # Gateway must not download Linux binaries at install time.
+    assert provisioned_versions == []
+    reset_skill_storage()
+
+
+def test_status_runtime_mode_none_for_non_aio(monkeypatch, tmp_path) -> None:
+    config = _config(tmp_path / "skills")
+    config.sandbox = SimpleNamespace(use="deerflow.sandbox.local:LocalSandboxProvider")
+    mode, ready, detail = lark_cli._resolve_sandbox_runtime_readiness(config, probe=True)
+    assert mode == "none"
+    assert ready is False
+    assert detail
+
+
+def test_status_runtime_mode_gateway_download_ready(monkeypatch, tmp_path) -> None:
+    _patch_paths(monkeypatch, tmp_path / "home")
+    config = _config(tmp_path / "skills")
+    config.sandbox = SimpleNamespace(use="deerflow.community.aio_sandbox:AioSandboxProvider")
+
+    # Stage a valid runtime dir so validation passes.
+    runtime = lark_cli.lark_cli_managed_sandbox_dir()
+    (runtime / "bin").mkdir(parents=True)
+    (runtime / "bin" / "lark-cli").write_text("#!/bin/sh\n", encoding="utf-8")
+    (runtime / "bin" / "lark-cli").chmod(0o755)
+    for arch in lark_cli.LARK_CLI_LINUX_ARCHES:
+        (runtime / f"linux-{arch}").mkdir(parents=True)
+        target = runtime / f"linux-{arch}" / "lark-cli"
+        target.write_bytes(b"\x7fELF")
+        target.chmod(0o755)
+
+    mode, ready, detail = lark_cli._resolve_sandbox_runtime_readiness(config, probe=True)
+    assert mode == "gateway-download"
+    assert ready is True
+    assert detail is None
+
+
+def test_status_runtime_mode_gateway_download_not_ready(monkeypatch, tmp_path) -> None:
+    _patch_paths(monkeypatch, tmp_path / "home")
+    config = _config(tmp_path / "skills")
+    config.sandbox = SimpleNamespace(use="deerflow.community.aio_sandbox:AioSandboxProvider")
+    mode, ready, detail = lark_cli._resolve_sandbox_runtime_readiness(config, probe=True)
+    assert mode == "gateway-download"
+    assert ready is False
+    assert detail
+
+
+def test_status_runtime_mode_init_container_ready(monkeypatch, tmp_path) -> None:
+    config = _config(tmp_path / "skills")
+    config.sandbox = SimpleNamespace(
+        use="deerflow.community.aio_sandbox:AioSandboxProvider",
+        provisioner_url="http://provisioner:8002",
+    )
+    monkeypatch.setattr(lark_cli, "_probe_provisioner_lark_cli_init_image", lambda _config: True)
+    mode, ready, detail = lark_cli._resolve_sandbox_runtime_readiness(config, probe=True)
+    assert mode == "init-container"
+    assert ready is True
+    assert detail is None
+
+
+def test_status_runtime_mode_init_container_not_configured(monkeypatch, tmp_path) -> None:
+    config = _config(tmp_path / "skills")
+    config.sandbox = SimpleNamespace(
+        use="deerflow.community.aio_sandbox:AioSandboxProvider",
+        provisioner_url="http://provisioner:8002",
+    )
+    monkeypatch.setattr(lark_cli, "_probe_provisioner_lark_cli_init_image", lambda _config: False)
+    mode, ready, detail = lark_cli._resolve_sandbox_runtime_readiness(config, probe=True)
+    assert mode == "init-container"
+    assert ready is False
+    assert detail
+
+
+def test_status_runtime_mode_init_container_unreachable(monkeypatch, tmp_path) -> None:
+    config = _config(tmp_path / "skills")
+    config.sandbox = SimpleNamespace(
+        use="deerflow.community.aio_sandbox:AioSandboxProvider",
+        provisioner_url="http://provisioner:8002",
+    )
+    monkeypatch.setattr(lark_cli, "_probe_provisioner_lark_cli_init_image", lambda _config: None)
+    mode, ready, detail = lark_cli._resolve_sandbox_runtime_readiness(config, probe=True)
+    assert mode == "init-container"
+    assert ready is False
+    assert detail
+
+
+def test_status_runtime_probe_skipped_when_not_requested(monkeypatch, tmp_path) -> None:
+    config = _config(tmp_path / "skills")
+    config.sandbox = SimpleNamespace(
+        use="deerflow.community.aio_sandbox:AioSandboxProvider",
+        provisioner_url="http://provisioner:8002",
+    )
+
+    def _fail(_config):  # pragma: no cover - must not be called
+        raise AssertionError("provisioner should not be probed when probe=False")
+
+    monkeypatch.setattr(lark_cli, "_probe_provisioner_lark_cli_init_image", _fail)
+    mode, ready, detail = lark_cli._resolve_sandbox_runtime_readiness(config, probe=False)
+    assert mode == "init-container"
+    assert ready is False
+    assert detail is None
 
 
 def test_install_lark_integration_is_idempotent_across_reinstalls(monkeypatch, tmp_path):
@@ -1247,6 +1389,53 @@ def test_lark_status_is_available_to_authenticated_users(monkeypatch, tmp_path):
 
     assert response.status_code == 200
     assert response.json()["installed"] is False
+
+
+def _status_with_host_paths() -> lark_cli.LarkIntegrationStatus:
+    return lark_cli.LarkIntegrationStatus(
+        installed=True,
+        version="v1.0.65",
+        manifest_version="v1.0.65",
+        latest_available_version=None,
+        runtime_version_mismatch=False,
+        app_configured=True,
+        app_id="cli_mock",
+        app_brand="feishu",
+        skills_expected=27,
+        skills_installed=27,
+        installed_skills=("lark-doc",),
+        enabled_skills=("lark-doc",),
+        install_path="/home/deer-flow/.deer-flow/integrations/skills/lark-cli",
+        cli=lark_cli.LarkCliProbe(available=True, path="/usr/bin/lark-cli", version="1.0.65"),
+        auth=lark_cli.LarkAuthProbe(status="authenticated", user="alice"),
+    )
+
+
+def test_lark_status_redacts_host_paths_for_non_admin(monkeypatch, tmp_path):
+    config = _config(tmp_path / "skills")
+    app = _make_app(system_role="user", config=config)
+    monkeypatch.setattr(integrations_router, "get_lark_integration_status", lambda *_a, **_k: _status_with_host_paths())
+
+    with TestClient(app) as client:
+        body = client.get("/api/integrations/lark/status").json()
+
+    assert body["install_path"] == ""
+    assert body["cli"]["path"] is None
+    # Non-sensitive fields are still reported.
+    assert body["installed"] is True
+    assert body["cli"]["version"] == "1.0.65"
+
+
+def test_lark_status_exposes_host_paths_for_admin(monkeypatch, tmp_path):
+    config = _config(tmp_path / "skills")
+    app = _make_app(system_role="admin", config=config)
+    monkeypatch.setattr(integrations_router, "get_lark_integration_status", lambda *_a, **_k: _status_with_host_paths())
+
+    with TestClient(app) as client:
+        body = client.get("/api/integrations/lark/status").json()
+
+    assert body["install_path"] == "/home/deer-flow/.deer-flow/integrations/skills/lark-cli"
+    assert body["cli"]["path"] == "/usr/bin/lark-cli"
 
 
 def test_lark_config_start_route_returns_browser_url(monkeypatch, tmp_path):

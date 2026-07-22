@@ -774,6 +774,10 @@ export const zhCN: Translations = {
         skillPack: "技能包",
         gatewayCli: "Gateway CLI",
         auth: "授权",
+        sandboxRuntime: "沙箱运行时",
+        sandboxRuntimeInitContainer: "由 init container 提供",
+        sandboxRuntimeGatewayDownload: "由 Gateway 提供",
+        sandboxRuntimeNotReady: "未就绪 —— 对话时 lark-cli 可能不可用",
         notInstalled: "尚未安装",
         skillsInstalled: (installed, expected) =>
           `已安装 ${installed}/${expected} 个技能`,

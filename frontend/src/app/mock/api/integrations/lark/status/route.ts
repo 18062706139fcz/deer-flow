@@ -24,6 +24,9 @@ const status = {
     user: null,
     verified: false,
   },
+  sandbox_runtime_mode: "none",
+  sandbox_runtime_ready: false,
+  sandbox_runtime_detail: null,
 };
 
 export function GET() {

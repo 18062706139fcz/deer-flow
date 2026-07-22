@@ -804,6 +804,11 @@ export const enUS: Translations = {
         skillPack: "Skill pack",
         gatewayCli: "Gateway CLI",
         auth: "Auth",
+        sandboxRuntime: "Sandbox runtime",
+        sandboxRuntimeInitContainer: "Provisioned by init container",
+        sandboxRuntimeGatewayDownload: "Provisioned by Gateway",
+        sandboxRuntimeNotReady:
+          "Not ready — lark-cli may be missing at chat time",
         notInstalled: "Not installed",
         skillsInstalled: (installed, expected) =>
           `${installed}/${expected} skills installed`,

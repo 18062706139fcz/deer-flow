@@ -35,6 +35,19 @@ router = APIRouter(prefix="/api/integrations", tags=["integrations"])
 _ADMIN_REQUIRED_DETAIL = "Admin privileges required to install integrations."
 
 
+async def _is_admin_user(request: Request) -> bool:
+    """Non-raising admin check used to gate host-path disclosure in responses.
+
+    Fails closed: any error (missing middleware state, auth failure) is treated
+    as non-admin so host paths are redacted rather than accidentally exposed.
+    """
+    try:
+        await require_admin_user(request, detail=_ADMIN_REQUIRED_DETAIL)
+    except Exception:
+        return False
+    return True
+
+
 class LarkCliProbeResponse(BaseModel):
     available: bool = Field(..., description="Whether lark-cli is available to the Gateway, either managed by DeerFlow or on PATH")
     path: str | None = Field(None, description="Resolved lark-cli executable path")
@@ -65,6 +78,9 @@ class LarkIntegrationStatusResponse(BaseModel):
     install_path: str = Field(..., description="Host path of the managed Lark skill pack")
     cli: LarkCliProbeResponse
     auth: LarkAuthProbeResponse
+    sandbox_runtime_mode: str = Field("none", description="How lark-cli is provisioned into the sandbox: none, gateway-download, or init-container")
+    sandbox_runtime_ready: bool = Field(False, description="Whether the sandbox lark-cli runtime is provisioned and usable at chat time")
+    sandbox_runtime_detail: str | None = Field(None, description="Human-readable reason when the sandbox runtime is not ready")
 
 
 class LarkInstallResponse(BaseModel):
@@ -148,7 +164,12 @@ def _auth_probe_to_response(probe: LarkAuthProbe) -> LarkAuthProbeResponse:
     )
 
 
-def _status_to_response(status: LarkIntegrationStatus) -> LarkIntegrationStatusResponse:
+def _status_to_response(status: LarkIntegrationStatus, *, include_host_paths: bool = True) -> LarkIntegrationStatusResponse:
+    cli = _cli_probe_to_response(status.cli)
+    if not include_host_paths:
+        # Host filesystem paths (Gateway layout) are admin-only info; redact them
+        # for non-admin callers of the otherwise non-gated status/complete routes.
+        cli = cli.model_copy(update={"path": None})
     return LarkIntegrationStatusResponse(
         installed=status.installed,
         version=status.version,
@@ -162,9 +183,12 @@ def _status_to_response(status: LarkIntegrationStatus) -> LarkIntegrationStatusR
         skills_installed=status.skills_installed,
         installed_skills=list(status.installed_skills),
         enabled_skills=list(status.enabled_skills),
-        install_path=status.install_path,
-        cli=_cli_probe_to_response(status.cli),
+        install_path=status.install_path if include_host_paths else "",
+        cli=cli,
         auth=_auth_probe_to_response(status.auth),
+        sandbox_runtime_mode=status.sandbox_runtime_mode,
+        sandbox_runtime_ready=status.sandbox_runtime_ready,
+        sandbox_runtime_detail=status.sandbox_runtime_detail,
     )
 
 
@@ -188,11 +212,11 @@ def _config_start_to_response(result: LarkConfigStartResult) -> LarkConfigStartR
     )
 
 
-def _config_complete_to_response(result: LarkConfigCompleteResult) -> LarkConfigCompleteResponse:
+def _config_complete_to_response(result: LarkConfigCompleteResult, *, include_host_paths: bool = True) -> LarkConfigCompleteResponse:
     return LarkConfigCompleteResponse(
         success=result.success,
         message=result.message,
-        status=_status_to_response(result.status),
+        status=_status_to_response(result.status, include_host_paths=include_host_paths),
     )
 
 
@@ -206,19 +230,19 @@ def _auth_start_to_response(result: LarkAuthStartResult) -> LarkAuthStartRespons
     )
 
 
-def _auth_complete_to_response(result: LarkAuthCompleteResult) -> LarkAuthCompleteResponse:
+def _auth_complete_to_response(result: LarkAuthCompleteResult, *, include_host_paths: bool = True) -> LarkAuthCompleteResponse:
     return LarkAuthCompleteResponse(
         success=result.success,
         message=result.message,
-        status=_status_to_response(result.status),
+        status=_status_to_response(result.status, include_host_paths=include_host_paths),
     )
 
 
 @router.get("/lark/status", response_model=LarkIntegrationStatusResponse, summary="Get Lark/Feishu Integration Status")
-async def get_lark_status(config: AppConfig = Depends(get_config)) -> LarkIntegrationStatusResponse:
+async def get_lark_status(request: Request, config: AppConfig = Depends(get_config)) -> LarkIntegrationStatusResponse:
     try:
-        status = await asyncio.to_thread(get_lark_integration_status, get_effective_user_id(), config, check_latest=True)
-        return _status_to_response(status)
+        status = await asyncio.to_thread(get_lark_integration_status, get_effective_user_id(), config, check_latest=True, check_runtime=True)
+        return _status_to_response(status, include_host_paths=await _is_admin_user(request))
     except Exception as e:
         logger.error("Failed to get Lark integration status: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to get Lark integration status.")
@@ -263,7 +287,7 @@ async def start_lark_app_config(body: LarkConfigStartRequest) -> LarkConfigStart
 
 
 @router.post("/lark/config/complete", response_model=LarkConfigCompleteResponse, summary="Complete Lark/Feishu App Configuration")
-async def complete_lark_app_config(body: LarkConfigCompleteRequest, config: AppConfig = Depends(get_config)) -> LarkConfigCompleteResponse:
+async def complete_lark_app_config(request: Request, body: LarkConfigCompleteRequest, config: AppConfig = Depends(get_config)) -> LarkConfigCompleteResponse:
     try:
         result = await asyncio.to_thread(
             complete_lark_config,
@@ -274,7 +298,7 @@ async def complete_lark_app_config(body: LarkConfigCompleteRequest, config: AppC
             interval=body.interval,
             expires_in=body.expires_in,
         )
-        return _config_complete_to_response(result)
+        return _config_complete_to_response(result, include_host_paths=await _is_admin_user(request))
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:
@@ -309,7 +333,7 @@ async def start_lark_browser_auth(body: LarkAuthStartRequest) -> LarkAuthStartRe
 
 
 @router.post("/lark/auth/complete", response_model=LarkAuthCompleteResponse, summary="Complete Lark/Feishu Browser Authorization")
-async def complete_lark_browser_auth(body: LarkAuthCompleteRequest, config: AppConfig = Depends(get_config)) -> LarkAuthCompleteResponse:
+async def complete_lark_browser_auth(request: Request, body: LarkAuthCompleteRequest, config: AppConfig = Depends(get_config)) -> LarkAuthCompleteResponse:
     try:
         result = await asyncio.to_thread(
             complete_lark_auth,
@@ -318,7 +342,7 @@ async def complete_lark_browser_auth(body: LarkAuthCompleteRequest, config: AppC
             device_code=body.device_code,
             wait_timeout_seconds=body.wait_timeout_seconds,
         )
-        return _auth_complete_to_response(result)
+        return _auth_complete_to_response(result, include_host_paths=await _is_admin_user(request))
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:

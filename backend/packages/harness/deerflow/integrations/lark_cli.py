@@ -107,6 +107,20 @@ LARK_CLI_SANDBOX_DATA_DIR = "/mnt/integrations/lark-cli/data"
 LARK_CLI_SANDBOX_RUNTIME_DIR = "/mnt/integrations/lark-cli/runtime"
 LARK_CLI_LINUX_ARCHES = ("amd64", "arm64")
 LARK_CLI_RUNTIME_MANIFEST_FILE = ".deerflow-lark-cli-runtime.json"
+
+# Arch-dispatch launcher for the sandbox runtime layout. Shared by the Gateway
+# writer (`_write_lark_cli_sandbox_launcher`) and the `docker/lark-cli-init`
+# init image so the two producers of `bin/lark-cli` never drift.
+LARK_CLI_SANDBOX_LAUNCHER_SCRIPT = """#!/bin/sh
+set -eu
+case "$(uname -m)" in
+  x86_64|amd64) arch=amd64 ;;
+  aarch64|arm64) arch=arm64 ;;
+  *) echo "Unsupported sandbox architecture: $(uname -m)" >&2; exit 126 ;;
+esac
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+exec "$script_dir/../linux-$arch/lark-cli" "$@"
+"""
 _VERSION_TAG_RE = re.compile(r"v?\d+\.\d+\.\d+")
 _DEERFLOW_LARK_SHARED_GUIDANCE_MARKER = "<!-- deerflow-lark-cli-auth-guidance-v2 -->"
 _DEERFLOW_LARK_SHARED_GUIDANCE_LEGACY_MARKERS = ("<!-- deerflow-lark-cli-auth-guidance-v1 -->",)
@@ -179,6 +193,9 @@ class LarkIntegrationStatus:
     install_path: str
     cli: LarkCliProbe
     auth: LarkAuthProbe
+    sandbox_runtime_mode: str = "none"
+    sandbox_runtime_ready: bool = False
+    sandbox_runtime_detail: str | None = None
 
 
 @dataclass(frozen=True)
@@ -233,6 +250,20 @@ def lark_integration_root(_user_id: str | None = None) -> Path:
 
 def lark_manifest_path(user_id: str) -> Path:
     return lark_integration_root(user_id) / LARK_CLI_MANIFEST_FILE
+
+
+def lark_skills_installed(user_id: str | None = None) -> bool:
+    """Whether the managed Lark skill pack is installed.
+
+    Mirrors the ``installed`` field of :func:`get_lark_integration_status`
+    (manifest present and ``lark-shared`` extracted) without probing the CLI or
+    auth. Used to decide whether a sandbox should request the lark-cli runtime.
+    """
+    root = lark_integration_root(user_id)
+    manifest = _read_manifest(root)
+    if not manifest:
+        return False
+    return "lark-shared" in _installed_lark_skill_names(root)
 
 
 def lark_cli_config_dir(user_id: str) -> Path:
@@ -366,19 +397,7 @@ def _extract_lark_cli_runtime_binary(archive: bytes, destination: Path) -> None:
 def _write_lark_cli_sandbox_launcher(staging: Path) -> None:
     launcher = staging / "bin" / "lark-cli"
     launcher.parent.mkdir(parents=True, exist_ok=True)
-    launcher.write_text(
-        """#!/bin/sh
-set -eu
-case "$(uname -m)" in
-  x86_64|amd64) arch=amd64 ;;
-  aarch64|arm64) arch=arm64 ;;
-  *) echo "Unsupported sandbox architecture: $(uname -m)" >&2; exit 126 ;;
-esac
-script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-exec "$script_dir/../linux-$arch/lark-cli" "$@"
-""",
-        encoding="utf-8",
-    )
+    launcher.write_text(LARK_CLI_SANDBOX_LAUNCHER_SCRIPT, encoding="utf-8")
     launcher.chmod(0o755)
 
 
@@ -629,12 +648,51 @@ def probe_lark_auth(user_id: str, *, verify: bool = False) -> LarkAuthProbe:
     )
 
 
+def _resolve_sandbox_runtime_readiness(
+    config: AppConfig,
+    *,
+    probe: bool,
+) -> tuple[str, bool, str | None]:
+    """Resolve the sandbox lark-cli runtime mode and readiness.
+
+    Modes:
+    - ``none``: sandboxes don't run lark-cli (non-AIO provider).
+    - ``gateway-download``: local AIO — the Gateway stages a ``sandbox-cli`` dir
+      and bind-mounts it; ready when that dir validates.
+    - ``init-container``: remote provisioner — a lark-cli init image provisions
+      the runtime; ready when the provisioner reports the init image is configured.
+
+    ``probe`` gates the (best-effort, short-timeout) provisioner capability call.
+    """
+    if not _uses_aio_sandbox(config):
+        return "none", False, "Sandbox does not run lark-cli in this configuration."
+
+    if _uses_remote_provisioner(config):
+        if not probe:
+            return "init-container", False, None
+        init_image = _probe_provisioner_lark_cli_init_image(config)
+        if init_image is None:
+            return "init-container", False, "Could not reach the provisioner to confirm the lark-cli init image."
+        if not init_image:
+            return "init-container", False, "The provisioner has no lark-cli init image configured (LARK_CLI_INIT_IMAGE)."
+        return "init-container", True, None
+
+    # Local AIO: Gateway-download runtime dir.
+    runtime_dir = lark_cli_managed_sandbox_dir()
+    try:
+        _validate_lark_cli_sandbox_runtime(runtime_dir)
+    except (ValueError, OSError):
+        return "gateway-download", False, "The managed sandbox lark-cli runtime is not installed."
+    return "gateway-download", True, None
+
+
 def get_lark_integration_status(
     user_id: str,
     config: AppConfig,
     *,
     verify_auth: bool = False,
     check_latest: bool = False,
+    check_runtime: bool = False,
 ) -> LarkIntegrationStatus:
     root = lark_integration_root(user_id)
     manifest = _read_manifest(root)
@@ -644,6 +702,7 @@ def get_lark_integration_status(
     manifest_version = str(manifest.get("version")) if manifest else None
     cli = probe_lark_cli()
     latest_available = _cached_latest_lark_cli_version() if check_latest else None
+    runtime_mode, runtime_ready, runtime_detail = _resolve_sandbox_runtime_readiness(config, probe=check_runtime)
     return LarkIntegrationStatus(
         installed=bool(manifest) and "lark-shared" in installed_skills,
         version=manifest_version or FALLBACK_LARK_CLI_VERSION,
@@ -660,6 +719,9 @@ def get_lark_integration_status(
         install_path=str(root),
         cli=cli,
         auth=probe_lark_auth(user_id, verify=verify_auth),
+        sandbox_runtime_mode=runtime_mode,
+        sandbox_runtime_ready=runtime_ready,
+        sandbox_runtime_detail=runtime_detail,
     )
 
 
@@ -760,7 +822,7 @@ def install_lark_integration(
             except OSError:
                 pass
 
-    if _uses_aio_sandbox(config):
+    if _uses_aio_sandbox(config) and not _uses_remote_provisioner(config):
         installed_manifest = _read_manifest(lark_integration_root()) or {}
         sandbox_version = str(installed_manifest.get("version") or resolved_version or FALLBACK_LARK_CLI_VERSION)
         _ensure_managed_sandbox_lark_cli(sandbox_version)
@@ -784,6 +846,42 @@ def _uses_aio_sandbox(config: AppConfig) -> bool:
     if use is None and isinstance(sandbox, dict):
         use = sandbox.get("use")
     return isinstance(use, str) and "aio_sandbox" in use.lower()
+
+
+def _sandbox_config_value(config: AppConfig, key: str) -> str:
+    """Read a sandbox config value as a string, tolerating dict/attr configs."""
+    sandbox = getattr(config, "sandbox", None)
+    value = getattr(sandbox, key, None)
+    if value is None and isinstance(sandbox, dict):
+        value = sandbox.get(key)
+    return str(value).strip() if value else ""
+
+
+def _uses_remote_provisioner(config: AppConfig) -> bool:
+    """True when sandboxes are provisioned by a remote provisioner (K8s mode)."""
+    return bool(_sandbox_config_value(config, "provisioner_url"))
+
+
+def _probe_provisioner_lark_cli_init_image(config: AppConfig) -> bool | None:
+    """Best-effort read of the provisioner's lark-cli init-image capability.
+
+    Returns True/False when the provisioner answers, or None when it can't be
+    reached. Used only to surface a sandbox-runtime readiness signal; failures
+    degrade to "not ready" rather than raising.
+    """
+    base = _sandbox_config_value(config, "provisioner_url")
+    if not base:
+        return None
+    api_key = _sandbox_config_value(config, "provisioner_api_key")
+    headers = {"X-API-Key": api_key} if api_key else {}
+    url = f"{base.rstrip('/')}/api/capabilities"
+    try:
+        request = urllib.request.Request(url, headers={"User-Agent": "deer-flow", **headers})
+        with urllib.request.urlopen(request, timeout=5) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        return bool(payload.get("lark_cli_init_image"))
+    except Exception:
+        return None
 
 
 def start_lark_config(user_id: str, *, brand: str = "feishu") -> LarkConfigStartResult:
@@ -958,6 +1056,13 @@ def _install_managed_gateway_lark_cli(version: str) -> LarkCliProbe:
 
     install_root = lark_cli_managed_gateway_dir()
     install_root.mkdir(parents=True, exist_ok=True)
+    # NOTE: this runs @larksuite/cli's install scripts (postinstall fetches the
+    # platform lark-cli binary), so `--ignore-scripts` is not viable here — the
+    # CLI would be unusable without it. The tradeoff: an admin-triggered install
+    # executes the official package's install scripts (and those of its deps)
+    # with Gateway privileges, so a supply-chain compromise of that package is
+    # the blast radius. This mirrors the pinned `npm install -g` in the Gateway
+    # Dockerfile; both are gated behind the admin install action.
     result = subprocess.run(
         [
             npm,

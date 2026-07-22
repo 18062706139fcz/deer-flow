@@ -158,6 +158,10 @@ services:
     environment:
       - K8S_NAMESPACE=deer-flow
       - SANDBOX_IMAGE=enterprise-public-cn-beijing.cr.volces.com/vefaas-public/all-in-one-sandbox:latest
+      # Optional lark-cli init image (Pattern A). Empty ⇒ legacy runtime mount.
+      # Set to a published tag (e.g. deer-flow/lark-cli-init:v1.0.65) to provision
+      # the sandbox lark-cli runtime via an init container + emptyDir.
+      - LARK_CLI_INIT_IMAGE=${LARK_CLI_INIT_IMAGE:-}
       - SKILLS_HOST_PATH=${DEER_FLOW_REPO_ROOT}/skills
       - THREADS_HOST_PATH=${DEER_FLOW_HOME}/threads
       - DEER_FLOW_HOST_BASE_DIR=${DEER_FLOW_HOME}

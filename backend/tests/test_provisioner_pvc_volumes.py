@@ -466,3 +466,98 @@ class TestBuildPodVolumes:
         pod = provisioner_module._build_pod("sandbox-1", "thread-1", user_id="user-7")
         skills_mount = pod.spec.containers[0].volume_mounts[0]
         assert skills_mount.sub_path == "deer-flow/users/user-7/threads/thread-1/skills"
+
+
+class TestLarkCliInitContainer:
+    """Init-container + emptyDir provisioning of the sandbox lark-cli runtime."""
+
+    def test_no_init_container_when_image_unset(self, provisioner_module):
+        provisioner_module.SKILLS_PVC_NAME = ""
+        provisioner_module.USERDATA_PVC_NAME = ""
+        provisioner_module.LARK_CLI_INIT_IMAGE = ""
+        pod = provisioner_module._build_pod(
+            "sandbox-1",
+            "thread-1",
+            provision_lark_cli_runtime=True,
+        )
+        assert not pod.spec.init_containers
+        volume_names = {v.name for v in pod.spec.volumes}
+        assert provisioner_module.LARK_CLI_RUNTIME_VOLUME_NAME not in volume_names
+
+    def test_no_init_container_when_flag_disabled(self, provisioner_module):
+        provisioner_module.SKILLS_PVC_NAME = ""
+        provisioner_module.USERDATA_PVC_NAME = ""
+        provisioner_module.LARK_CLI_INIT_IMAGE = "deer-flow/lark-cli-init:v1.0.65"
+        pod = provisioner_module._build_pod(
+            "sandbox-1",
+            "thread-1",
+            provision_lark_cli_runtime=False,
+        )
+        assert not pod.spec.init_containers
+
+    def test_init_container_and_emptydir_when_enabled(self, provisioner_module):
+        provisioner_module.SKILLS_PVC_NAME = ""
+        provisioner_module.USERDATA_PVC_NAME = ""
+        provisioner_module.LARK_CLI_INIT_IMAGE = "deer-flow/lark-cli-init:v1.0.65"
+        pod = provisioner_module._build_pod(
+            "sandbox-1",
+            "thread-1",
+            provision_lark_cli_runtime=True,
+        )
+
+        # emptyDir volume shared by init + sandbox containers.
+        runtime_volumes = [v for v in pod.spec.volumes if v.name == provisioner_module.LARK_CLI_RUNTIME_VOLUME_NAME]
+        assert len(runtime_volumes) == 1
+        assert runtime_volumes[0].empty_dir is not None
+
+        # Exactly one init container, pointing at the configured image and
+        # writing the runtime path.
+        assert pod.spec.init_containers is not None
+        assert len(pod.spec.init_containers) == 1
+        init = pod.spec.init_containers[0]
+        assert init.image == "deer-flow/lark-cli-init:v1.0.65"
+        init_mount = init.volume_mounts[0]
+        assert init_mount.name == provisioner_module.LARK_CLI_RUNTIME_VOLUME_NAME
+        assert init_mount.mount_path == provisioner_module.LARK_CLI_RUNTIME_CONTAINER_PATH
+        assert init_mount.read_only is False
+
+        # Sandbox container gets a read-only runtime mount at the same path.
+        sandbox_runtime_mounts = [m for m in pod.spec.containers[0].volume_mounts if m.name == provisioner_module.LARK_CLI_RUNTIME_VOLUME_NAME]
+        assert len(sandbox_runtime_mounts) == 1
+        assert sandbox_runtime_mounts[0].mount_path == provisioner_module.LARK_CLI_RUNTIME_CONTAINER_PATH
+        assert sandbox_runtime_mounts[0].read_only is True
+
+    def test_runtime_extra_mount_dropped_when_init_container_enabled(self, provisioner_module):
+        provisioner_module.SKILLS_PVC_NAME = ""
+        provisioner_module.USERDATA_PVC_NAME = ""
+        provisioner_module.DEER_FLOW_HOST_BASE_DIR = "/state"
+        provisioner_module.LARK_CLI_INIT_IMAGE = "deer-flow/lark-cli-init:v1.0.65"
+        extra_mounts = [
+            provisioner_module.ExtraMount(
+                host_path="/state/users/alice/integrations/lark-cli/config",
+                container_path="/mnt/integrations/lark-cli/config",
+                read_only=False,
+            ),
+            provisioner_module.ExtraMount(
+                host_path="/state/integrations/lark-cli/sandbox-cli",
+                container_path="/mnt/integrations/lark-cli/runtime",
+                read_only=True,
+            ),
+        ]
+
+        pod = provisioner_module._build_pod(
+            "sandbox-1",
+            "thread-1",
+            user_id="alice",
+            extra_mounts=extra_mounts,
+            provision_lark_cli_runtime=True,
+        )
+
+        # The credential config mount stays; the hostPath runtime extra mount is
+        # replaced by the emptyDir supplied by the init container (so the runtime
+        # path is not backed by an extra-* hostPath volume).
+        runtime_mounts = [m for m in pod.spec.containers[0].volume_mounts if m.mount_path == "/mnt/integrations/lark-cli/runtime"]
+        assert len(runtime_mounts) == 1
+        assert runtime_mounts[0].name == provisioner_module.LARK_CLI_RUNTIME_VOLUME_NAME
+        mount_paths = {m.mount_path for m in pod.spec.containers[0].volume_mounts}
+        assert "/mnt/integrations/lark-cli/config" in mount_paths

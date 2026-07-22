@@ -40,7 +40,7 @@ from deerflow.community.warm_pool_lifecycle import (
 from deerflow.config import get_app_config
 from deerflow.config.paths import VIRTUAL_PATH_PREFIX, get_paths, join_host_path
 from deerflow.integrations.lark_cli import INTEGRATION_ID as LARK_CLI_INTEGRATION_ID
-from deerflow.integrations.lark_cli import LARK_CLI_SANDBOX_CONFIG_DIR, LARK_CLI_SANDBOX_DATA_DIR, LARK_CLI_SANDBOX_RUNTIME_DIR, ensure_lark_cli_credential_tree
+from deerflow.integrations.lark_cli import LARK_CLI_SANDBOX_CONFIG_DIR, LARK_CLI_SANDBOX_DATA_DIR, LARK_CLI_SANDBOX_RUNTIME_DIR, ensure_lark_cli_credential_tree, lark_skills_installed
 from deerflow.runtime.user_context import get_effective_user_id
 from deerflow.sandbox.sandbox import Sandbox
 from deerflow.sandbox.sandbox_provider import SandboxProvider
@@ -895,6 +895,21 @@ class AioSandboxProvider(WarmPoolLifecycleMixin[SandboxInfo], SandboxProvider):
             return []
 
     @staticmethod
+    def _lark_integration_active(user_id: str | None = None) -> bool:
+        """Whether the managed Lark skill pack is installed for this user.
+
+        Drives whether a sandbox requests the lark-cli runtime (init container /
+        Gateway-download mount). Independent of whether a local ``sandbox-cli``
+        dir exists, so remote/K8s can opt in without a Gateway-side download.
+        """
+        try:
+            effective_user_id = AioSandboxProvider._effective_acquire_user_id(user_id)
+            return lark_skills_installed(effective_user_id)
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning(f"Could not determine Lark integration state: {e}")
+            return False
+
+    @staticmethod
     def _get_lark_cli_runtime_mounts(*, user_id: str | None = None) -> list[tuple[str, str, bool]]:
         """Mount the per-user lark-cli config/data dirs used by Settings auth.
 
@@ -904,13 +919,23 @@ class AioSandboxProvider(WarmPoolLifecycleMixin[SandboxInfo], SandboxProvider):
         ``lark-cli`` inside the sandbox, so those same directories must be
         mounted into the container or the CLI sees a separate unauthenticated
         profile.
+
+        The ``config`` dir holds the long-lived Lark ``appSecret`` (written by
+        ``lark-cli config init`` on the Gateway, never in-sandbox), so it is
+        mounted **read-only**: sandbox processes only need to read it, and a
+        read-only bind stops a compromised agent from tampering with or
+        replacing the app credentials. The ``data`` dir holds refreshable OAuth
+        tokens that ``lark-cli auth`` updates in-sandbox, so it stays writable.
+        This is defense-in-depth only — both dirs remain readable to arbitrary
+        sandbox processes until the auth-proxy follow-up (issue #4338) lands.
+        See the sandbox trust-boundary note in ``backend/AGENTS.md``.
         """
         try:
             paths = get_paths()
             effective_user_id = AioSandboxProvider._effective_acquire_user_id(user_id)
             ensure_lark_cli_credential_tree(effective_user_id, paths=paths)
             mounts = [
-                (paths.host_user_integration_config_dir(effective_user_id, LARK_CLI_INTEGRATION_ID), LARK_CLI_SANDBOX_CONFIG_DIR, False),
+                (paths.host_user_integration_config_dir(effective_user_id, LARK_CLI_INTEGRATION_ID), LARK_CLI_SANDBOX_CONFIG_DIR, True),
                 (paths.host_user_integration_data_dir(effective_user_id, LARK_CLI_INTEGRATION_ID), LARK_CLI_SANDBOX_DATA_DIR, False),
             ]
             runtime_dir = paths.base_dir / "integrations" / LARK_CLI_INTEGRATION_ID / "sandbox-cli"
@@ -1782,6 +1807,7 @@ class AioSandboxProvider(WarmPoolLifecycleMixin[SandboxInfo], SandboxProvider):
         """
         effective_user_id = self._effective_acquire_user_id(user_id)
         extra_mounts = self._get_extra_mounts(thread_id, user_id=effective_user_id)
+        provision_lark_cli_runtime = self._lark_integration_active(effective_user_id)
 
         # Enforce replicas: only warm-pool containers count toward eviction budget.
         # Active sandboxes are in use by live threads and must not be forcibly stopped.
@@ -1790,7 +1816,13 @@ class AioSandboxProvider(WarmPoolLifecycleMixin[SandboxInfo], SandboxProvider):
             evicted = self._evict_oldest_warm()
             self._log_replicas_soft_cap(replicas, sandbox_id, evicted)
 
-        info = self._backend.create(thread_id, sandbox_id, extra_mounts=extra_mounts or None, user_id=effective_user_id)
+        info = self._backend.create(
+            thread_id,
+            sandbox_id,
+            extra_mounts=extra_mounts or None,
+            user_id=effective_user_id,
+            provision_lark_cli_runtime=provision_lark_cli_runtime,
+        )
 
         # Wait for sandbox to be ready
         if not wait_for_sandbox_ready(info.sandbox_url, timeout=60):
@@ -1803,6 +1835,7 @@ class AioSandboxProvider(WarmPoolLifecycleMixin[SandboxInfo], SandboxProvider):
         """Async counterpart to ``_create_sandbox``."""
         effective_user_id = self._effective_acquire_user_id(user_id)
         extra_mounts = await asyncio.to_thread(self._get_extra_mounts, thread_id, user_id=effective_user_id)
+        provision_lark_cli_runtime = await asyncio.to_thread(self._lark_integration_active, effective_user_id)
 
         # Enforce replicas: only warm-pool containers count toward eviction budget.
         # Active sandboxes are in use by live threads and must not be forcibly stopped.
@@ -1811,7 +1844,14 @@ class AioSandboxProvider(WarmPoolLifecycleMixin[SandboxInfo], SandboxProvider):
             evicted = await asyncio.to_thread(self._evict_oldest_warm)
             self._log_replicas_soft_cap(replicas, sandbox_id, evicted)
 
-        info = await asyncio.to_thread(self._backend.create, thread_id, sandbox_id, extra_mounts=extra_mounts or None, user_id=effective_user_id)
+        info = await asyncio.to_thread(
+            self._backend.create,
+            thread_id,
+            sandbox_id,
+            extra_mounts=extra_mounts or None,
+            user_id=effective_user_id,
+            provision_lark_cli_runtime=provision_lark_cli_runtime,
+        )
 
         # Wait for sandbox to be ready without blocking the event loop.
         if not await wait_for_sandbox_ready_async(info.sandbox_url, timeout=60):

@@ -105,6 +105,13 @@ test.describe("Integrations settings", () => {
       page.getByText("Installed 3 Lark/Feishu skills."),
     ).toBeVisible();
 
+    // Sandbox-runtime readiness row surfaces once the init-container runtime is
+    // reported ready, so a green UI can't hide a chat-time command-not-found.
+    await expect(dialog.getByText("Sandbox runtime")).toBeVisible();
+    await expect(
+      dialog.getByText("Provisioned by init container"),
+    ).toBeVisible();
+
     await dialog.getByRole("button", { name: "Calendar" }).click();
     await dialog
       .getByLabel("Exact OAuth scope")
