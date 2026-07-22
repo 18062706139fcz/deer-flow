@@ -1,0 +1,21 @@
+docs/superpowers/specs/2026-07-22-edit-and-rerun-user-message-v1-design.md
+  s_6e3f63f455dcbb::t_ae6e56b2356af5 4,9,11-13,20-21,23,27,30,34,38-42,44-48,59,64,68-76,79-81,85-90,93-97,99-101,103-107,113,118-119,123,125,127-129,131,133-142,144,146,148-150,152-168,170-212,216-225,229-239,241-245,252-262
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "a221104488e158272db989ba13efc4009d0710f9",
+  "prompts": {},
+  "sessions": {
+    "s_6e3f63f455dcbb": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f8982-ce75-7311-bb55-e2a6bea4a432",
+        "model": "unknown"
+      },
+      "human_author": "ryker <2279549769@qq.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
