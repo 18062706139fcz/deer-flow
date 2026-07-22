@@ -403,6 +403,7 @@ async def run_agent(
     workspace_changes_user_id: str | None = None
     snapshot_capture_failed = False
     llm_error_fallback_message: str | None = None
+    checkpoint_rollback_completed = False
     # Message ids checkpointed *before* this run started. The stream loop uses
     # this set to mask out ``deerflow_error_fallback`` markers that belong to
     # earlier runs on the same thread — without it, one stale fallback in
@@ -749,7 +750,7 @@ async def run_agent(
             if action == "rollback":
                 await run_manager.set_status(run_id, RunStatus.error, error="Rolled back by user")
                 try:
-                    await _rollback_to_pre_run_checkpoint(
+                    checkpoint_rollback_completed = await _rollback_to_pre_run_checkpoint(
                         accessor=accessor,
                         checkpointer=checkpointer,
                         thread_id=thread_id,
@@ -767,6 +768,7 @@ async def run_agent(
             if error_msg is None and journal is not None:
                 error_msg = journal.llm_error_fallback_message
             error_msg = error_msg or "LLM provider failed after retries"
+            await _ensure_finalizing_before_edit_failure(run_manager, record)
             await run_manager.set_status(run_id, RunStatus.error, error=error_msg)
         else:
             runtime_context = runtime.context if isinstance(runtime.context, dict) else None
@@ -792,7 +794,7 @@ async def run_agent(
         if action == "rollback":
             await run_manager.set_status(run_id, RunStatus.error, error="Rolled back by user")
             try:
-                await _rollback_to_pre_run_checkpoint(
+                checkpoint_rollback_completed = await _rollback_to_pre_run_checkpoint(
                     accessor=accessor,
                     checkpointer=checkpointer,
                     thread_id=thread_id,
@@ -804,12 +806,14 @@ async def run_agent(
             except Exception:
                 logger.warning("Run %s cancellation rollback failed", run_id, exc_info=True)
         else:
+            await _ensure_finalizing_before_edit_failure(run_manager, record)
             await run_manager.set_status(run_id, RunStatus.interrupted)
             logger.info("Run %s was cancelled", run_id)
 
     except Exception as exc:
         error_msg = f"{exc}"
         logger.exception("Run %s failed: %s", run_id, error_msg)
+        await _ensure_finalizing_before_edit_failure(run_manager, record)
         await run_manager.set_status(run_id, RunStatus.error, error=error_msg)
         await bridge.publish(
             run_id,
@@ -821,6 +825,30 @@ async def run_agent(
         )
 
     finally:
+        if _is_edit_replay_run(record) and record.status != RunStatus.success:
+            if not record.finalizing:
+                await run_manager.set_finalizing(run_id, True)
+            try:
+                if not checkpoint_rollback_completed:
+                    checkpoint_rollback_completed = await _rollback_to_pre_run_checkpoint(
+                        accessor=accessor,
+                        checkpointer=checkpointer,
+                        thread_id=thread_id,
+                        run_id=run_id,
+                        rollback_point=rollback_point,
+                        snapshot_capture_failed=snapshot_capture_failed,
+                    )
+                if checkpoint_rollback_completed:
+                    await _publish_restored_checkpoint_values(
+                        bridge=bridge,
+                        run_id=run_id,
+                        accessor=accessor,
+                        thread_id=thread_id,
+                    )
+                    logger.info("Run %s edit replay restored pre-run checkpoint %s", run_id, pre_run_checkpoint_id)
+            except Exception:
+                logger.warning("Run %s edit replay rollback failed", run_id, exc_info=True)
+
         # Persist any subagent step events still buffered (#3779) — including on
         # abort/exception paths, where the stream loop broke before its own flush.
         if subagent_events is not None:
@@ -852,7 +880,7 @@ async def run_agent(
             except Exception:
                 logger.warning("Failed to persist run completion for %s (non-fatal)", run_id, exc_info=True)
 
-        if checkpointer is not None and record.status == RunStatus.interrupted:
+        if checkpointer is not None and record.status == RunStatus.interrupted and not _is_edit_replay_run(record):
             try:
                 await run_manager.wait_for_prior_finalizing(thread_id, run_id)
                 if not await run_manager.has_later_started_run(thread_id, run_id):
@@ -1255,6 +1283,31 @@ async def _prepare_goal_continuation_input(
     return {"messages": [make_goal_continuation_message(updated_goal, evaluation)]}
 
 
+def _is_edit_replay_run(record: RunRecord) -> bool:
+    metadata = record.metadata or {}
+    return metadata.get("replay_kind") == "edit"
+
+
+async def _ensure_finalizing_before_edit_failure(run_manager: RunManager, record: RunRecord) -> None:
+    if _is_edit_replay_run(record) and not record.finalizing:
+        await run_manager.set_finalizing(record.run_id, True)
+
+
+async def _publish_restored_checkpoint_values(
+    *,
+    bridge: StreamBridge,
+    run_id: str,
+    accessor: CheckpointStateAccessor | None,
+    thread_id: str,
+) -> None:
+    if accessor is None:
+        return
+    snapshot = await accessor.aget({"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}})
+    values = getattr(snapshot, "values", None)
+    if isinstance(values, dict):
+        await bridge.publish(run_id, "values", serialize(values, mode="values"))
+
+
 @dataclass(frozen=True)
 class RollbackPoint:
     """Materialized pre-run state used to fork the pre-run checkpoint lineage.
@@ -1311,7 +1364,7 @@ async def _rollback_to_pre_run_checkpoint(
     run_id: str,
     rollback_point: RollbackPoint | None,
     snapshot_capture_failed: bool,
-) -> None:
+) -> bool:
     """Fork the pre-run checkpoint lineage with the pre-run messages restored.
 
     The fork is written through a state-only mutation graph (the synthetic
@@ -1322,27 +1375,27 @@ async def _rollback_to_pre_run_checkpoint(
     """
     if checkpointer is None:
         logger.info("Run %s rollback requested but no checkpointer is configured", run_id)
-        return
+        return False
 
     if snapshot_capture_failed:
         logger.warning("Run %s rollback skipped: pre-run checkpoint capture failed", run_id)
-        return
+        return False
 
     if rollback_point is None:
         await _call_checkpointer_method(checkpointer, "adelete_thread", "delete_thread", thread_id)
         logger.info("Run %s rollback reset thread %s to empty state", run_id, thread_id)
-        return
+        return True
 
     configurable = rollback_point.config.get("configurable", {})
     if not configurable.get("checkpoint_id"):
         logger.warning("Run %s rollback skipped: pre-run checkpoint has no checkpoint id", run_id)
-        return
+        return False
 
     if accessor is None:
         # Unreachable in practice: a rollback point can only be captured
         # through the bound accessor. Stay fail-closed.
         logger.warning("Run %s rollback skipped: agent accessor unavailable", run_id)
-        return
+        return False
 
     # The restored checkpoint inherits every channel from the pre-run fork;
     # compile the mutation graph with the thread's effective schema so
@@ -1366,7 +1419,7 @@ async def _rollback_to_pre_run_checkpoint(
 
     pending_writes = rollback_point.pending_writes
     if not pending_writes:
-        return
+        return True
 
     writes_by_task: dict[str, list[tuple[str, Any]]] = {}
     for item in pending_writes:
@@ -1386,6 +1439,7 @@ async def _rollback_to_pre_run_checkpoint(
             writes,
             task_id=task_id,
         )
+    return True
 
 
 def _new_checkpoint_marker() -> dict[str, str]:
