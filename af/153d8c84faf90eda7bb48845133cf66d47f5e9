@@ -1,0 +1,77 @@
+README.md
+  s_3db8d648f95d8a::t_549a6aea32a842 695 gitai:{"mixed_line_ranges":[],"operations":[{"operation_id":"6a61de7caa5b6ed6c99ba7aa","tool_type":"agent","tool_id":"apply_patch","line_ranges":[{"Single":695}]}]}
+frontend/src/components/workspace/messages/message-list-item.tsx
+  s_3db8d648f95d8a::t_cf470319d8a77b 148,362 gitai:{"mixed_line_ranges":[],"operations":[{"operation_id":"6a61de57aa5b6ed6c99ba787","tool_type":"agent","tool_id":"apply_patch","line_ranges":[{"Single":148},{"Single":362}]}]}
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "af153d8c84faf90eda7bb48845133cf66d47f5e9",
+  "prompts": {},
+  "sessions": {
+    "s_3db8d648f95d8a": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a60c909aa5b6ed6c99b9770",
+        "model": "gpt-5.5__max",
+        "display_model_name": "GPT-5.5"
+      },
+      "human_author": "ryker <2279549769@qq.com>"
+    }
+  },
+  "attestation_metadata": {
+    "README.md": [
+      {
+        "hash": "s_3db8d648f95d8a::t_549a6aea32a842",
+        "line_ranges": [
+          {
+            "Single": 695
+          }
+        ],
+        "mixed_line_ranges": [],
+        "operations": [
+          {
+            "operation_id": "6a61de7caa5b6ed6c99ba7aa",
+            "tool_type": "agent",
+            "tool_id": "apply_patch",
+            "line_ranges": [
+              {
+                "Single": 695
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "frontend/src/components/workspace/messages/message-list-item.tsx": [
+      {
+        "hash": "s_3db8d648f95d8a::t_cf470319d8a77b",
+        "line_ranges": [
+          {
+            "Single": 148
+          },
+          {
+            "Single": 362
+          }
+        ],
+        "mixed_line_ranges": [],
+        "operations": [
+          {
+            "operation_id": "6a61de57aa5b6ed6c99ba787",
+            "tool_type": "agent",
+            "tool_id": "apply_patch",
+            "line_ranges": [
+              {
+                "Single": 148
+              },
+              {
+                "Single": 362
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "remote_transcripts": {}
+}
