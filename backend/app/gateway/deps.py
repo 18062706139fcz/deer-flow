@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, TypeVar, cast
 from fastapi import FastAPI, HTTPException, Request
 from langgraph.types import Checkpointer
 
+from deerflow.community.browser_automation.session import browser_multi_worker_error
 from deerflow.config.app_config import AppConfig, get_app_config
 from deerflow.persistence.feedback import FeedbackRepository
 from deerflow.runtime import RunContext, RunManager, StreamBridge
@@ -46,14 +47,25 @@ logger = logging.getLogger(__name__)
 _RUN_DRAIN_TIMEOUT_SECONDS = 5.0
 
 
+def _browser_tools_enabled_in_config(config: AppConfig) -> bool:
+    """Return whether process-local agentic browser sessions are configured."""
+    get_tool_config = getattr(config, "get_tool_config", None)
+    if callable(get_tool_config):
+        return get_tool_config("browser_navigate") is not None
+    return any(getattr(tool, "name", None) == "browser_navigate" for tool in (getattr(config, "tools", None) or []))
+
+
 def _enforce_postgres_for_multi_worker(config: AppConfig) -> None:
-    """Refuse to start when GATEWAY_WORKERS > 1 and safety preconditions are not met.
+    """Refuse unsafe multi-worker configurations before persistence starts.
 
-    Two checks (both must pass for multi-worker):
+    Three checks (all must pass for multi-worker):
 
-    1. The DB backend must be Postgres — SQLite write-locks cannot support
+    1. Process-local browser sessions must be disabled. Browser tools keep
+       Chromium and Playwright objects in one worker's memory, while ordinary
+       uvicorn dispatch provides no thread-id affinity.
+    2. The DB backend must be Postgres — SQLite write-locks cannot support
        concurrent multi-process access.
-    2. ``run_ownership.heartbeat_enabled`` must be True — without heartbeat,
+    3. ``run_ownership.heartbeat_enabled`` must be True — without heartbeat,
        every run has a NULL lease, so reconciliation treats all inflight
        runs as orphans and Worker B would kill Worker A's live runs on
        every rolling update or scale-up.
@@ -70,6 +82,9 @@ def _enforce_postgres_for_multi_worker(config: AppConfig) -> None:
     if workers <= 1:
         return
 
+    if _browser_tools_enabled_in_config(config):
+        raise SystemExit(browser_multi_worker_error(workers))
+
     backend = getattr(config.database, "backend", None)
     if backend != "postgres":
         raise SystemExit(f"GATEWAY_WORKERS={workers} requires database.backend='postgres', but database.backend is '{backend}'. SQLite cannot support concurrent multi-process access. Set GATEWAY_WORKERS=1 or switch to Postgres.")
@@ -82,6 +97,38 @@ def _enforce_postgres_for_multi_worker(config: AppConfig) -> None:
             "treats all inflight runs as orphans — Worker B would kill Worker A's "
             "live runs on every rolling update or scale-up. "
             "Set run_ownership.heartbeat_enabled=true in config.yaml."
+        )
+
+
+def _validate_agent_storage(config: AppConfig) -> None:
+    """Fail fast on an agent-storage backend the database cannot support.
+
+    ``agent_storage.backend: db`` needs a durable, shared SQL database — a
+    ``memory`` database is per-process, so agent definitions would silently
+    diverge across nodes (and there is no SQL URL to open). Mirrors deermem's
+    create_storage fail-fast and the multi-worker gate above.
+
+    Also warns when a multi-worker Postgres deployment leaves agent storage on
+    ``file``: custom agents created on one node's local disk are invisible to
+    the others, exactly the divergence the db backend exists to fix.
+    """
+    agent_storage = getattr(config, "agent_storage", None)
+    backend = getattr(agent_storage, "backend", "file")
+    db_backend = getattr(getattr(config, "database", None), "backend", None)
+    if backend == "db" and db_backend not in ("sqlite", "postgres"):
+        raise SystemExit(
+            f"agent_storage.backend='db' requires database.backend to be 'sqlite' or 'postgres', "
+            f"but database.backend is '{db_backend}'. A 'memory' database is per-process and cannot "
+            "share agent definitions across nodes. Set database.backend, or use agent_storage.backend='file'."
+        )
+    try:
+        workers = int(os.environ.get("GATEWAY_WORKERS", "1"))
+    except (TypeError, ValueError):
+        workers = 1
+    if workers > 1 and db_backend == "postgres" and backend == "file":
+        logger.warning(
+            "GATEWAY_WORKERS=%s with database.backend='postgres' but agent_storage.backend='file': custom agents are stored per-node on local disk and are not visible across workers/nodes. Set agent_storage.backend='db' to share them.",
+            workers,
         )
 
 
@@ -246,6 +293,7 @@ async def langgraph_runtime(app: FastAPI, startup_config: AppConfig) -> AsyncGen
     """
     from deerflow.persistence.engine import close_engine, get_session_factory, init_engine_from_config
     from deerflow.runtime import make_store, make_stream_bridge
+    from deerflow.runtime.checkpoint_mode import freeze_checkpoint_channel_mode
     from deerflow.runtime.checkpointer.async_provider import make_checkpointer
     from deerflow.runtime.events.store import make_run_event_store
 
@@ -254,9 +302,13 @@ async def langgraph_runtime(app: FastAPI, startup_config: AppConfig) -> AsyncGen
     # SQLite write-locks cannot support concurrent multi-process access.
     # ------------------------------------------------------------------
     _enforce_postgres_for_multi_worker(startup_config)
+    # Reject agent_storage.backend='db' on a non-durable database, and warn on
+    # node-divergent file storage under multi-worker Postgres.
+    _validate_agent_storage(startup_config)
 
     async with AsyncExitStack() as stack:
         config = startup_config
+        app.state.checkpoint_channel_mode = freeze_checkpoint_channel_mode(config.database.checkpoint_channel_mode)
 
         app.state.stream_bridge = await stack.enter_async_context(make_stream_bridge(config))
 
@@ -418,6 +470,7 @@ def get_run_context(request: Request) -> RunContext:
         store=get_store(request),
         event_store=get_run_event_store(request),
         run_events_config=getattr(request.app.state, "run_events_config", None),
+        checkpoint_channel_mode=getattr(request.app.state, "checkpoint_channel_mode", "full"),
         thread_store=get_thread_store(request),
         app_config=get_config(),
         on_run_completed=getattr(request.app.state, "scheduled_task_service", None).handle_run_completion if getattr(request.app.state, "scheduled_task_service", None) is not None else None,

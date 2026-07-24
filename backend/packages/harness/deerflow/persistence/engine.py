@@ -16,10 +16,37 @@ import logging
 
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
+# Recycle pooled Postgres connections before stale idle sockets can hang
+# pool_pre_ping. The command timeout bounds stalled ORM queries independently.
+POSTGRES_POOL_RECYCLE_SECONDS = 300
+POSTGRES_COMMAND_TIMEOUT_SECONDS = 30
+
 
 def _json_serializer(obj: object) -> str:
     """JSON serializer with ensure_ascii=False for Chinese character support."""
     return json.dumps(obj, ensure_ascii=False)
+
+
+def _postgres_engine_kwargs(
+    *,
+    echo: bool,
+    pool_size: int,
+    pool_recycle: int = POSTGRES_POOL_RECYCLE_SECONDS,
+    command_timeout: float | None = POSTGRES_COMMAND_TIMEOUT_SECONDS,
+    connect_args: dict[str, object] | None = None,
+) -> dict[str, object]:
+    """Build the shared SQLAlchemy engine options for PostgreSQL."""
+    merged_connect_args = dict(connect_args or {})
+    if command_timeout is not None:
+        merged_connect_args["command_timeout"] = command_timeout
+    return {
+        "echo": echo,
+        "pool_size": pool_size,
+        "pool_pre_ping": True,
+        "pool_recycle": pool_recycle,
+        "connect_args": merged_connect_args,
+        "json_serializer": _json_serializer,
+    }
 
 
 logger = logging.getLogger(__name__)
@@ -61,6 +88,8 @@ async def init_engine(
     url: str = "",
     echo: bool = False,
     pool_size: int = 5,
+    pool_recycle: int = POSTGRES_POOL_RECYCLE_SECONDS,
+    command_timeout: float | None = POSTGRES_COMMAND_TIMEOUT_SECONDS,
     sqlite_dir: str = "",
     postgres_schema: str = "",
 ) -> None:
@@ -71,6 +100,8 @@ async def init_engine(
         url: SQLAlchemy async URL (for sqlite/postgres).
         echo: Echo SQL to log.
         pool_size: Postgres connection pool size.
+        pool_recycle: Seconds before Postgres connections are recycled.
+        command_timeout: Timeout in seconds for app ORM Postgres commands, or None to disable.
         sqlite_dir: Directory to create for SQLite (ensured to exist).
         postgres_schema: Target PostgreSQL schema. When set, the engine
             pins the connection ``search_path`` to it via asyncpg
@@ -141,11 +172,13 @@ async def init_engine(
         pg_connect_args = build_asyncpg_connect_args(postgres_schema)
         _engine = create_async_engine(
             url,
-            echo=echo,
-            pool_size=pool_size,
-            pool_pre_ping=True,
-            json_serializer=_json_serializer,
-            connect_args=pg_connect_args,
+            **_postgres_engine_kwargs(
+                echo=echo,
+                pool_size=pool_size,
+                pool_recycle=pool_recycle,
+                command_timeout=command_timeout,
+                connect_args=pg_connect_args,
+            ),
         )
     else:
         raise ValueError(f"Unknown persistence backend: {backend!r}")
@@ -188,11 +221,13 @@ async def init_engine(
             await _engine.dispose()
             _engine = create_async_engine(
                 url,
-                echo=echo,
-                pool_size=pool_size,
-                pool_pre_ping=True,
-                json_serializer=_json_serializer,
-                connect_args=pg_connect_args,
+                **_postgres_engine_kwargs(
+                    echo=echo,
+                    pool_size=pool_size,
+                    pool_recycle=pool_recycle,
+                    command_timeout=command_timeout,
+                    connect_args=pg_connect_args,
+                ),
             )
             _session_factory = async_sessionmaker(_engine, expire_on_commit=False)
             await _ensure_postgres_schema()
@@ -213,6 +248,8 @@ async def init_engine_from_config(config) -> None:
         url=config.app_sqlalchemy_url,
         echo=config.echo_sql,
         pool_size=config.pool_size,
+        pool_recycle=config.pool_recycle,
+        command_timeout=config.command_timeout,
         sqlite_dir=config.sqlite_dir if config.backend == "sqlite" else "",
         postgres_schema=config.postgres_schema if config.backend == "postgres" else "",
     )

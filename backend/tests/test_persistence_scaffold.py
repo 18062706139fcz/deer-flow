@@ -49,6 +49,15 @@ class TestDatabaseConfig:
         assert url.startswith("postgresql+asyncpg://")
         assert "u:p@h:5432/db" in url
 
+    def test_app_sqlalchemy_url_postgres_short_scheme(self):
+        c = DatabaseConfig(
+            backend="postgres",
+            postgres_url="postgres://u:p@h:5432/db",
+        )
+        url = c.app_sqlalchemy_url
+        assert url.startswith("postgresql+asyncpg://")
+        assert "u:p@h:5432/db" in url
+
     def test_app_sqlalchemy_url_postgres_already_asyncpg(self):
         c = DatabaseConfig(
             backend="postgres",
@@ -414,7 +423,10 @@ class TestPostgresSchemaInit:
             postgres_schema="deerflow",
         )
 
-        assert captured["connect_args"] == {"server_settings": {"search_path": "deerflow"}}
+        assert captured["connect_args"] == {
+            "command_timeout": engine_module.POSTGRES_COMMAND_TIMEOUT_SECONDS,
+            "server_settings": {"search_path": "deerflow"},
+        }
         await engine_module.close_engine()
 
     @pytest.mark.anyio
@@ -462,7 +474,9 @@ class TestPostgresSchemaInit:
 
         await engine_module.init_engine("postgres", url="postgresql+asyncpg://u:p@h:5432/db")
 
-        assert captured.get("connect_args", {}) == {}
+        assert captured.get("connect_args", {}) == {
+            "command_timeout": engine_module.POSTGRES_COMMAND_TIMEOUT_SECONDS,
+        }
         names = [c[0] for c in calls.mock_calls]
         assert "execute" not in names  # no CREATE SCHEMA
         assert "bootstrap_schema" in names  # bootstrap still runs
