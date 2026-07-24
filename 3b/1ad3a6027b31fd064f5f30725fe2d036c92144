@@ -1,0 +1,46 @@
+backend/tests/test_thread_regenerate_prepare.py
+  s_3db8d648f95d8a::t_3e715c4edc2593 10 gitai:{"mixed_line_ranges":[],"operations":[{"operation_id":"6a62cc1aaa5b6ed6c99bad42","tool_type":"agent","tool_id":"apply_patch","line_ranges":[{"Single":10}]}]}
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "3b1ad3a6027b31fd064f5f30725fe2d036c92144",
+  "prompts": {},
+  "sessions": {
+    "s_3db8d648f95d8a": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a60c909aa5b6ed6c99b9770",
+        "model": "gpt-5.5__max",
+        "display_model_name": "GPT-5.5"
+      },
+      "human_author": "ryker <2279549769@qq.com>"
+    }
+  },
+  "attestation_metadata": {
+    "backend/tests/test_thread_regenerate_prepare.py": [
+      {
+        "hash": "s_3db8d648f95d8a::t_3e715c4edc2593",
+        "line_ranges": [
+          {
+            "Single": 10
+          }
+        ],
+        "mixed_line_ranges": [],
+        "operations": [
+          {
+            "operation_id": "6a62cc1aaa5b6ed6c99bad42",
+            "tool_type": "agent",
+            "tool_id": "apply_patch",
+            "line_ranges": [
+              {
+                "Single": 10
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "remote_transcripts": {}
+}
