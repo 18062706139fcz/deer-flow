@@ -1,11 +1,25 @@
 import type { Message } from "@langchain/langgraph-sdk";
 import { expect, test } from "@rstest/core";
 
+import type { AgentThread } from "@/core/threads/types";
 import {
   channelSourceOfThread,
+  isThreadPinned,
   pathOfThread,
+  sortPinnedThreads,
   textOfMessage,
 } from "@/core/threads/utils";
+
+function makeThread(
+  threadId: string,
+  metadata: Record<string, unknown> = {},
+): AgentThread {
+  return {
+    thread_id: threadId,
+    metadata,
+    values: { title: threadId },
+  } as unknown as AgentThread;
+}
 
 test("uses standard chat route when thread has no agent context", () => {
   expect(pathOfThread("thread-123")).toBe("/workspace/chats/thread-123");
@@ -60,6 +74,29 @@ test("prefers context.agent_name over metadata.agent_name", () => {
       metadata: { agent_name: "from-metadata" },
     }),
   ).toBe("/workspace/agents/from-context/chats/thread-789");
+});
+
+test("reads pinned thread metadata strictly from metadata.pinned", () => {
+  expect(isThreadPinned(makeThread("pinned", { pinned: true }))).toBe(true);
+  expect(isThreadPinned(makeThread("false", { pinned: false }))).toBe(false);
+  expect(isThreadPinned(makeThread("truthy", { pinned: "true" }))).toBe(false);
+  expect(isThreadPinned(makeThread("missing"))).toBe(false);
+});
+
+test("sortPinnedThreads keeps pinned threads first without reordering groups", () => {
+  const threads = [
+    makeThread("recent-1"),
+    makeThread("pinned-1", { pinned: true }),
+    makeThread("recent-2"),
+    makeThread("pinned-2", { pinned: true }),
+  ];
+
+  expect(sortPinnedThreads(threads).map((thread) => thread.thread_id)).toEqual([
+    "pinned-1",
+    "pinned-2",
+    "recent-1",
+    "recent-2",
+  ]);
 });
 
 test("reads IM channel source metadata", () => {

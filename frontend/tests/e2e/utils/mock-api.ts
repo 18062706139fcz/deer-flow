@@ -282,6 +282,27 @@ export function mockLangGraphAPI(page: Page, options?: MockAPIOptions) {
     values: { title: thread.title ?? "Untitled", goal: thread.goal ?? null },
   });
 
+  const patchThreadMetadata = (
+    threadId: string,
+    metadata: Record<string, unknown>,
+  ) => {
+    let updated: MockThread | undefined;
+    threads = threads.map((thread) => {
+      if (thread.thread_id !== threadId) {
+        return thread;
+      }
+      updated = {
+        ...thread,
+        metadata: {
+          ...(thread.metadata ?? {}),
+          ...metadata,
+        },
+      };
+      return updated;
+    });
+    return updated;
+  };
+
   // Auth — keep workspace tests independent from a real gateway session.
   void page.route("**/api/v1/auth/me", (route) => {
     if (route.request().method() === "GET") {
@@ -662,10 +683,23 @@ export function mockLangGraphAPI(page: Page, options?: MockAPIOptions) {
       });
     }
     if (route.request().method() === "PATCH") {
+      const body = route.request().postDataJSON() as {
+        metadata?: Record<string, unknown>;
+      };
+      const updated = body.metadata
+        ? patchThreadMetadata(threadId, body.metadata)
+        : matchingThread;
+      if (!updated) {
+        return route.fulfill({
+          status: 404,
+          contentType: "application/json",
+          body: JSON.stringify({ detail: "Thread not found" }),
+        });
+      }
       return route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify({ thread_id: MOCK_THREAD_ID }),
+        body: JSON.stringify(threadSearchResult(updated)),
       });
     }
     if (route.request().method() === "DELETE") {
@@ -708,6 +742,32 @@ export function mockLangGraphAPI(page: Page, options?: MockAPIOptions) {
   });
 
   void page.route(/\/api\/threads\/[^/]+$/, (route) => {
+    if (route.request().method() === "PATCH") {
+      const threadId = decodeURIComponent(
+        new URL(route.request().url()).pathname.split("/").at(-1) ?? "",
+      );
+      const body = route.request().postDataJSON() as {
+        metadata?: Record<string, unknown>;
+      };
+      const matchingThread = threads.find(
+        (thread) => thread.thread_id === threadId,
+      );
+      const updated = body.metadata
+        ? patchThreadMetadata(threadId, body.metadata)
+        : matchingThread;
+      if (!updated) {
+        return route.fulfill({
+          status: 404,
+          contentType: "application/json",
+          body: JSON.stringify({ detail: `Thread ${threadId} not found` }),
+        });
+      }
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(threadSearchResult(updated)),
+      });
+    }
     if (route.request().method() === "DELETE") {
       const threadId = decodeURIComponent(
         new URL(route.request().url()).pathname.split("/").at(-1) ?? "",

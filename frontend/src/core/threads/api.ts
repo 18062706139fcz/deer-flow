@@ -1,7 +1,7 @@
 import { fetch as fetchWithAuth } from "@/core/api/fetcher";
 import { getBackendBaseURL } from "@/core/config";
 
-import type { ThreadTokenUsageResponse } from "./types";
+import type { AgentThread, ThreadTokenUsageResponse } from "./types";
 
 export type ThreadCompactResponse = {
   thread_id: string;
@@ -32,6 +32,8 @@ export type BranchThreadFromTurnInput = {
   messageIds?: string[];
   title?: string;
 };
+
+export type ThreadMetadataPatch = Record<string, unknown>;
 
 async function readThreadAPIError(
   response: Response,
@@ -94,6 +96,30 @@ export async function branchThreadFromTurn(
   }
 
   return (await response.json()) as ThreadBranchResponse;
+}
+
+export async function patchThreadMetadata(
+  threadId: string,
+  metadata: ThreadMetadataPatch,
+): Promise<AgentThread> {
+  const response = await fetchWithAuth(
+    `${getBackendBaseURL()}/api/threads/${encodeURIComponent(threadId)}`,
+    {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ metadata }),
+    },
+  );
+
+  if (!response.ok) {
+    throw new Error(
+      await readThreadAPIError(response, "Failed to update conversation."),
+    );
+  }
+
+  return (await response.json()) as AgentThread;
 }
 
 export async function compactThreadContext(
