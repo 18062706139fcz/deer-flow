@@ -1,0 +1,16 @@
+backend/packages/harness/deerflow/integrations/lark_broker.py
+  h_15fa3b57645e8d 419
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "7727938dfe454f3654950b7bde739252343789f9",
+  "prompts": {},
+  "humans": {
+    "h_15fa3b57645e8d": {
+      "author": "ryker <2279549769@qq.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
