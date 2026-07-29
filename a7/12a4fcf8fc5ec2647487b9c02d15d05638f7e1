@@ -1,0 +1,27 @@
+README.md
+  s_52546131dd3642::t_a2cb0f327ae80c 141-144
+backend/AGENTS.md
+  s_52546131dd3642::t_4d615089eff947 454
+backend/app/gateway/routers/console.py
+  s_52546131dd3642::t_c83c2e411353d3 170,185-195
+config.example.yaml
+  s_52546131dd3642::t_cd34eadfdebc5c 101-102
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "a712a4fcf8fc5ec2647487b9c02d15d05638f7e1",
+  "prompts": {},
+  "sessions": {
+    "s_52546131dd3642": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fac95-eabd-7600-a211-b67fe94d51a4",
+        "model": "unknown"
+      },
+      "human_author": "ryker <2279549769@qq.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
