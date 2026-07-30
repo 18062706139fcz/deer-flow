@@ -1,0 +1,37 @@
+backend/app/gateway/routers/auth.py
+  s_b9bafe95415ba2::t_7f762fbbc59b9d 830,858-859,867
+  s_b9bafe95415ba2::t_df6c0a90c39972 868
+frontend/src/app/(auth)/auth/callback/page.tsx
+  s_b9bafe95415ba2::t_0ffdef98ebdd85 4,6,20
+frontend/src/core/auth/next-path.ts
+  s_b9bafe95415ba2::t_d8b494d7ff3275 1-26
+frontend/tests/unit/core/auth/next-path.test.ts
+  s_b9bafe95415ba2::t_13df977170d7af 1-30
+frontend/src/app/(auth)/login/page.tsx
+  s_b9bafe95415ba2::t_1a6976f7403ddf 13
+  s_b9bafe95415ba2::t_0bc2bac6d7abb0 65
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "53c6f32e37f4fd66f37f1b55b18afe1ff1edfe3e",
+  "prompts": {},
+  "humans": {
+    "h_15fa3b57645e8d": {
+      "author": "ryker <2279549769@qq.com>"
+    }
+  },
+  "sessions": {
+    "s_b9bafe95415ba2": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a6b3d684a50cc9a890628ca",
+        "model": "gpt-5.5__max",
+        "display_model_name": "GPT-5.5"
+      },
+      "human_author": null
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
