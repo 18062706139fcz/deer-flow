@@ -1,0 +1,82 @@
+frontend/src/components/workspace/input-box.tsx
+  s_b9db40e960318a::t_2f9f4bdb9bc95c 1155-1164,1217,1232,1966-1972,2694 gitai:{"mixed_line_ranges":[],"operations":[{"operation_id":"6a6d3eb04a50cc9a89062e95","tool_type":"agent","tool_id":"apply_patch","line_ranges":[{"Range":[1155,1164]},{"Single":1217},{"Single":1232},{"Range":[1966,1972]},{"Single":2694}]}]}
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "c63756147d4af5eb8523b5e07ffcb17ab69fa869",
+  "prompts": {},
+  "sessions": {
+    "s_b9db40e960318a": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a6d3d024a50cc9a89062d7a",
+        "model": "gpt-5.5__max",
+        "display_model_name": "GPT-5.5"
+      },
+      "human_author": "ryker <2279549769@qq.com>"
+    }
+  },
+  "attestation_metadata": {
+    "frontend/src/components/workspace/input-box.tsx": [
+      {
+        "hash": "s_b9db40e960318a::t_2f9f4bdb9bc95c",
+        "line_ranges": [
+          {
+            "Range": [
+              1155,
+              1164
+            ]
+          },
+          {
+            "Single": 1217
+          },
+          {
+            "Single": 1232
+          },
+          {
+            "Range": [
+              1966,
+              1972
+            ]
+          },
+          {
+            "Single": 2694
+          }
+        ],
+        "mixed_line_ranges": [],
+        "operations": [
+          {
+            "operation_id": "6a6d3eb04a50cc9a89062e95",
+            "tool_type": "agent",
+            "tool_id": "apply_patch",
+            "line_ranges": [
+              {
+                "Range": [
+                  1155,
+                  1164
+                ]
+              },
+              {
+                "Single": 1217
+              },
+              {
+                "Single": 1232
+              },
+              {
+                "Range": [
+                  1966,
+                  1972
+                ]
+              },
+              {
+                "Single": 2694
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "remote_transcripts": {}
+}
